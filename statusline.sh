@@ -26,6 +26,10 @@ RED='\033[31m'
 DIM='\033[2m'
 BOLD='\033[1m'
 RESET='\033[0m'
+# Hard reset: clears SGR + explicitly resets fg (39) and bg (49) to default.
+# Defensive against the v2.1.139 TUI leaving a stray bg color active when our
+# statusline starts drawing (manifests as a full-width green bar).
+HARD_RESET='\033[0m\033[39m\033[49m'
 
 # ── Git info (cached for performance) ───────────────────────────
 CACHE_FILE="/tmp/claude-statusline-git-cache"
@@ -108,5 +112,7 @@ fi
 LINE2="${BAR_COLOR}${BAR}${RESET} ${PCT}% ${DIM}|${RESET} ${YELLOW}${COST_FMT}${RESET} ${DIM}|${RESET} ${MINS}m ${SECS}s${LINES_INFO}"
 
 # ── Output ──────────────────────────────────────────────────────
-echo -e "$LINE1"
-echo -e "$LINE2"
+# Wrap each line in HARD_RESET to neutralize any stray bg attribute the TUI
+# may have left active before/after rendering the statusline.
+printf '%b%b%b\n' "$HARD_RESET" "$LINE1" "$HARD_RESET"
+printf '%b%b%b\n' "$HARD_RESET" "$LINE2" "$HARD_RESET"
