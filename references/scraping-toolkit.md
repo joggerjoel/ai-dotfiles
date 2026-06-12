@@ -1,8 +1,12 @@
 # Scraping & Extraction Toolkit
 
 A "swiss army" of web scraping / extraction tools. Each does a different job — pick by
-task, not habit. This is the human-readable companion to the decision table in
-`~/.claude/CLAUDE.md` ("Web scraping toolkit"). **Canonical, global, reusable across all projects.**
+task, not habit. Companion to the decision table in `~/.claude/CLAUDE.md`
+("Web scraping toolkit"). **Canonical, global, reusable across all projects.**
+
+> Personal/infra specifics (your hosted endpoint hostnames, bearer tokens, secret-store
+> paths) live in **`~/.claude/CLAUDE.md`** + `~/.claude/.env` — not in this public reference.
+> Placeholders below (`<your-…-host>`, `$VAR`) point at those.
 
 ## Pick-by-task
 
@@ -19,23 +23,20 @@ Anything erroring / want zero LLM cost?                          → crawl4ai (f
 
 | Tool | Best for | Auth | Cost | Access |
 | --- | --- | --- | --- | --- |
-| **scrapegraph** | One-shot structured extraction, search+extract, multi-URL, free markdownify | OpenRouter key | ~¢ fractions/page (cheap LLM) | MCP `scrape.example.com` (default), local CLI `sgai`, skill `scrapegraph` |
+| **scrapegraph** | One-shot structured extraction, search+extract, multi-URL, free markdownify | OpenRouter key | ~¢ fractions/page (cheap LLM) | hosted MCP (default) + local CLI `sgai` + skill `scrapegraph` |
 | **firecrawl** | Extraction on JS-heavy / anti-bot / managed-scale targets | `FIRECRAWL_API_KEY` | firecrawl credits | MCP `firecrawl-mcp` |
 | **parse.bot** | Build a _durable_ REST API from a site; marketplace; versioning; update-tracking | `PARSE_API_KEY` | parse.bot plan | MCP `parse` |
 | **apify** | Pre-built Actors for specific popular sites; cloud-scale w/ proxies | `APIFY_TOKEN` | apify credits | REST (curl); MCP `apify` (disabled by default) |
-| **crawl4ai** | Raw fetch → markdown/html, screenshot, PDF, JS exec; no LLM cost; fallback | bearer | free (self-hosted) | REST `crawl.example.com`, MCP `crawl4ai` |
+| **crawl4ai** | Raw fetch → markdown/html, screenshot, PDF, JS exec; no LLM cost; fallback | bearer | free (self-hosted) | REST (self-hosted) + MCP `crawl4ai` |
 
 ## Examples
 
 ### scrapegraph — structured extraction (default)
 
-**Default = the hosted MCP `scrape.example.com`.** When the `scrapegraph` MCP is connected,
-call its tools directly (`smart_scraper`, `search_scraper`, `crawl`, `scrape_many`,
-`omni_scraper`, `markdownify`) — no local browser/LLM. Bearer in
-`~/Developer/Git/sigma-synapses-monorepo/.secrets/infrastructure/scrape-mcp.env`; client
-config in `~/Developer/Git/scrapegraph-mcp/README.md`.
-
-**Fallback = local CLI** (offline / MCP not loaded):
+**Default = your hosted `scrapegraph` MCP** (endpoint + bearer in `~/.claude/CLAUDE.md`).
+When connected, call its tools directly (`smart_scraper`, `search_scraper`, `crawl`,
+`scrape_many`, `omni_scraper`, `markdownify`) — no local browser/LLM. **Fallback = local CLI**
+(offline / MCP not loaded):
 
 ```bash
 SG="uv run --directory ~/Developer/Git/scrapegraph-mcp sgai"
@@ -46,11 +47,13 @@ $SG scrape-many "name and price" <url1> <url2> <url3>
 $SG md "https://example.com"        # page -> markdown, NO LLM cost
 ```
 
+Don't have a hosted instance yet? See **Self-hosting** below.
+
 ### crawl4ai — raw fetch / markdown
 
 ```bash
-# Bearer token is in ~/.claude/CLAUDE.md (crawl4ai Quick Ref) — not stored here.
-curl -s -X POST "https://crawl.example.com/crawl" \
+# Host + bearer are in ~/.claude/CLAUDE.md (crawl4ai Quick Ref) — not stored here.
+curl -s -X POST "https://<your-crawl4ai-host>/crawl" \
   -H "Authorization: Bearer $CRAWL4AI_TOKEN" -H "Content-Type: application/json" \
   -d '{"urls":["https://example.com"]}' | jq '.results[0].markdown'
 # also: /screenshot, /pdf, /execute_js
@@ -86,6 +89,16 @@ The `apify` MCP is intentionally kept `disabled` in `~/.claude.json` to save con
 Use the `extract` format with a JSON schema when scrapegraph's local Chromium gets
 bot-blocked or the page is heavily JS-rendered.
 
+## Self-hosting (optional)
+
+`scrapegraph` and `crawl4ai` can run as your own hosted HTTP MCP behind a reverse proxy
+with bearer auth — handy for sharing across machines/agents. **Full agent-followable runbook:
+`~/Developer/Git/scrapegraph-mcp/DEPLOY.md`.** In short: build the Docker image (Chromium
+baked in), set `OPENROUTER_API_KEY` + a generated `SGAI_MCP_TOKEN` in the host env, route a
+subdomain → container `:8765` via your proxy (TLS), add the DNS record, then connect via the
+`mcp-remote` shim (`--header "Authorization:${VAR}"`, CC bug #51581). Keep tokens host-side,
+never in a repo.
+
 ## Cost discipline
 
 - Prefer **crawl4ai** (free) and **scrapegraph `md`** (free) when you only need content.
@@ -94,20 +107,22 @@ bot-blocked or the page is heavily JS-rendered.
 
 ## Keys / config
 
-| Tool | Key var | Stored |
-| --- | --- | --- |
-| scrapegraph | `OPENROUTER_API_KEY` | `~/Developer/Git/scrapegraph-mcp/.env`, hosted bearer in `…/sigma-synapses-monorepo/.secrets/infrastructure/scrape-mcp.env` |
-| firecrawl | `FIRECRAWL_API_KEY` | `~/.claude/.env` |
-| parse.bot | `PARSE_API_KEY` | `~/.claude/.env`, `…/sigma-synapses-monorepo/.secrets/infrastructure/parse-bot.env` |
-| apify | `APIFY_TOKEN` | `~/.claude/.env` |
-| crawl4ai | bearer | `~/.claude/CLAUDE.md` (crawl4ai Quick Ref) |
+Reference by env-var name; actual values live in `~/.claude/.env` and your secret store
+(see `~/.claude/CLAUDE.md`).
 
-Remote MCPs (`scrape.example.com`, `parse`, `crawl4ai`) are wired via the `mcp-remote` stdio
+| Tool | Key var |
+| --- | --- |
+| scrapegraph | `OPENROUTER_API_KEY` (+ hosted bearer `SGAI_MCP_TOKEN`) |
+| firecrawl | `FIRECRAWL_API_KEY` |
+| parse.bot | `PARSE_API_KEY` |
+| apify | `APIFY_TOKEN` |
+| crawl4ai | bearer `CRAWL4AI_TOKEN` |
+
+Remote MCPs (hosted scrapegraph, `parse`, `crawl4ai`) are wired via the `mcp-remote` stdio
 shim because of CC bug #51581 (HTTP-header `${VAR}` substitution). They load under
 `claude-full`; add to `claude-dotfiles/profiles/mcp/standard.json` for the default strict `claude`.
 
-## Project source / config
+## Project source
 
-- **scrapegraph-mcp** project: `~/Developer/Git/scrapegraph-mcp` (CLI + MCP server + Dockerfile)
-- Hosted deploy: behind the example.com Traefik host (Docker; host/path details kept local, not in this public ref)
+- **scrapegraph-mcp** project: `~/Developer/Git/scrapegraph-mcp` (CLI + MCP server + Dockerfile + `DEPLOY.md`)
 - Skill: `~/.claude/skills/scrapegraph/SKILL.md`
