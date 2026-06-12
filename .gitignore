@@ -4,6 +4,11 @@
 .env.*
 !.env.example
 
+# Live/personal config that can accumulate inline secrets (CC permission allowlist, etc.)
+/settings.json
+# MCP profiles hold live tokens (e.g. SUPABASE_ACCESS_TOKEN) — keep the README, ignore the JSON
+profiles/mcp/*.json
+
 # Machine-specific overrides (personal config)
 .local/
 
