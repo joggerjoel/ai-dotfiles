@@ -2,7 +2,14 @@
   "env": {
     "ENABLE_TOOL_SEARCH": "true",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "DO_NOT_TRACK": "1",
+    "DISABLE_TELEMETRY": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+    "CLAUDE_MEM_TELEMETRY": "0",
+    "NEXT_TELEMETRY_DISABLED": "1",
+    "TURBO_TELEMETRY_DISABLED": "1",
+    "VERCEL_TELEMETRY_DISABLED": "1"
   },
   "includeCoAuthoredBy": false,
   "permissions": {
@@ -443,7 +450,7 @@
     "typescript-lsp@claude-plugins-official": true,
     "claude-md-management@claude-plugins-official": true,
     "claude-mem@thedotmack": true,
-    "superpowers@claude-plugins-official": true,
+    "superpowers@claude-plugins-official": false,
     "skill-creator@claude-plugins-official": true,
     "autoresearch@autoresearch": true,
     "ui-ux-pro-max@ui-ux-pro-max-skill": true,
@@ -452,7 +459,8 @@
     "learning-output-style@claude-plugins-official": true,
     "claude-code-setup@claude-plugins-official": true,
     "codex@openai-codex": true,
-    "andrej-karpathy-skills@karpathy-skills": true
+    "andrej-karpathy-skills@karpathy-skills": true,
+    "superpowers@superpowers-marketplace": true
   },
   "extraKnownMarketplaces": {
     "autoresearch": {
