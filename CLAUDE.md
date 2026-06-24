@@ -112,6 +112,17 @@ Full pattern details in auto-memory (`MEMORY.md`).
 Dual-deploy (self-hosted Docker+Traefik or Vercel+Supabase). Setup: `./scripts/setup.sh <name>`
 Full details: `~/.claude/references/project-templates.md`
 
+## Design Skills (Auto-Invoke on UI Work)
+
+For **any** task involving UI, components, layout, CSS, animation, or visual design — auto-invoke these skills before writing code:
+
+1. **`ui-ux-pro-max`** — general UI/UX vocabulary, 50+ styles, color/font systems, chart picks
+2. **`design-taste`** — taste, motion, polish, anti-slop (Emil Kowalski philosophy)
+3. **`color-strategy`** (`~/.claude/skills/color-strategy/SKILL.md`) — 60/30/10 distribution rule, OKLCH perceptual color scales, semantic color (success/error/warning/info), WCAG contrast. **Auto-invoke when the task involves color decisions** (new UI, palette, theming, "feels flat/gray"). **Skip if a project design-system already governs color** — defer to its tokens instead.
+4. **Project `/design-system` skill** when in a monorepo that has one — for brand tokens and canonical components
+
+All compose. Trigger: "any 1% chance the task touches UI" → invoke. For color-specific work, `color-strategy` is required.
+
 ## Things Claude Should NOT Do
 
 - Don't edit config files without backing up first to `~/.claude/.backups/`
