@@ -4,7 +4,7 @@
 
 **[dev.nolanhu.com](https://dev.nolanhu.com)** · **[Sigma Synapses](https://sigmasynapses.com)** · **[github.com/iamnolanhu](https://github.com/iamnolanhu)** · **[@nolanhu](https://x.com/nolanhu)**
 
-This is the actual agentic setup I use to run [Sigma Synapses](https://sigmasynapses.com) — one founder shipping client AI agents every week. It's portable: one repo, one command, works on a laptop or a headless VPS. Clone it, run `./setup.sh`, and you get the same engine.
+This is the actual agentic setup I use to run [Sigma Synapses](https://sigmasynapses.com) — one founder who ships real client AI agents, runs production, and talks to clients directly. It's portable: one repo, one command, works on a laptop or a headless VPS. Clone it, run `./setup.sh`, and you get the same engine.
 
 Like a ghost in the shell, it sees beyond the data — and it's wired to make you fast.
 
@@ -39,6 +39,10 @@ cd claude-dotfiles
 
 The installer detects your OS, assembles your config, installs the skills, creates a `~/Developer/Git` workspace, offers the plugin stack, and walks you through MCP setup. Full walkthrough: **[GETTING-STARTED.md](GETTING-STARTED.md)**.
 
+**Or just ask the AI to set it up.** Open Claude Code in the cloned folder and say **"set this up for me."** It reads the repo and runs the steps for you — fewer mistakes than copy-pasting a script by hand.
+
+**Give it your own API tokens so it actually runs the work.** Drop your tokens (GitHub, DigitalOcean, Vercel, and so on) into `~/.claude/.env`, and Claude becomes the operator, not just the author — it runs the build, commits, opens PRs, deploys, and provisions servers itself. Only add tokens you're comfortable letting it use.
+
 ## The agentic stack
 
 | Layer                   | What you get                                                                                                                                                                     |
@@ -66,11 +70,11 @@ This isn't a demo config — it's production tooling for a real AI agency. Here'
 - **Auto-changelog on merge** — patch bump to dev, minor to main, no manual tracking.
 - **Design-system enforcement** — one source of truth for components and tokens; hardcoded colors get blocked.
 - **Postmortem discipline** — every incident logged with diagnostics, so the same bug never costs twice.
-- **Economics that work** — self-hosted LLM inference at **$3.44/hr** instead of per-token cloud bills.
+- **The AI runs the operations** — with my own API tokens in `~/.claude/.env`, Claude doesn't just write code; it runs the build, commits, opens the PR, and deploys. The operator, not just the author.
 
 One founder writes the code, runs production, and talks to clients — no handoffs. This repo is how that's possible. _Streamline the Future._
 
-📖 The full story: **[How I ship like a team of one](https://dev.nolanhu.com/blog/2026/06/26/ship-like-a-team-of-one/)** on dev.nolanhu.com.
+📖 The full story: **[How I ship like a team of one](https://dev.nolanhu.com/blog/2026/06/26/ship-like-a-team-of-one/)** on dev.nolanhu.com. Project page: **[dev.nolanhu.com/projects/claude-dotfiles](https://dev.nolanhu.com/projects/claude-dotfiles/)**.
 
 ## Profiles, structure & commands
 

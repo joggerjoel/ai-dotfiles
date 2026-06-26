@@ -23,6 +23,8 @@ This guide assumes Claude Code is **already installed** and you've run `./setup.
 1. Install Claude Code — follow the official instructions: <https://docs.anthropic.com/en/docs/claude-code/setup> (it needs Node.js; the installer walks you through it).
 2. Clone this toolkit and run setup — see the **Quick start** in the [README](README.md): `git clone …`, then `./setup.sh`.
 
+**You don't have to run that setup by hand.** Once the toolkit is cloned, you can open Claude Code in the folder and just **ask it to set this up** — say `set up this toolkit for me`. The assistant reads the instructions, runs the steps for you, and asks before anything risky. Asking the AI tends to go smoother than copy-pasting commands, because it can catch a mistake mid-step instead of failing silently. The `./setup.sh` route above still works exactly the same — pick whichever you prefer.
+
 Done that already? Continue below.
 
 ### How to begin
@@ -69,6 +71,12 @@ The assistant is set up so a beginner can't easily break things:
 ### What to expect
 
 It works in small steps: decide one thing, do it, show you it works, save it, move on. You stay in control the whole time — you're the one saying what to build; it handles how. When it's finished a piece, it shows you the real result (a live web page, a running app, actual output), not just a claim that it's done.
+
+### Let it do the work, not just write it
+
+Out of the box the assistant can write the code. If you also hand it your own keys, it can **run the work for you** — actually build, commit, open pull requests, deploy your site, and set up servers — instead of just handing you instructions to do those things yourself.
+
+You do this by putting your own API tokens (for services like GitHub, Vercel, or DigitalOcean) into a file at `~/.claude/.env`. With those in place, the assistant becomes the **operator**, not just the author: it runs the build, ships the deploy, and tells you when it's live. Only add tokens for things you're comfortable letting it use — it always asks before anything that spends money or goes public, but a token is real access, so treat it that way.
 
 When you want to change something later, you don't reopen this guide — just describe the change. And you can always say **`help me get started`** again to get back on the rails.
 
@@ -221,5 +229,5 @@ Local skills shipped by this repo (`skills/`): `getting-started`, `color-strateg
 
 ---
 
-<sub>Built by **[Nolan Hu](https://dev.nolanhu.com)** — founder of **[Sigma Synapses](https://sigmasynapses.com)**, where this same setup ships client AI agents weekly. _Streamline the Future._<br>
+<sub>Built by **[Nolan Hu](https://dev.nolanhu.com)** — founder of **[Sigma Synapses](https://sigmasynapses.com)**, where this same setup ships real client AI work and runs it in production. _Streamline the Future._<br>
 [dev.nolanhu.com](https://dev.nolanhu.com) · [github.com/iamnolanhu](https://github.com/iamnolanhu) · [x.com/nolanhu](https://x.com/nolanhu)
