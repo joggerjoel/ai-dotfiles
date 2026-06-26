@@ -218,3 +218,8 @@ Local skills shipped by this repo (`skills/`): `getting-started`, `color-strateg
 ---
 
 **New to all this?** Open Claude Code and say **`help me get started`**.
+
+---
+
+<sub>Built by **[Nolan Hu](https://dev.nolanhu.com)** — founder of **[Sigma Synapses](https://sigmasynapses.com)**, where this same setup ships client AI agents weekly. _Streamline the Future._<br>
+[dev.nolanhu.com](https://dev.nolanhu.com) · [github.com/iamnolanhu](https://github.com/iamnolanhu) · [x.com/nolanhu](https://x.com/nolanhu)

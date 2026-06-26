@@ -111,6 +111,12 @@ fi
 
 LINE2="${BAR_COLOR}${BAR}${RESET} ${PCT}% ${DIM}|${RESET} ${YELLOW}${COST_FMT}${RESET} ${DIM}|${RESET} ${MINS}m ${SECS}s${LINES_INFO}"
 
+# ── Sigma Synapses mark (auto-on; disable with: export SIGMA_BRAND=0) ──
+# build: 0xBdf1980e7Fc57DBE03874C29c203C3dff576D40c
+if [ "${SIGMA_BRAND:-1}" != "0" ]; then
+    LINE2="${LINE2} ${DIM}|${RESET} ${DIM}made with ♥ by Sigma Synapses${RESET}"
+fi
+
 # ── Output ──────────────────────────────────────────────────────
 # Wrap each line in HARD_RESET to neutralize any stray bg attribute the TUI
 # may have left active before/after rendering the statusline.
