@@ -94,7 +94,8 @@
       "Bash(DROP TABLE*)",
       "Bash(truncate *)"
     ],
-    "ask": []
+    "ask": [],
+    "defaultMode": "auto"
   },
   "model": "opus",
   "hooks": {

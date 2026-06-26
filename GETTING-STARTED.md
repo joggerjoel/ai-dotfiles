@@ -30,9 +30,10 @@ Done that already? Continue below.
 Open a terminal first (on Mac: the **Terminal** app; on Windows: use **WSL — Windows Subsystem for Linux**; if you're on Windows and unsure, search "install WSL" first). Then copy-paste these one at a time:
 
 ```bash
-mkdir my-project   # makes a folder for your idea
-cd my-project      # moves into that folder
-claude             # starts the assistant
+cd ~/Developer/Git   # your projects folder (setup created this for you)
+mkdir my-project     # makes a folder for your idea
+cd my-project        # moves into that folder
+claude               # starts the assistant
 ```
 
 Once it's running, type:

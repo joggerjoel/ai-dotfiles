@@ -70,7 +70,7 @@ If they're unsure, **default to brainstorming** — don't force a stack decision
 
 ### (c) Workspace
 
-Scaffold the project and `git init`. Before the first **checkpoint commit**:
+Scaffold the project and `git init`. New projects default under `~/Developer/Git/` (created by `setup.sh`) unless the user is already in a project folder. Before the first **checkpoint commit**:
 
 1. **Smoke-check it runs** (guardrail 1) — install deps and start it (e.g. dev server boots, script runs) so the "safe point" you promise is genuinely a working state, not a broken scaffold.
 2. **Confirm `.gitignore` excludes secrets / `.env`** (guardrail 4) before committing — a fresh scaffold can generate a `.env` or key; never let the first commit capture it.

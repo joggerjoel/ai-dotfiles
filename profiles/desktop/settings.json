@@ -375,6 +375,7 @@
     "ask": [],
     "defaultMode": "auto"
   },
+  "model": "opus",
   "hooks": {
     "PostToolUse": [
       {
@@ -403,11 +404,6 @@
             "command": "echo '{\"systemMessage\": \"Did Claude make any mistakes? Run /revise-claude-md to capture learnings\"}'"
           }
         ]
-      }
-    ],
-    "SubagentStop": [
-      {
-        "hooks": []
       }
     ],
     "SessionStart": [
@@ -450,7 +446,6 @@
     "typescript-lsp@claude-plugins-official": true,
     "claude-md-management@claude-plugins-official": true,
     "claude-mem@thedotmack": true,
-    "superpowers@claude-plugins-official": false,
     "skill-creator@claude-plugins-official": true,
     "autoresearch@autoresearch": true,
     "ui-ux-pro-max@ui-ux-pro-max-skill": true,

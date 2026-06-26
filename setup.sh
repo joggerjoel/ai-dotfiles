@@ -372,6 +372,17 @@ cmd_setup() {
   echo "$github_user" > "$DOTFILES_DIR/.local/.github-user"
   echo "$hide_ai" > "$DOTFILES_DIR/.local/.hide-ai"
 
+  # ── Projects workspace ──
+  # A home for the user's code, so newcomers have somewhere to build.
+  header "Projects workspace"
+  local projects_dir="$HOME/Developer/Git"
+  if [ -d "$projects_dir" ]; then
+    skip "Projects directory exists: $projects_dir"
+  else
+    mkdir -p "$projects_dir"
+    ok "Created projects directory: $projects_dir (your code lives here)"
+  fi
+
   # ── MCP Integration selection ──
   header "MCP Integrations"
   echo -e "  These extend Claude Code with external tools."
