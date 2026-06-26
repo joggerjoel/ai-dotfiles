@@ -2,10 +2,12 @@
 
 Portable Claude Code configuration with profile-based setup. One repo, works on any machine — desktop or headless VPS.
 
+> **New here?** After running `./setup.sh`, open Claude Code and say **`help me get started`** — it'll walk you through building and shipping, even with zero coding experience. Or read **[GETTING-STARTED.md](GETTING-STARTED.md)** first.
+
 ## What this does
 
 - **Layered CLAUDE.md** — generic base + environment profile + personal overlay
-- **Profile system** — desktop (full browser tools, opus) vs VPS (headless, sonnet, minimal plugins)
+- **Profile system** — desktop (full browser tools, opus) vs VPS (headless, opus, minimal plugins)
 - **Interactive installer** — picks profile, sets GitHub username, configures MCP servers
 - **Cross-platform scripts** — OS-aware (macOS + Linux) subagent cleanup, statusline, gate scripts
 - **No personal info committed** — infrastructure, IPs, SSH shortcuts live in gitignored `.local/`
@@ -87,7 +89,7 @@ Run `./setup.sh update` after editing any source layer to reassemble.
 
 ### Desktop
 
-- Full plugin set (26 plugins including agent-browser, frontend-design)
+- Full plugin set (30 enabled: 15 core auto-installed + 15 opt-in, including agent-browser, frontend-design)
 - Browser automation tool priority (agent-browser > chrome-devtools > playwright)
 - Prettier formatting hook on file writes
 - Code simplifier gate on session stop
@@ -95,7 +97,7 @@ Run `./setup.sh update` after editing any source layer to reassemble.
 
 ### VPS
 
-- Same plugins, hooks, and model as desktop (minus browser-specific: agent-browser, frontend-design, vercel, stripe)
+- A reduced headless plugin set (20 enabled — drops browser/UI tooling like agent-browser, frontend-design, chrome-devtools-mcp, ui-ux-pro-max), same hooks and model as desktop
 - No browser tools offered during MCP setup
 - Docker, systemctl, and journalctl permissions added
 - Default model: **opus**
