@@ -87,6 +87,8 @@ Two profiles — **Desktop** (full browser tooling, 30 plugins enabled) and **VP
 ./setup.sh update       # Pull latest and reassemble config
 ```
 
+> **Telemetry opt-out vs Remote Control** — the desktop profile ships `DISABLE_TELEMETRY`, `DO_NOT_TRACK`, and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`. Claude Code gates feature-flag reads behind these vars, so any one of them **silently disables Remote Control (`/rc`)** and other flag-gated features, even on eligible accounts ([#4](https://github.com/iamnolanhu/claude-dotfiles/issues/4), [anthropics/claude-code#76748](https://github.com/anthropics/claude-code/issues/76748)). Setup asks whether you use Remote Control: answer **y** and `settings.json` is installed as a _copy_ with those three vars stripped (Claude Code telemetry back on); answer **n** (the default) to keep the privacy opt-out and skip `/rc`. Flip the choice later by editing `.local/.remote-control` (`yes`/`no`) and running `./setup.sh update`. The other telemetry vars (`DISABLE_ERROR_REPORTING`, `NEXT_TELEMETRY_DISABLED`, `TURBO_TELEMETRY_DISABLED`, `VERCEL_TELEMETRY_DISABLED`, `CLAUDE_MEM_TELEMETRY`) are not part of the gate and always stay off.
+
 No personal info is committed — infrastructure, IPs, and SSH live in gitignored `.local/`. Full architecture, profile details, and the capability map are in **[GETTING-STARTED.md](GETTING-STARTED.md)** (Part 3).
 
 ## More from the lab

@@ -169,6 +169,38 @@ link_file() {
   ok "$(basename "$dst") -> $(basename "$src")"
 }
 
+# ── Settings installation ────────────────────────────────────────
+# Claude Code refuses to read feature flags when any of DISABLE_TELEMETRY,
+# DO_NOT_TRACK, or CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is set, which
+# silently disables Remote Control (/rc) even for eligible accounts — see
+# issue #4 and anthropics/claude-code#76748. When the user opts into Remote
+# Control, install a stripped COPY of the profile settings instead of the
+# usual symlink (stripping through the symlink would dirty the repo). The
+# choice lives in .local/.remote-control and './setup.sh update' re-applies it.
+install_settings() {
+  local profile="$1" remote_control="${2:-no}"
+  local src="$DOTFILES_DIR/profiles/$profile/settings.json"
+  local dst="$CLAUDE_DIR/settings.json"
+
+  if [ "$remote_control" != "yes" ]; then
+    link_file "$src" "$dst"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$dst")"
+  if [ -L "$dst" ]; then
+    rm "$dst"
+  elif [ -f "$dst" ]; then
+    local backup_dir="$CLAUDE_DIR/.backups/setup-$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "$backup_dir"
+    cp "$dst" "$backup_dir/settings.json"
+    warn "Backed up existing settings.json to $backup_dir/"
+    rm "$dst"
+  fi
+  jq 'del(.env.DISABLE_TELEMETRY, .env.DO_NOT_TRACK, .env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC)' "$src" > "$dst"
+  ok "settings.json copied with telemetry opt-out stripped (Remote Control works; re-run './setup.sh update' after profile edits)"
+}
+
 # ── Parse integration fields ─────────────────────────────────────
 get_field() {
   echo "$1" | cut -d'|' -f"$2"
@@ -315,6 +347,22 @@ cmd_setup() {
     skip "GitHub username skipped"
   fi
 
+  # ── Remote Control vs telemetry opt-out (desktop profile only) ──
+  local remote_control="no"
+  if [ "$profile" = "desktop" ]; then
+    header "Remote Control"
+    echo -e "  The desktop profile disables Claude Code telemetry (DISABLE_TELEMETRY,"
+    echo -e "  DO_NOT_TRACK, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC). Claude Code also"
+    echo -e "  gates feature-flag reads behind these vars, which silently disables"
+    echo -e "  Remote Control (/rc) and other flag-gated features. ${DIM}Details in README.${RESET}"
+    echo -ne "  Do you use Remote Control? Strips the opt-out vars (y/N): "
+    read -r rc_choice
+    case "${rc_choice:-n}" in
+      y|Y|yes) remote_control="yes"; ok "Remote Control enabled (telemetry opt-out will be stripped)" ;;
+      *) skip "Keeping telemetry opt-out (Remote Control stays unavailable)" ;;
+    esac
+  fi
+
   # ── Link portable files ──
   header "Linking configuration files..."
 
@@ -336,8 +384,8 @@ cmd_setup() {
   # Assemble CLAUDE.md from layers
   assemble_claude_md "$profile" "$github_user" "$hide_ai"
 
-  # Link profile-specific settings.json
-  link_file "$DOTFILES_DIR/profiles/$profile/settings.json" "$CLAUDE_DIR/settings.json"
+  # Install profile-specific settings.json (symlink, or stripped copy for Remote Control)
+  install_settings "$profile" "$remote_control"
 
   # Link statusline
   link_file "$DOTFILES_DIR/statusline.sh" "$CLAUDE_DIR/statusline.sh"
@@ -360,6 +408,7 @@ cmd_setup() {
   fi
 
   # ── Create .local/CLAUDE.md from template if missing ──
+  mkdir -p "$DOTFILES_DIR/.local"
   if [ ! -f "$DOTFILES_DIR/.local/CLAUDE.md" ]; then
     cp "$DOTFILES_DIR/examples/local-CLAUDE.md" "$DOTFILES_DIR/.local/CLAUDE.md"
     ok ".local/CLAUDE.md created from template (customize it!)"
@@ -371,6 +420,7 @@ cmd_setup() {
   echo "$profile" > "$DOTFILES_DIR/.local/.profile"
   echo "$github_user" > "$DOTFILES_DIR/.local/.github-user"
   echo "$hide_ai" > "$DOTFILES_DIR/.local/.hide-ai"
+  echo "$remote_control" > "$DOTFILES_DIR/.local/.remote-control"
 
   # ── Projects workspace ──
   # A home for the user's code, so newcomers have somewhere to build.
@@ -657,7 +707,7 @@ cmd_update() {
   git pull --rebase 2>/dev/null && ok "Pulled latest changes" || warn "Git pull failed (not a git repo?)"
 
   # Read saved preferences
-  local profile="desktop" github_user="" hide_ai="no"
+  local profile="desktop" github_user="" hide_ai="no" remote_control="no"
   if [ -f "$DOTFILES_DIR/.local/.profile" ]; then
     profile=$(cat "$DOTFILES_DIR/.local/.profile")
   fi
@@ -666,6 +716,9 @@ cmd_update() {
   fi
   if [ -f "$DOTFILES_DIR/.local/.hide-ai" ]; then
     hide_ai=$(cat "$DOTFILES_DIR/.local/.hide-ai")
+  fi
+  if [ -f "$DOTFILES_DIR/.local/.remote-control" ]; then
+    remote_control=$(cat "$DOTFILES_DIR/.local/.remote-control")
   fi
 
   # Update reference files
@@ -682,8 +735,8 @@ cmd_update() {
   # Reassemble CLAUDE.md
   assemble_claude_md "$profile" "$github_user" "$hide_ai"
 
-  # Re-link settings and scripts
-  link_file "$DOTFILES_DIR/profiles/$profile/settings.json" "$CLAUDE_DIR/settings.json"
+  # Re-install settings (honors saved Remote Control choice) and re-link scripts
+  install_settings "$profile" "$remote_control"
   link_file "$DOTFILES_DIR/statusline.sh" "$CLAUDE_DIR/statusline.sh"
   chmod +x "$CLAUDE_DIR/statusline.sh"
 
