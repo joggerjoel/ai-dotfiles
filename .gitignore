@@ -12,6 +12,9 @@ profiles/mcp/*.json
 # Machine-specific overrides (personal config)
 .local/
 
+# Local tool state (generated per-machine, not versioned)
+.serena/
+
 # OS files
 .DS_Store
 Thumbs.db
