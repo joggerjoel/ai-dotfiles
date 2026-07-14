@@ -19,6 +19,7 @@ header() { echo -e "\n${BOLD}$1${RESET}"; }
 DOTFILES_DIR="$(cd "$(dirname "$0")" && pwd)"
 CLAUDE_DIR="$HOME/.claude"
 CLAUDE_JSON="$HOME/.claude.json"
+SERENA_CONFIG="$HOME/.serena/serena_config.yml"
 
 # ── OS-aware helpers ─────────────────────────────────────────────
 if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -255,6 +256,41 @@ ensure_claude() {
   fi
 }
 
+# Serena opens a browser dashboard tab on every `start-mcp-server` launch by
+# default. The global config is the single control point that all launchers
+# (the serena plugin included) honor, so disable it there — this is what stops
+# the popup reproducibly on a fresh machine. Serena fills every other key with
+# its own defaults, so a minimal seed file is safe.
+ensure_serena_dashboard_off() {
+  mkdir -p "$(dirname "$SERENA_CONFIG")"
+
+  if [ ! -f "$SERENA_CONFIG" ]; then
+    cat > "$SERENA_CONFIG" <<'YAML'
+# Seeded by setup.sh. Serena fills all other keys with defaults; edit freely.
+gui_log_window: false
+web_dashboard: false
+web_dashboard_open_on_launch: false
+YAML
+    ok "Serena dashboard disabled (created $SERENA_CONFIG)"
+    return 0
+  fi
+
+  local changed="no" key tmp
+  for key in gui_log_window web_dashboard web_dashboard_open_on_launch; do
+    grep -qE "^${key}:[[:space:]]*false" "$SERENA_CONFIG" && continue
+    if grep -qE "^${key}:" "$SERENA_CONFIG"; then
+      tmp=$(mktemp)
+      sed -E "s/^${key}:.*/${key}: false/" "$SERENA_CONFIG" > "$tmp" && mv "$tmp" "$SERENA_CONFIG"
+    else
+      printf '%s: false\n' "$key" >> "$SERENA_CONFIG"
+    fi
+    changed="yes"
+  done
+  [ "$changed" = "yes" ] \
+    && ok "Serena dashboard disabled ($SERENA_CONFIG)" \
+    || ok "Serena dashboard already disabled"
+}
+
 # Ensure every tool the dotfiles assume is present, installing what's missing.
 ensure_dependencies() {
   header "Dependencies"
@@ -285,6 +321,7 @@ ensure_dependencies() {
   ensure_bun     # JS/TS package manager
   ensure_uv      # Python package manager (serena runs via uvx)
   ensure_claude  # Claude Code itself
+  ensure_serena_dashboard_off  # suppress serena's browser dashboard popup
 }
 
 ensure_claude_json() {
