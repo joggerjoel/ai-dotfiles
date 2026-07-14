@@ -7,6 +7,7 @@ input=$(cat)
 
 # ── Extract fields ──────────────────────────────────────────────
 MODEL=$(echo "$input" | jq -r '.model.display_name')
+HOST=$(hostname)
 DIR=$(echo "$input" | jq -r '.workspace.current_dir')
 SESSION_NAME=$(echo "$input" | jq -r '.session_name // empty')
 SESSION_ID=$(echo "$input" | jq -r '.session_id')
@@ -68,7 +69,7 @@ else
     LABEL="${SESSION_ID:0:8}"
 fi
 LINE1="${DIM}[${LABEL}]${RESET} ${CYAN}${BOLD}${MODEL}${RESET}"
-LINE1="${LINE1} ${DIM}|${RESET} ${DIR}"
+LINE1="${LINE1} ${DIM}|${RESET} ${DIM}${HOST}${RESET}${DIM}:${RESET}${DIR}"
 
 if [ -n "$BRANCH" ]; then
     LINE1="${LINE1} ${DIM}|${RESET} ${GREEN}${BRANCH}${RESET}"
