@@ -123,6 +123,7 @@ At every step the same four guardrails apply: **verify before "done," auto-commi
 | Engineering discipline (think first, stay surgical) | `andrej-karpathy-skills`                             |
 | Security guidance & review                          | `security-guidance`                                  |
 | Browser automation + UI verification                | `agent-browser`, `verify-ui`                         |
+| Terminal-UI (TUI) verification                      | `verify-tui`, `tmux`                                 |
 | **Persistent memory across sessions**               | `claude-mem`                                         |
 | Second opinion / rescue                             | `codex`                                              |
 | Create your own skills                              | `skill-creator`                                      |
@@ -221,7 +222,7 @@ From `profiles/desktop/settings.json` → `enabledPlugins`:
 
 `settings.json` marks all 30 as `enabled`, but `bootstrap-plugins.sh` only auto-installs the **15 core** (the shipping engine above); the other 15 (`supabase`, `stripe`, `pg`, `autoresearch`, `n8n-mcp-skills`, `ralph-loop`, `serena`, `chrome-devtools-mcp`, `plugin-dev`, `hookify`, `agent-sdk-dev`, `claude-md-management`, `claude-code-setup`, `elements-of-style`, `learning-output-style`) are the **opt-in groups** from Part 2 — pre-enabled in the committed desktop profile but only installed if you opt in during setup. An enabled-but-not-installed plugin is simply inert until you install it (`claude plugin install <plugin>@<marketplace>`). The 15/15 split mirrors the bootstrap `CORE` vs `OPT_*` arrays exactly.
 
-Local skills shipped by this repo (`skills/`): `getting-started`, `color-strategy`, `design-taste`, `react-bits`, `uiverse`, `verify`, `verify-ui`, `test-and-fix`, `review-changes`, `explore-plan-code-test`, `first-principles`, `feature-gap-audit`, `quick-commit`, `responsive-audit`, `humanizer`, `reflection`, `context-dump`, `scrapegraph`.
+Local skills shipped by this repo (`skills/`): `getting-started`, `color-strategy`, `design-taste`, `react-bits`, `uiverse`, `verify`, `verify-ui`, `verify-tui`, `test-and-fix`, `review-changes`, `explore-plan-code-test`, `first-principles`, `feature-gap-audit`, `quick-commit`, `responsive-audit`, `humanizer`, `reflection`, `context-dump`, `scrapegraph`.
 
 ---
 

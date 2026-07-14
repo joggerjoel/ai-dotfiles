@@ -29,6 +29,7 @@ These are the actual skills/plugins set up by `./setup.sh` + `scripts/bootstrap-
 | Small UI primitives    | `uiverse` (skill)                                                                             | Buttons, loaders, toggles (any stack)          |
 | Verify it works        | `verify` (skill)                                                                              | Typecheck, lint, test, build                   |
 | Verify UI in a browser | `verify-ui` (skill) / `agent-browser` (plugin)                                                | Drive the real app and look                    |
+| Verify a terminal UI   | `verify-tui` (skill) / `tmux`                                                                 | Drive the real TUI and read the screen         |
 | Review before commit   | `review-changes` (skill) / `code-review:code-review` (plugin)                                 | Bugs, security, quality                        |
 | Commit / PR            | `commit-commands:commit` / `commit-commands:commit-push-pr` (plugin) / `quick-commit` (skill) | Clean git workflow                             |
 | Persistent memory      | `claude-mem` (plugin)                                                                         | Remembers across sessions                      |
@@ -112,7 +113,7 @@ If the user seems lost about the **mechanics of using Claude Code itself** (open
 
 ## Guardrails — apply in EVERY step above
 
-1. **Verify before "done."** Never claim something works without running it, testing it, or showing it. Route through `verify` / `verify-ui` and `superpowers:verification-before-completion`. "It should work" is not "it works."
+1. **Verify before "done."** Never claim something works without running it, testing it, or showing it. Route through `verify` / `verify-ui` / `verify-tui` and `superpowers:verification-before-completion`. "It should work" is not "it works."
 2. **Git safety-net.** Auto-commit working checkpoints. Explain each commit in plain language ("saved your progress"). A non-coder should never fear losing work.
 3. **Plain-language narration.** Scale to the experience level from step (a). For non-coders: no unexplained jargon; say what and why, not how-it's-implemented.
 4. **Confirm before risky.** Warn and require explicit confirmation before anything that **spends money, deploys to production, deletes data, or could commit a secret.** Say plainly what will happen and what it costs.
