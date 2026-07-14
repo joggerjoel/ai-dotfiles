@@ -1,0 +1,184 @@
+---
+# Makes the `<host>-claude` SSH aliases fully functional on every aorus box.
+#
+# Stage A — runtime (so the alias's RemoteCommand works at all):
+#   - ~/Documents/Projects exists
+#   - tmux installed (session persistence)
+#   - Claude Code BINARY at ~/.local/bin/claude (native installer)
+#
+# Stage B — config (so remote claude behaves like your local setup):
+#   - base deps (git/jq/curl) so setup.sh needn't sudo mid-run
+#   - clone joggerjoel/ai-dotfiles
+#   - run setup.sh UNATTENDED with the vps profile + core plugin stack
+#     (answers seeded: profile=2/vps, github user, hide-AI=y; EOF drives the
+#      rest to safe defaults: skip MCP integrations, skip Supabase, install
+#      core plugins, skip optional plugin groups)
+#
+# Idempotent: re-running skips anything already in place.
+# Offline hosts (aorus2/aorus3 when down) are reported unreachable and skipped.
+- name: Provision aorus hosts for the *-claude SSH aliases
+  hosts: aorus_ai
+  gather_facts: true
+  ignore_unreachable: true
+  tasks:
+    # ── Stage A: runtime ─────────────────────────────────────────────
+    - name: Detect existing tmux
+      ansible.builtin.shell: command -v tmux
+      register: tmux_check
+      changed_when: false
+      failed_when: false
+
+    - name: Install tmux (only when missing; requires sudo)
+      become: true
+      ansible.builtin.package:
+        name: tmux
+        state: present
+      when: tmux_check.rc != 0
+
+    - name: Ensure ~/Documents/Projects exists
+      ansible.builtin.file:
+        path: "{{ projects_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Check for the Claude Code binary
+      ansible.builtin.stat:
+        path: "{{ claude_bin }}"
+      register: claude_stat
+
+    - name: Install Claude Code binary (native installer -> ~/.local/bin)
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -fsSL https://claude.ai/install.sh | bash
+      args:
+        executable: /bin/bash
+        creates: "{{ claude_bin }}"
+      when: not claude_stat.stat.exists
+
+    # ── Sibling agent CLIs (share ~/.claude/CLAUDE.md via AGENTS.md symlink,
+    #    which setup.sh creates in Stage B) ────────────────────────────
+    - name: Install Codex CLI (standalone installer -> ~/.local/bin/codex)
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -fsSL https://chatgpt.com/codex/install.sh | sh
+      args:
+        executable: /bin/bash
+        creates: "{{ ansible_env.HOME }}/.local/bin/codex"
+
+    - name: Install Cursor CLI (official installer -> ~/.local/bin/cursor-agent)
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl https://cursor.com/install -fsS | bash
+      args:
+        executable: /bin/bash
+        creates: "{{ ansible_env.HOME }}/.local/bin/cursor-agent"
+
+    - name: Is opencode present? (installer dir varies)
+      ansible.builtin.shell: |
+        for p in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
+          [ -x "$p" ] && exit 0
+        done
+        command -v opencode >/dev/null 2>&1
+      args:
+        executable: /bin/bash
+      register: opencode_check
+      changed_when: false
+      failed_when: false
+
+    - name: Install opencode (standalone installer)
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -fsSL https://opencode.ai/install | bash
+      args:
+        executable: /bin/bash
+      when: opencode_check.rc != 0
+
+    - name: Is the Gemini CLI present? (npm global lives under nvm)
+      ansible.builtin.shell: |
+        export NVM_DIR="$HOME/.nvm"
+        [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+        command -v gemini
+      args:
+        executable: /bin/bash
+      register: gemini_check
+      changed_when: false
+      failed_when: false
+
+    - name: Install Gemini CLI (npm global, via nvm)
+      ansible.builtin.shell: |
+        set -o pipefail
+        export NVM_DIR="$HOME/.nvm"
+        [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+        npm install -g @google/gemini-cli
+      args:
+        executable: /bin/bash
+      when: gemini_check.rc != 0
+
+    # ── Stage B: ai-dotfiles config (vps profile) ────────────────
+    - name: Install base deps for ai-dotfiles setup.sh
+      become: true
+      ansible.builtin.package:
+        name: [git, jq, curl]
+        state: present
+      when: install_dotfiles | bool
+
+    - name: Clone/update ai-dotfiles
+      ansible.builtin.git:
+        repo: "{{ dotfiles_repo }}"
+        dest: "{{ dotfiles_dir }}"
+        version: main
+        update: true
+      when: install_dotfiles | bool
+
+    - name: Has ai-dotfiles already been set up on this host?
+      ansible.builtin.stat:
+        path: "{{ ansible_env.HOME }}/.claude/settings.json"
+      register: dotfiles_done
+      when: install_dotfiles | bool
+
+    - name: Run ai-dotfiles setup.sh (vps profile, unattended)
+      ansible.builtin.shell: |
+        printf '2\n{{ dotfiles_github_user }}\n{{ dotfiles_hide_ai }}\n' | bash setup.sh
+      args:
+        chdir: "{{ dotfiles_dir }}"
+        executable: /bin/bash
+      register: dotfiles_setup
+      changed_when: "'Setup complete' in dotfiles_setup.stdout"
+      when:
+        - install_dotfiles | bool
+        - not (dotfiles_done.stat.exists | default(false))
+
+    # ── Verify + report ──────────────────────────────────────────────
+    - name: Verify claude
+      ansible.builtin.command: "{{ claude_bin }} --version"
+      register: claude_ver
+      changed_when: false
+      failed_when: false
+
+    - name: Verify sibling agent CLIs
+      ansible.builtin.shell: |
+        export NVM_DIR="$HOME/.nvm"
+        [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+        oc=MISSING
+        for p in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
+          [ -x "$p" ] && { oc=present; break; }
+        done
+        printf 'codex=%s cursor=%s opencode=%s gemini=%s' \
+          "$([ -x "$HOME/.local/bin/codex" ] && echo present || echo MISSING)" \
+          "$([ -x "$HOME/.local/bin/cursor-agent" ] && echo present || echo MISSING)" \
+          "$oc" \
+          "$(command -v gemini >/dev/null 2>&1 && echo present || echo MISSING)"
+      args:
+        executable: /bin/bash
+      register: sibling_clis
+      changed_when: false
+      failed_when: false
+
+    - name: Report per-host result
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} ->
+          tmux: {{ 'present' if tmux_check.rc == 0 else 'installed' }} |
+          claude: {{ claude_ver.stdout | default('MISSING', true) }} |
+          {{ sibling_clis.stdout | default('codex=? cursor=?', true) }} |
+          dotfiles: {{ 'configured' if (install_dotfiles | bool) else 'skipped' }}

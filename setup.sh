@@ -523,6 +523,27 @@ POLICY
   ok "CLAUDE.md assembled (base + $profile$([ -f "$local_md" ] && echo " + local"))"
 }
 
+# ── Unify agent instructions: AGENTS.md -> CLAUDE.md ─────────────
+# Single source of truth for the agent CLIs we run alongside Claude Code
+# (codex-cli, cursor-cli, opencode, gemini-cli). Claude and Cursor read CLAUDE.md
+# natively; Codex and opencode read AGENTS.md; Gemini reads GEMINI.md. Symlinking
+# each tool's global instructions file to CLAUDE.md shares the one assembled file
+# with no duplication.
+#   ~/.codex/AGENTS.md            Codex global instructions
+#   ~/.config/opencode/AGENTS.md  opencode global instructions
+#   ~/.gemini/GEMINI.md           Gemini global instructions
+#   ~/AGENTS.md                   home-level file Cursor resolves when run near $HOME
+# link_file backs up any existing real file to ~/.claude/.backups/ before linking
+# and is idempotent (a stale symlink is replaced, not nested).
+link_agent_instructions() {
+  local canonical="$CLAUDE_DIR/CLAUDE.md"
+  [ -f "$canonical" ] || { warn "CLAUDE.md not found; skipping agent-instruction symlinks"; return 0; }
+  link_file "$canonical" "$HOME/.codex/AGENTS.md"
+  link_file "$canonical" "$HOME/.config/opencode/AGENTS.md"
+  link_file "$canonical" "$HOME/.gemini/GEMINI.md"
+  link_file "$canonical" "$HOME/AGENTS.md"
+}
+
 # ── Supabase: Cloud vs internal (self-hosted) ────────────────────
 # Cloud uses the `supabase` plugin's own hosted MCP (mcp.supabase.com, OAuth) —
 # nothing for us to wire. Internal can't use that (it's Cloud-only), so we
@@ -669,6 +690,9 @@ cmd_setup() {
 
   # Assemble CLAUDE.md from layers
   assemble_claude_md "$profile" "$github_user" "$hide_ai"
+
+  # Point Codex/Cursor at the same instructions (AGENTS.md -> CLAUDE.md)
+  link_agent_instructions
 
   # Install profile-specific settings.json (symlink, or stripped copy for Remote Control)
   install_settings "$profile" "$remote_control"
@@ -1035,6 +1059,9 @@ cmd_update() {
 
   # Reassemble CLAUDE.md
   assemble_claude_md "$profile" "$github_user" "$hide_ai"
+
+  # Refresh the Codex/Cursor instruction symlinks (AGENTS.md -> CLAUDE.md)
+  link_agent_instructions
 
   # Re-install settings (honors saved Remote Control choice) and re-link scripts
   install_settings "$profile" "$remote_control"

@@ -1,0 +1,80 @@
+---
+# Fleet update, driven from the MacBook Pro (control node).
+# For every reachable aorus host:
+#   1. Upgrade the Claude Code binary   (native `claude update`)
+#   2. Refresh ai-dotfiles config   (`setup.sh update`: git pull --rebase
+#      --autostash, then re-apply the SAVED vps profile — fully unattended)
+#
+# Workflow: push changes to github.com/joggerjoel/ai-dotfiles, then run this
+# to propagate them to the whole fleet.
+#
+# Read-only-safe to dry-run with --check. Offline hosts are skipped.
+- name: Update the claude fleet
+  hosts: aorus_ai
+  gather_facts: true
+  ignore_unreachable: true
+  tasks:
+    - name: Is the claude binary present?
+      ansible.builtin.stat:
+        path: "{{ claude_bin }}"
+      register: claude_stat
+
+    - name: Record current claude version
+      ansible.builtin.command: "{{ claude_bin }} --version"
+      register: ver_before
+      changed_when: false
+      failed_when: false
+      when: claude_stat.stat.exists
+
+    - name: Upgrade the Claude Code binary
+      ansible.builtin.command: "{{ claude_bin }} update"
+      register: bin_update
+      changed_when: "'latest' not in (bin_update.stdout | lower)"
+      failed_when: false
+      when: claude_stat.stat.exists
+
+    - name: Upgrade the sibling agent CLIs (codex, cursor, opencode, gemini) when present
+      ansible.builtin.shell: |
+        set -o pipefail
+        export NVM_DIR="$HOME/.nvm"
+        [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+        [ -x "$HOME/.local/bin/codex" ] && curl -fsSL https://chatgpt.com/codex/install.sh | sh
+        [ -x "$HOME/.local/bin/cursor-agent" ] && "$HOME/.local/bin/cursor-agent" update
+        for p in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
+          [ -x "$p" ] && { "$p" upgrade || curl -fsSL https://opencode.ai/install | bash; break; }
+        done
+        command -v gemini >/dev/null 2>&1 && npm install -g @google/gemini-cli@latest
+        true
+      args:
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
+
+    - name: Is ai-dotfiles present?
+      ansible.builtin.stat:
+        path: "{{ dotfiles_dir }}/setup.sh"
+      register: dotfiles_stat
+
+    - name: Refresh ai-dotfiles config (git pull + re-apply saved profile)
+      ansible.builtin.shell: bash setup.sh update
+      args:
+        chdir: "{{ dotfiles_dir }}"
+        executable: /bin/bash
+      register: dotfiles_update
+      changed_when: "'Updating' in dotfiles_update.stdout"
+      when: dotfiles_stat.stat.exists
+
+    - name: Record new claude version
+      ansible.builtin.command: "{{ claude_bin }} --version"
+      register: ver_after
+      changed_when: false
+      failed_when: false
+      when: claude_stat.stat.exists
+
+    - name: Report per-host result
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} ->
+          claude: {{ ver_before.stdout | default('n/a', true) }}
+          -> {{ ver_after.stdout | default('n/a', true) }} |
+          dotfiles: {{ 'refreshed' if dotfiles_stat.stat.exists else 'not installed' }}

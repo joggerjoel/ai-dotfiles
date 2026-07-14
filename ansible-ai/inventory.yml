@@ -1,0 +1,26 @@
+# Inventory for the aorus *-claude hosts.
+# ProxyJump is baked in here so this works regardless of ~/.ssh/config state.
+aorus_ai:
+  hosts:
+    aorus: { ansible_host: 192.0.2.0 }
+    aorus4: { ansible_host: 192.0.2.0 }
+    aorus5: { ansible_host: 192.0.2.0 }
+    aorus6: { ansible_host: 192.0.2.0 }
+    aorus7: { ansible_host: 192.0.2.0 }
+    aorus8: { ansible_host: 192.0.2.0 }
+    macstudio: { ansible_host: 192.0.2.0 }
+  vars:
+    ansible_user: joggerjoel
+    ansible_ssh_common_args: >-
+      -o ProxyJump=203.0.113.1
+      -o ConnectTimeout=15
+      -o StrictHostKeyChecking=accept-new
+    # Consumed by the playbook:
+    claude_bin: "{{ ansible_env.HOME }}/.local/bin/claude"
+    projects_dir: "{{ ansible_env.HOME }}/Documents/Projects"
+    # ai-dotfiles (config layer) — vps profile, unattended:
+    install_dotfiles: true
+    dotfiles_repo: "https://github.com/joggerjoel/ai-dotfiles.git"
+    dotfiles_dir: "{{ ansible_env.HOME }}/ai-dotfiles"
+    dotfiles_github_user: "joggerjoel"
+    dotfiles_hide_ai: "y" # matches the no-AI-attribution commit policy
