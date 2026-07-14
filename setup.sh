@@ -222,7 +222,7 @@ install_skills() {
     name=$(basename "$skill_dir")
     rm -rf "$CLAUDE_DIR/skills/$name"
     cp -R "$skill_dir" "$CLAUDE_DIR/skills/$name"
-    ((count++))
+    count=$((count+1))
   done
   ok "$count skill(s) installed to ~/.claude/skills/"
 }
@@ -466,7 +466,7 @@ cmd_setup() {
     fi
 
     printf "  ${BOLD}%2d${RESET}) %-20s %s %s\n" "$i" "$name" "$desc" "$tag"
-    ((i++))
+    i=$((i+1))
   done
 
   echo ""
@@ -551,7 +551,7 @@ cmd_setup() {
         ok "${name} added (disabled by default - enable in ~/.claude.json)"
       else
         ok "${name} enabled"
-        ((enabled_count++))
+        enabled_count=$((enabled_count+1))
       fi
     done
 
@@ -692,7 +692,7 @@ cmd_list() {
     fi
 
     printf "  %2d) %-20s %s  %b%b\n" "$i" "$name" "$desc" "$status_icon" "$profile_tag"
-    ((i++))
+    i=$((i+1))
   done
 
   echo ""
