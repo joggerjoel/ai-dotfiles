@@ -46,6 +46,11 @@ INTEGRATIONS=(
   "magic|UI component generation|no||yes||yes"
 )
 
+# Postgres MCP package for self-hosted ("internal") Supabase. The old reference
+# server @modelcontextprotocol/server-postgres is deprecated; this one is
+# maintained and npx-native. Swap here if you ever need a different server.
+SUPABASE_PG_MCP_PKG="@henkey/postgres-mcp-server"
+
 # ── MCP server JSON generators ───────────────────────────────────
 mcp_json_for() {
   local name="$1" key_val="${2:-}" extra_val="${3:-}"
@@ -80,6 +85,10 @@ mcp_json_for() {
       echo '{"command":"npx","args":["-y","@agentdeskai/browser-tools-mcp@latest"]}';;
     magic)
       echo '{"type":"stdio","command":"npx","args":["-y","@21st-dev/magic"],"env":{}}';;
+    supabase)
+      # Internal/self-hosted only — direct Postgres MCP; key_val = connection string.
+      # (Cloud Supabase uses the plugin's hosted MCP instead — see configure_supabase.)
+      echo "{\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"${SUPABASE_PG_MCP_PKG}\"],\"env\":{\"POSTGRES_CONNECTION_STRING\":\"${key_val}\"}}";;
     *) echo '{}' ;;
   esac
 }
@@ -120,6 +129,164 @@ detect_os() {
   esac
 }
 
+# ── Dependency installation (OS-aware) ───────────────────────────
+# setup.sh assumes a handful of tools exist (jq/git/curl for the script itself;
+# node/npm for Claude Code + npx MCP servers; gh/bun/uv per the tool-priority
+# guide). Rather than fail when they're missing, install them for the two
+# supported platforms: Ubuntu/Debian (apt) and macOS (Homebrew). Everything
+# else is best-effort — a failed install warns and continues so the rest of
+# setup still runs.
+PKG_MANAGER=""          # apt | brew | unknown
+SUDO=""                 # "sudo" when needed & available, else empty
+APT_UPDATED="no"        # run `apt-get update` at most once
+
+detect_pkg_manager() {
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    PKG_MANAGER="brew"
+  elif command -v apt-get &>/dev/null; then
+    PKG_MANAGER="apt"
+  else
+    PKG_MANAGER="unknown"
+  fi
+  if [ "$(id -u)" -ne 0 ] && command -v sudo &>/dev/null; then
+    SUDO="sudo"
+  fi
+}
+
+apt_update_once() {
+  if [ "$PKG_MANAGER" = "apt" ] && [ "$APT_UPDATED" = "no" ]; then
+    $SUDO apt-get update -y >/dev/null 2>&1 || true
+    APT_UPDATED="yes"
+  fi
+}
+
+# Install one or more packages via the detected package manager.
+pkg_install() {
+  case "$PKG_MANAGER" in
+    brew) brew install "$@" ;;
+    apt)  apt_update_once; $SUDO apt-get install -y "$@" ;;
+    *)    return 1 ;;
+  esac
+}
+
+# No-sudo gh fallback: drop the release binary into ~/.local/bin.
+gh_install_binary() {
+  local arch os tag ver
+  case "$(uname -m)" in
+    x86_64)        arch="amd64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *)             arch="amd64" ;;
+  esac
+  os="linux"; [ "$(uname -s)" = "Darwin" ] && os="macOS"
+  tag=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | jq -r '.tag_name')
+  [ -n "$tag" ] && [ "$tag" != "null" ] || return 1
+  ver="${tag#v}"
+  mkdir -p "$HOME/.local/bin"
+  curl -fsSL "https://github.com/cli/cli/releases/download/${tag}/gh_${ver}_${os}_${arch}.tar.gz" -o /tmp/gh.tgz || return 1
+  tar xzf /tmp/gh.tgz -C /tmp || return 1
+  cp "/tmp/gh_${ver}_${os}_${arch}/bin/gh" "$HOME/.local/bin/gh"
+  chmod +x "$HOME/.local/bin/gh"
+  rm -rf /tmp/gh.tgz "/tmp/gh_${ver}_${os}_${arch}"
+}
+
+ensure_node() {
+  if command -v node &>/dev/null && command -v npm &>/dev/null; then
+    ok "node $(node -v) present"; return 0
+  fi
+  warn "node/npm missing — installing..."
+  case "$PKG_MANAGER" in
+    brew) brew install node ;;
+    apt)  # apt's nodejs is often stale; use NodeSource LTS.
+      curl -fsSL https://deb.nodesource.com/setup_lts.x | $SUDO -E bash - >/dev/null 2>&1 \
+        && $SUDO apt-get install -y nodejs ;;
+  esac
+  command -v node &>/dev/null && ok "node $(node -v) installed" \
+    || fail "node install failed — install manually, then re-run"
+}
+
+ensure_gh() {
+  command -v gh &>/dev/null && { ok "gh present"; return 0; }
+  warn "gh (GitHub CLI) missing — installing..."
+  case "$PKG_MANAGER" in
+    brew) brew install gh ;;
+    apt)
+      if [ "$(id -u)" -eq 0 ] || [ -n "$SUDO" ]; then
+        $SUDO mkdir -p -m 755 /etc/apt/keyrings
+        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+          | $SUDO tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
+        $SUDO chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+          | $SUDO tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+        $SUDO apt-get update -y >/dev/null 2>&1 && $SUDO apt-get install -y gh
+      else
+        gh_install_binary   # no root: fall back to ~/.local/bin binary
+      fi ;;
+  esac
+  command -v gh &>/dev/null || [ -x "$HOME/.local/bin/gh" ] \
+    && ok "gh installed" || fail "gh install failed — install manually"
+}
+
+ensure_bun() {
+  command -v bun &>/dev/null && { ok "bun present"; return 0; }
+  warn "bun missing — installing (official installer → ~/.bun)..."
+  curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1 \
+    && ok "bun installed (open a new shell to pick it up)" \
+    || fail "bun install failed — see https://bun.sh"
+}
+
+ensure_uv() {
+  command -v uv &>/dev/null && { ok "uv present"; return 0; }
+  warn "uv missing — installing (official installer → ~/.local/bin)..."
+  curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 \
+    && ok "uv installed (open a new shell to pick it up)" \
+    || fail "uv install failed — see https://astral.sh/uv"
+}
+
+ensure_claude() {
+  command -v claude &>/dev/null && { ok "Claude Code installed"; return 0; }
+  warn "Claude Code missing — installing via npm..."
+  if command -v npm &>/dev/null; then
+    npm install -g @anthropic-ai/claude-code >/dev/null 2>&1 \
+      || $SUDO npm install -g @anthropic-ai/claude-code >/dev/null 2>&1
+    command -v claude &>/dev/null && ok "Claude Code installed" \
+      || fail "Claude Code install failed — run: npm install -g @anthropic-ai/claude-code"
+  else
+    fail "npm unavailable — cannot install Claude Code"
+  fi
+}
+
+# Ensure every tool the dotfiles assume is present, installing what's missing.
+ensure_dependencies() {
+  header "Dependencies"
+  detect_pkg_manager
+
+  if [ "$PKG_MANAGER" = "unknown" ]; then
+    warn "Unsupported OS (only Ubuntu/Debian + macOS auto-install)."
+    warn "Install manually: jq git curl gh node bun uv, then Claude Code."
+    check_prereq   # still hard-fail if the script's own basics are absent
+    return 0
+  fi
+  ok "Package manager: $PKG_MANAGER${SUDO:+ (using sudo)}"
+
+  # Script's own hard requirements.
+  for tool in git curl jq; do
+    if command -v "$tool" &>/dev/null; then
+      ok "$tool present"
+    else
+      warn "$tool missing — installing..."
+      pkg_install "$tool" && ok "$tool installed" \
+        || { fail "$tool is required and could not be installed"; exit 1; }
+    fi
+  done
+
+  # Assumed tooling (best-effort; warns but continues on failure).
+  ensure_node    # Claude Code + npx MCP servers
+  ensure_gh      # GitHub CLI (tool-priority default)
+  ensure_bun     # JS/TS package manager
+  ensure_uv      # Python package manager (serena runs via uvx)
+  ensure_claude  # Claude Code itself
+}
+
 ensure_claude_json() {
   if [ ! -f "$CLAUDE_JSON" ]; then
     echo '{"mcpServers":{}}' > "$CLAUDE_JSON"
@@ -145,6 +312,16 @@ set_mcp_server() {
 
   local tmp
   tmp=$(jq --arg key "$mcp_key" --argjson val "$json" '.mcpServers[$key] = $val' "$CLAUDE_JSON")
+  echo "$tmp" > "$CLAUDE_JSON"
+}
+
+remove_mcp_server() {
+  local mcp_key
+  mcp_key=$(mcp_key_for "$1")
+  [ -f "$CLAUDE_JSON" ] || return 0
+  jq -e --arg k "$mcp_key" '.mcpServers[$k]' "$CLAUDE_JSON" &>/dev/null || return 0
+  local tmp
+  tmp=$(jq --arg k "$mcp_key" 'del(.mcpServers[$k])' "$CLAUDE_JSON")
   echo "$tmp" > "$CLAUDE_JSON"
 }
 
@@ -222,7 +399,7 @@ install_skills() {
     name=$(basename "$skill_dir")
     rm -rf "$CLAUDE_DIR/skills/$name"
     cp -R "$skill_dir" "$CLAUDE_DIR/skills/$name"
-    ((count++))
+    count=$((count+1))
   done
   ok "$count skill(s) installed to ~/.claude/skills/"
 }
@@ -293,6 +470,68 @@ POLICY
   ok "CLAUDE.md assembled (base + $profile$([ -f "$local_md" ] && echo " + local"))"
 }
 
+# ── Supabase: Cloud vs internal (self-hosted) ────────────────────
+# Cloud uses the `supabase` plugin's own hosted MCP (mcp.supabase.com, OAuth) —
+# nothing for us to wire. Internal can't use that (it's Cloud-only), so we
+# register a direct Postgres MCP against the self-hosted DB. The chosen mode is
+# saved to .local/.supabase-mode so './setup.sh update' re-applies the same fork
+# non-interactively (the connection string is preserved from ~/.claude.json).
+configure_supabase() {
+  local mode="${1:-}"   # ""→prompt; else cloud|internal|skip
+
+  if [ -z "$mode" ]; then
+    header "Supabase"
+    echo -e "  Which Supabase does this machine use?"
+    echo -e "    ${BOLD}1${RESET}) Cloud     ${DIM}supabase.com — uses the plugin's hosted MCP (OAuth)${RESET}"
+    echo -e "    ${BOLD}2${RESET}) Internal  ${DIM}self-hosted — direct Postgres MCP to your DB${RESET}"
+    echo -e "    ${BOLD}3${RESET}) Skip"
+    echo -n "  > "
+    read -r sb_choice
+    case "${sb_choice:-3}" in
+      1) mode="cloud" ;;
+      2) mode="internal" ;;
+      *) mode="skip" ;;
+    esac
+  fi
+
+  ensure_claude_json
+
+  case "$mode" in
+    cloud)
+      remove_mcp_server supabase   # drop any stale internal Postgres MCP
+      ok "Supabase: Cloud (plugin's hosted MCP — run its OAuth once inside Claude Code)"
+      ;;
+    internal)
+      # Reuse a stored connection string if present, else prompt for it.
+      local db_url
+      db_url=$(jq -r '.mcpServers.supabase.env.POSTGRES_CONNECTION_STRING // empty' "$CLAUDE_JSON" 2>/dev/null || true)
+      if [ -z "$db_url" ]; then
+        echo -ne "  ${BOLD}Connection string${RESET} ${DIM}(postgresql://postgres:<pw>@your-db-host:5432/postgres)${RESET}: "
+        read -r db_url
+      fi
+      if [ -z "$db_url" ]; then
+        warn "No connection string — internal Supabase MCP not configured."
+        warn "Set it later:  ./setup.sh supabase internal"
+      else
+        local json
+        json=$(mcp_json_for supabase "$db_url" "")
+        set_mcp_server supabase "$json" "false"
+        ok "Supabase: internal (Postgres MCP → self-hosted DB)"
+      fi
+      ;;
+    skip)
+      skip "Supabase configuration skipped"
+      ;;
+    *)
+      warn "Unknown Supabase mode: '$mode' (expected cloud|internal|skip)"
+      return 0
+      ;;
+  esac
+
+  mkdir -p "$DOTFILES_DIR/.local"
+  echo "$mode" > "$DOTFILES_DIR/.local/.supabase-mode"
+}
+
 # ── Commands ──────────────────────────────────────────────────────
 
 cmd_setup() {
@@ -304,15 +543,9 @@ cmd_setup() {
   local os
   os=$(detect_os)
   ok "Detected: $os ($(uname -s))"
-  check_prereq
 
-  # Check if Claude Code is installed
-  if command -v claude &>/dev/null; then
-    ok "Claude Code installed"
-  else
-    warn "Claude Code not found - install it first, then re-run"
-    echo "    npm install -g @anthropic-ai/claude-code"
-  fi
+  # Ensure prerequisites & assumed tooling are installed (OS-aware).
+  ensure_dependencies
 
   # ── Profile selection ──
   header "Machine type"
@@ -466,7 +699,7 @@ cmd_setup() {
     fi
 
     printf "  ${BOLD}%2d${RESET}) %-20s %s %s\n" "$i" "$name" "$desc" "$tag"
-    ((i++))
+    i=$((i+1))
   done
 
   echo ""
@@ -551,13 +784,16 @@ cmd_setup() {
         ok "${name} added (disabled by default - enable in ~/.claude.json)"
       else
         ok "${name} enabled"
-        ((enabled_count++))
+        enabled_count=$((enabled_count+1))
       fi
     done
 
     echo ""
     ok "${enabled_count} integration(s) active. Others added as disabled."
   fi
+
+  # ── Supabase: Cloud vs internal ──
+  configure_supabase ""
 
   # ── Plugin stack ──
   header "Agentic plugin stack"
@@ -692,7 +928,7 @@ cmd_list() {
     fi
 
     printf "  %2d) %-20s %s  %b%b\n" "$i" "$name" "$desc" "$status_icon" "$profile_tag"
-    ((i++))
+    i=$((i+1))
   done
 
   echo ""
@@ -746,6 +982,12 @@ cmd_update() {
     chmod +x "$CLAUDE_DIR/scripts/$(basename "$script")"
   done
 
+  # Re-apply the saved Supabase fork (cloud/internal). Preserves the stored
+  # connection string, so this stays non-interactive on update.
+  if [ -f "$DOTFILES_DIR/.local/.supabase-mode" ]; then
+    configure_supabase "$(cat "$DOTFILES_DIR/.local/.supabase-mode")"
+  fi
+
   ok "Update complete (profile: $profile)"
 }
 
@@ -783,10 +1025,11 @@ cmd_env() {
 
 # ── Main ──────────────────────────────────────────────────────────
 case "${1:-}" in
-  add)    cmd_add "${2:-}" ;;
-  list)   cmd_list ;;
-  update) cmd_update ;;
-  env)    cmd_env "${2:-}" "${3:-}" ;;
+  add)      cmd_add "${2:-}" ;;
+  list)     cmd_list ;;
+  update)   cmd_update ;;
+  env)      cmd_env "${2:-}" "${3:-}" ;;
+  supabase) configure_supabase "${2:-}" ;;
   help|--help|-h)
     echo "Claude Code Dotfiles Setup"
     echo ""
@@ -795,6 +1038,7 @@ case "${1:-}" in
     echo "  ./setup.sh add <name>   Add/enable a single MCP integration"
     echo "  ./setup.sh list         Show all integrations and their status"
     echo "  ./setup.sh env KEY [v]  Add an API key to ~/.claude/.env"
+    echo "  ./setup.sh supabase [m] Configure Supabase MCP (m = cloud|internal, or prompt)"
     echo "  ./setup.sh update       Pull latest and reassemble config"
     echo "  ./setup.sh help         Show this help"
     ;;
