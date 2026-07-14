@@ -444,7 +444,9 @@ install_skills() {
 # ── CLAUDE.md assembly ───────────────────────────────────────────
 assemble_claude_md() {
   local profile="$1" github_user="${2:-}" hide_ai="${3:-no}"
-  local output="$CLAUDE_DIR/CLAUDE.md"
+  local final="$CLAUDE_DIR/CLAUDE.md"
+  local output
+  output="$(mktemp)"   # assemble off to the side, then swap in atomically
 
   # Start with base
   cp "$DOTFILES_DIR/base/CLAUDE.md" "$output"
@@ -503,6 +505,20 @@ POLICY
     echo "" >> "$output"
     cat "$local_md" >> "$output"
   fi
+
+  # Finalize: back up an existing CLAUDE.md before replacing it — but only when
+  # the regenerated content actually differs, so repeated `./setup.sh update`
+  # runs don't spawn no-op backups. Mirrors the backup contract that link_file
+  # and install_settings already honor for the other ~/.claude files.
+  chmod 0644 "$output"
+  mkdir -p "$CLAUDE_DIR"
+  if [ -f "$final" ] && ! cmp -s "$output" "$final"; then
+    local backup_dir="$CLAUDE_DIR/.backups/setup-$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "$backup_dir"
+    cp "$final" "$backup_dir/CLAUDE.md"
+    warn "Backed up existing CLAUDE.md to $backup_dir/"
+  fi
+  mv "$output" "$final"
 
   ok "CLAUDE.md assembled (base + $profile$([ -f "$local_md" ] && echo " + local"))"
 }
