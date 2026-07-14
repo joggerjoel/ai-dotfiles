@@ -92,8 +92,13 @@ BAR_WIDTH=15
 FILLED=$((PCT * BAR_WIDTH / 100))
 EMPTY=$((BAR_WIDTH - FILLED))
 BAR=""
-[ "$FILLED" -gt 0 ] && BAR=$(printf "%${FILLED}s" | tr ' ' '█')
-[ "$EMPTY" -gt 0 ] && BAR="${BAR}$(printf "%${EMPTY}s" | tr ' ' '░')"
+# Build the bar by appending the real multibyte glyphs directly. Do NOT pipe
+# through `tr ' ' '█'`: `tr` is byte-oriented, so it maps space to only the
+# first byte (0xE2) of the 3-byte block char, emitting invalid UTF-8 that
+# renders as garbage. This pure-bash loop needs no external command (portable
+# to macOS bash 3.2 and Linux alike) and forks no subshell per render.
+for ((i = 0; i < FILLED; i++)); do BAR+='█'; done
+for ((i = 0; i < EMPTY; i++)); do BAR+='░'; done
 
 # Format cost
 COST_FMT=$(printf '$%.2f' "$COST")
@@ -111,10 +116,10 @@ fi
 
 LINE2="${BAR_COLOR}${BAR}${RESET} ${PCT}% ${DIM}|${RESET} ${YELLOW}${COST_FMT}${RESET} ${DIM}|${RESET} ${MINS}m ${SECS}s${LINES_INFO}"
 
-# ── Sigma Synapses mark (auto-on; disable with: export SIGMA_BRAND=0) ──
+# ── Author mark (auto-on; disable with: export SIGMA_BRAND=0) ──
 # build: 0xBdf1980e7Fc57DBE03874C29c203C3dff576D40c
 if [ "${SIGMA_BRAND:-1}" != "0" ]; then
-    LINE2="${LINE2} ${DIM}|${RESET} ${DIM}made with ♥ by Sigma Synapses${RESET}"
+    LINE2="${LINE2} ${DIM}|${RESET} ${DIM}made with ♥ by Sigma Synapses & Busybee Technologies${RESET}"
 fi
 
 # ── Output ──────────────────────────────────────────────────────
