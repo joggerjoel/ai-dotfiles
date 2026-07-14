@@ -416,17 +416,6 @@
           }
         ]
       }
-    ],
-    "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash $HOME/.claude/scripts/marketplace-auto-update.sh"
-          }
-        ]
-      }
     ]
   },
   "worktree": {
@@ -506,5 +495,6 @@
   "preferredNotifChannel": "auto",
   "autoCompactEnabled": false,
   "skipAutoPermissionPrompt": true,
-  "voiceEnabled": true
+  "voiceEnabled": true,
+  "skipDangerousModePermissionPrompt": true
 }
