@@ -29,6 +29,8 @@
     # Every CLI installer below pipes `curl`, and setup.sh needs git/jq. Install
     # (or confirm) these FIRST, then fail the host fast with a clear message so we
     # never attempt a doomed curl-based install on a box that lacks curl.
+    # apt + sudo only apply to the Debian/Ubuntu fleet. macOS hosts get these
+    # from Homebrew already; the gate task below verifies they're present.
     - name: Install prerequisite packages (curl, git, jq, unzip, ca-certificates)
       become: true
       ansible.builtin.package:
@@ -36,6 +38,7 @@
         state: present
       failed_when: false # a pkg-mgr hiccup shouldn't abort; the gate below decides
       register: prereqs
+      when: ansible_os_family == "Debian"
 
     - name: Check the hard prerequisites are present
       ansible.builtin.shell: "command -v curl >/dev/null && command -v git >/dev/null"
@@ -100,7 +103,7 @@
       ansible.builtin.package:
         name: tmux
         state: present
-      when: tmux_check.rc != 0
+      when: tmux_check.rc != 0 and ansible_os_family == "Debian"
 
     - name: Ensure ~/Documents/Projects exists
       ansible.builtin.file:
@@ -183,12 +186,16 @@
 
     # ── Stage B: ai-dotfiles config (vps profile) ────────────────
     # (git/jq/curl already ensured in Stage 0)
+    # force: true discards local runtime pollution — the live ~/.claude/settings.json
+    # symlinks into profiles/*/settings.json, so Claude writing enabledPlugins there
+    # dirties this tree. The fleet checkout is a deploy mirror of origin, so reset it.
     - name: Clone/update ai-dotfiles
       ansible.builtin.git:
         repo: "{{ dotfiles_repo }}"
         dest: "{{ dotfiles_dir }}"
         version: main
         update: true
+        force: true
       when: install_dotfiles | bool
 
     - name: Has ai-dotfiles already been set up on this host?
