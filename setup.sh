@@ -560,7 +560,7 @@ configure_supabase() {
     echo -e "    ${BOLD}2${RESET}) Internal  ${DIM}self-hosted — direct Postgres MCP to your DB${RESET}"
     echo -e "    ${BOLD}3${RESET}) Skip"
     echo -n "  > "
-    read -r sb_choice
+    read -r sb_choice || sb_choice=""
     case "${sb_choice:-3}" in
       1) mode="cloud" ;;
       2) mode="internal" ;;
@@ -581,7 +581,7 @@ configure_supabase() {
       db_url=$(jq -r '.mcpServers.supabase.env.POSTGRES_CONNECTION_STRING // empty' "$CLAUDE_JSON" 2>/dev/null || true)
       if [ -z "$db_url" ]; then
         echo -ne "  ${BOLD}Connection string${RESET} ${DIM}(postgresql://postgres:<pw>@your-db-host:5432/postgres)${RESET}: "
-        read -r db_url
+        read -r db_url || db_url=""
       fi
       if [ -z "$db_url" ]; then
         warn "No connection string — internal Supabase MCP not configured."
@@ -626,7 +626,7 @@ cmd_setup() {
   echo -e "  ${BOLD}1${RESET}) Desktop (macOS / Linux GUI)"
   echo -e "  ${BOLD}2${RESET}) VPS / headless server"
   echo -n "  > "
-  read -r profile_choice
+  read -r profile_choice || profile_choice=""
 
   local profile
   case "${profile_choice:-1}" in
@@ -639,13 +639,13 @@ cmd_setup() {
   header "Personalization"
 
   echo -ne "  GitHub username (for commit policy, or Enter to skip): "
-  read -r github_user
+  read -r github_user || github_user=""
 
   local hide_ai="no"
   if [ -n "$github_user" ]; then
     ok "GitHub: @$github_user"
     echo -ne "  Hide AI attribution in commits? (y/N): "
-    read -r hide_ai_choice
+    read -r hide_ai_choice || hide_ai_choice=""
     case "${hide_ai_choice:-n}" in
       y|Y|yes) hide_ai="yes"; ok "AI attribution will be hidden" ;;
       *) hide_ai="no"; skip "Standard commit messages" ;;
@@ -663,7 +663,7 @@ cmd_setup() {
     echo -e "  gates feature-flag reads behind these vars, which silently disables"
     echo -e "  Remote Control (/rc) and other flag-gated features. ${DIM}Details in README.${RESET}"
     echo -ne "  Do you use Remote Control? Strips the opt-out vars (y/N): "
-    read -r rc_choice
+    read -r rc_choice || rc_choice=""
     case "${rc_choice:-n}" in
       y|Y|yes) remote_control="yes"; ok "Remote Control enabled (telemetry opt-out will be stripped)" ;;
       *) skip "Keeping telemetry opt-out (Remote Control stays unavailable)" ;;
@@ -782,7 +782,7 @@ cmd_setup() {
   echo ""
   echo -e "  ${DIM}Examples: 1,2,3  |  1-5  |  all  |  Enter to skip${RESET}"
   echo -n "  > "
-  read -r selection
+  read -r selection || selection=""
 
   # ── Parse selection ──
   local selected=()
@@ -829,7 +829,7 @@ cmd_setup() {
 
       if [ "$needs_key" = "yes" ]; then
         echo -ne "  ${BOLD}${name}${RESET} - ${key_var}: "
-        read -r key_val
+        read -r key_val || key_val=""
 
         if [ -z "$key_val" ]; then
           # No key provided - install disabled
@@ -844,7 +844,7 @@ cmd_setup() {
         # Check for extra vars (URL etc)
         if [ -n "$extra_vars" ]; then
           echo -ne "  ${BOLD}${name}${RESET} - ${extra_vars}: "
-          read -r extra_val
+          read -r extra_val || extra_val=""
         fi
       fi
 
@@ -878,7 +878,7 @@ cmd_setup() {
   echo -e "  feature-dev, code-review, claude-mem, agent-browser, codex, and more)."
   echo -e "  ${DIM}Core auto-installs; optional plugins are opt-in. Reversible anytime.${RESET}"
   echo -ne "  Install the plugin stack now? (Y/n): "
-  read -r plugins_choice
+  read -r plugins_choice || plugins_choice=""
   case "${plugins_choice:-y}" in
     n|N|no) skip "Skipped (run ./scripts/bootstrap-plugins.sh later)" ;;
     *) "$DOTFILES_DIR/scripts/bootstrap-plugins.sh" || warn "Plugin bootstrap had issues — re-run ./scripts/bootstrap-plugins.sh" ;;
@@ -942,7 +942,7 @@ cmd_add() {
   if [ "$needs_key" = "yes" ]; then
     echo -ne "${BOLD}${name}${RESET} - ${desc}\n"
     echo -ne "  ${key_var}: "
-    read -r key_val
+    read -r key_val || key_val=""
 
     if [ -z "$key_val" ]; then
       fail "API key required for $name"
@@ -951,7 +951,7 @@ cmd_add() {
 
     if [ -n "$extra_vars" ]; then
       echo -ne "  ${extra_vars}: "
-      read -r extra_val
+      read -r extra_val || extra_val=""
     fi
   fi
 
@@ -1093,7 +1093,7 @@ cmd_env() {
 
   if [ -z "$val" ]; then
     echo -ne "  ${BOLD}${key}${RESET}: "
-    read -r val
+    read -r val || val=""
   fi
 
   if [ -z "$val" ]; then
