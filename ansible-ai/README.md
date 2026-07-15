@@ -20,7 +20,7 @@ provisioning each aorus box in two stages.
 | Piece                                  | Why                                              |
 | -------------------------------------- | ------------------------------------------------ |
 | base deps (git/jq/curl)                | so `setup.sh` needn't sudo mid-run               |
-| clone `joggerjoel/ai-dotfiles`     | the config source                                |
+| clone `joggerjoel/ai-dotfiles`         | the config source                                |
 | `setup.sh` **vps profile**, unattended | CLAUDE.md, core plugin stack, guardrails, memory |
 
 Without Stage B, `ssh aorusN-claude` gives **vanilla** Claude Code (no plugins/
@@ -68,7 +68,10 @@ ansible-playbook update.yml --limit aorus7   # one host
 
 `update.yml` upgrades the Claude Code **binary** (`claude update`) and refreshes the
 **config** (`setup.sh update` → `git pull --rebase --autostash` + re-apply the saved
-vps profile). No `-K` needed — no package installs.
+vps profile). That config refresh now also **refreshes the plugin/skill stack**:
+`setup.sh update` runs `bootstrap-plugins.sh --core-only`, which pulls the latest
+marketplace catalogs (so installed plugins update on the next Claude Code start) and
+installs any newly-listed CORE plugins. No `-K` needed — no package installs.
 
 - `-K` (on `provision-ai.yml`) prompts for the sudo password (needed to install
   tmux/git/jq). Drop it on hosts with passwordless sudo.

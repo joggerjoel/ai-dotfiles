@@ -15,6 +15,19 @@ skip() { echo -e "  ${DIM}○ $1${RESET}"; }
 warn() { echo -e "  ${YELLOW}!${RESET} $1"; }
 header() { echo -e "\n${BOLD}$1${RESET}"; }
 
+# Make `claude` findable in a bare/non-login shell (Ansible, cron, `bash script`).
+# The native installer drops the binary in ~/.local/bin but only wires PATH via
+# shell rc files, which those shells don't source — so resolve it ourselves.
+for d in "$HOME/.local/bin" /usr/local/bin /usr/bin; do
+  [ -x "$d/claude" ] && PATH="$d:$PATH"
+done
+if ! command -v claude &>/dev/null; then
+  for d in "$HOME"/.nvm/versions/node/*/bin; do
+    [ -x "$d/claude" ] && { PATH="$d:$PATH"; break; }
+  done
+fi
+export PATH
+
 if ! command -v claude &>/dev/null; then
   warn "Claude Code CLI not found — install it first, then re-run this script."
   exit 1
@@ -100,6 +113,18 @@ add_marketplaces() {
   done
 }
 
+refresh_marketplaces() {
+  # Pull the latest catalog for every added marketplace so already-installed
+  # plugins pick up updates on the next Claude Code start. Mirrors the daily
+  # cron (marketplace-auto-update.sh); harmless right after a fresh add.
+  header "Refreshing marketplaces"
+  if claude plugin marketplace update &>/dev/null; then
+    ok "Marketplaces up to date"
+  else
+    warn "Marketplace refresh had issues (network?) — plugins may be stale"
+  fi
+}
+
 install_plugin() {
   local spec="$1" desc="$2" name="${1%%@*}"
   if claude plugin list 2>/dev/null | grep -q "$name"; then
@@ -137,6 +162,7 @@ offer_group() {
 
 # ── Run ──────────────────────────────────────────────────────────
 add_marketplaces
+refresh_marketplaces
 install_core
 
 if [ "$AUTO" = "--core-only" ] || [ "$AUTO" = "-y" ]; then

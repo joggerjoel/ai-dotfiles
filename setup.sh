@@ -1057,6 +1057,16 @@ cmd_update() {
   # Re-install repo-owned skills
   install_skills
 
+  # Refresh the plugin stack: pull latest marketplace catalogs (so installed
+  # plugins update on next start) and install any newly-listed CORE plugins.
+  # --core-only keeps it non-interactive — essential for the unattended fleet
+  # update (ansible-ai/update.yml → `setup.sh update`). The script resolves
+  # `claude` on PATH itself, so this works in a bare shell.
+  if [ -x "$DOTFILES_DIR/scripts/bootstrap-plugins.sh" ]; then
+    "$DOTFILES_DIR/scripts/bootstrap-plugins.sh" --core-only \
+      || warn "Plugin refresh had issues — re-run ./scripts/bootstrap-plugins.sh"
+  fi
+
   # Reassemble CLAUDE.md
   assemble_claude_md "$profile" "$github_user" "$hide_ai"
 
