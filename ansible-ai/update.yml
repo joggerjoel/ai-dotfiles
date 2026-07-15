@@ -38,10 +38,11 @@
         set -o pipefail
         export NVM_DIR="$HOME/.nvm"
         [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-        [ -x "$HOME/.local/bin/codex" ] && curl -fsSL https://chatgpt.com/codex/install.sh | sh
+        cr="--retry 5 --retry-delay 2 --retry-connrefused"
+        [ -x "$HOME/.local/bin/codex" ] && curl $cr -fsSL https://chatgpt.com/codex/install.sh | sh
         [ -x "$HOME/.local/bin/cursor-agent" ] && "$HOME/.local/bin/cursor-agent" update
         for p in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
-          [ -x "$p" ] && { "$p" upgrade || curl -fsSL https://opencode.ai/install | bash; break; }
+          [ -x "$p" ] && { "$p" upgrade || curl $cr -fsSL https://opencode.ai/install | bash; break; }
         done
         command -v gemini >/dev/null 2>&1 && npm install -g @google/gemini-cli@latest
         true

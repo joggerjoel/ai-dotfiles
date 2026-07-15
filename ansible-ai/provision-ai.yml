@@ -20,6 +20,10 @@
   hosts: aorus_ai
   gather_facts: true
   ignore_unreachable: true
+  vars:
+    # Retry transient network/CDN errors (5xx, 429, timeouts, conn refused) so a
+    # blip like a 503 from an install CDN doesn't hard-fail a whole host.
+    curl_retry: "--retry 5 --retry-delay 2 --retry-connrefused"
   tasks:
     # ── Stage 0: prerequisites ───────────────────────────────────────
     # Every CLI installer below pipes `curl`, and setup.sh needs git/jq. Install
@@ -67,7 +71,7 @@
     - name: Install nvm (when no Node.js runtime present)
       ansible.builtin.shell: |
         set -o pipefail
-        curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.5/install.sh | bash
+        curl {{ curl_retry }} -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.5/install.sh | bash
       args:
         executable: /bin/bash
         creates: "{{ ansible_env.HOME }}/.nvm/nvm.sh"
@@ -112,7 +116,7 @@
     - name: Install Claude Code binary (native installer -> ~/.local/bin)
       ansible.builtin.shell: |
         set -o pipefail
-        curl -fsSL https://claude.ai/install.sh | bash
+        curl {{ curl_retry }} -fsSL https://claude.ai/install.sh | bash
       args:
         executable: /bin/bash
         creates: "{{ claude_bin }}"
@@ -123,7 +127,7 @@
     - name: Install Codex CLI (standalone installer -> ~/.local/bin/codex)
       ansible.builtin.shell: |
         set -o pipefail
-        curl -fsSL https://chatgpt.com/codex/install.sh | sh
+        curl {{ curl_retry }} -fsSL https://chatgpt.com/codex/install.sh | sh
       args:
         executable: /bin/bash
         creates: "{{ ansible_env.HOME }}/.local/bin/codex"
@@ -131,7 +135,7 @@
     - name: Install Cursor CLI (official installer -> ~/.local/bin/cursor-agent)
       ansible.builtin.shell: |
         set -o pipefail
-        curl https://cursor.com/install -fsS | bash
+        curl {{ curl_retry }} https://cursor.com/install -fsS | bash
       args:
         executable: /bin/bash
         creates: "{{ ansible_env.HOME }}/.local/bin/cursor-agent"
@@ -151,7 +155,7 @@
     - name: Install opencode (standalone installer)
       ansible.builtin.shell: |
         set -o pipefail
-        curl -fsSL https://opencode.ai/install | bash
+        curl {{ curl_retry }} -fsSL https://opencode.ai/install | bash
       args:
         executable: /bin/bash
       when: opencode_check.rc != 0
