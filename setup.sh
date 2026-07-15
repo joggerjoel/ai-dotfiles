@@ -1017,6 +1017,11 @@ cmd_list() {
 cmd_update() {
   header "Updating..."
   cd "$DOTFILES_DIR"
+  # Fingerprint this script BEFORE the pull so we can tell if the pull rewrites
+  # it (see the re-exec guard below). `if` (not `&& `) to stay set -e-safe.
+  local self="$DOTFILES_DIR/setup.sh" before_hash=""
+  if [ -f "$self" ]; then before_hash="$(cksum "$self" 2>/dev/null || true)"; fi
+
   # Auto-resolve the common case — a dirty tree from local config edits — so
   # anyone can run update without committing first. `--autostash` stashes local
   # changes, rebases, and re-applies them atomically; plain `git pull --rebase`
@@ -1029,6 +1034,17 @@ cmd_update() {
     ok "Pulled latest changes (local edits preserved)"
   else
     warn "Git pull failed (no upstream, network issue, or stash conflict — check: git status)"
+  fi
+
+  # Re-exec when the pull rewrote setup.sh itself. bash parsed the OLD file into
+  # memory before the pull, so a change to cmd_update (or any helper it calls)
+  # wouldn't take effect until the NEXT run — the "two-run lag" that bit the
+  # fleet the first time the plugin refresh shipped. Re-running the new version
+  # here makes every update single-pass. SETUP_REEXECED guards it to run once.
+  if [ -z "${SETUP_REEXECED:-}" ] && [ -n "$before_hash" ] \
+     && [ "$before_hash" != "$(cksum "$self" 2>/dev/null || true)" ]; then
+    ok "setup.sh changed in the pull — re-running with the updated version"
+    exec env SETUP_REEXECED=1 bash "$self" update
   fi
 
   # Read saved preferences
