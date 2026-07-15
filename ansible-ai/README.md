@@ -58,13 +58,26 @@ ansible-playbook provision-ai.yml -K --limit aorus4,aorus5   # subset
 ### Update the whole fleet (the everyday command)
 
 After pushing config changes to `github.com/joggerjoel/ai-dotfiles`, propagate
-them to every server in one shot:
+them to every server **and this Mac** in one shot:
 
 ```bash
-ansible-playbook update.yml            # claude update + setup.sh update, all hosts
+ansible-playbook update.yml            # claude update + setup.sh update, servers + local
 ansible-playbook update.yml --check    # dry run
-ansible-playbook update.yml --limit aorus7   # one host
+ansible-playbook update.yml --limit aorus7    # one server
+ansible-playbook update.yml --limit aorus_ai  # servers only (skip local)
+ansible-playbook update.yml --limit local_ai  # this Mac only
 ```
+
+`update.yml` targets the `ai_all` group = the aorus servers (`aorus_ai`) **plus the
+local control node** (`local_ai` → `localhost` via `ansible_connection: local`). The
+Mac gets the same treatment as a server — `claude update`, the sibling model-CLI
+upgrades (codex/cursor/opencode/gemini), and `setup.sh update` (plugins/skills +
+its saved **desktop** profile). No SSH is used for the Mac, so it works regardless
+of which network you're on. `provision-ai.yml` stays servers-only — the control node
+is never provisioned.
+
+> The local node is folded into Ansible for convenience. The direct path still
+> works identically for just this Mac: `cd ~/Developer/Git/ai-dotfiles && ./setup.sh update`.
 
 `update.yml` upgrades the Claude Code **binary** (`claude update`) and refreshes the
 **config** (`setup.sh update` → `git pull --rebase --autostash` + re-apply the saved

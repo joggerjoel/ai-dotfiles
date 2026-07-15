@@ -9,8 +9,12 @@
 # to propagate them to the whole fleet.
 #
 # Read-only-safe to dry-run with --check. Offline hosts are skipped.
-- name: Update the claude fleet
-  hosts: aorus_ai
+#
+# Targets `ai_all` = the aorus servers + this Mac (the local control node, via
+# ansible_connection: local). One run refreshes the whole picture. Limit with
+# `--limit aorus_ai` (servers only) or `--limit local_ai` (this Mac only).
+- name: Update the claude fleet (servers + local control node)
+  hosts: ai_all
   gather_facts: true
   ignore_unreachable: true
   tasks:
