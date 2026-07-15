@@ -21,6 +21,34 @@
   gather_facts: true
   ignore_unreachable: true
   tasks:
+    # ── Stage 0: prerequisites ───────────────────────────────────────
+    # Every CLI installer below pipes `curl`, and setup.sh needs git/jq. Install
+    # (or confirm) these FIRST, then fail the host fast with a clear message so we
+    # never attempt a doomed curl-based install on a box that lacks curl.
+    - name: Install prerequisite packages (curl, git, jq, unzip, ca-certificates)
+      become: true
+      ansible.builtin.package:
+        name: [curl, git, jq, unzip, ca-certificates, tar, gzip]
+        state: present
+      failed_when: false # a pkg-mgr hiccup shouldn't abort; the gate below decides
+      register: prereqs
+
+    - name: Check the hard prerequisites are present
+      ansible.builtin.shell: "command -v curl >/dev/null && command -v git >/dev/null"
+      args:
+        executable: /bin/bash
+      register: prereq_check
+      changed_when: false
+      failed_when: false
+
+    - name: Fail fast when prerequisites are missing
+      ansible.builtin.fail:
+        msg: >-
+          Missing required tools on {{ inventory_hostname }} (need curl and git).
+          Package install did not provide them — check the host's package manager
+          and sudo access, then re-run. Skipping all installs for this host.
+      when: prereq_check.rc != 0
+
     # ── Stage A: runtime ─────────────────────────────────────────────
     - name: Detect existing tmux
       ansible.builtin.shell: command -v tmux
@@ -115,13 +143,7 @@
       when: gemini_check.rc != 0
 
     # ── Stage B: ai-dotfiles config (vps profile) ────────────────
-    - name: Install base deps for ai-dotfiles setup.sh
-      become: true
-      ansible.builtin.package:
-        name: [git, jq, curl]
-        state: present
-      when: install_dotfiles | bool
-
+    # (git/jq/curl already ensured in Stage 0)
     - name: Clone/update ai-dotfiles
       ansible.builtin.git:
         repo: "{{ dotfiles_repo }}"
