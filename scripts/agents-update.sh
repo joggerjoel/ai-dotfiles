@@ -54,8 +54,11 @@ update_cli() {
   fi
 }
 
+# CODEX_NON_INTERACTIVE=1 answers "no" to the installer's tty prompts
+# ("Start Codex now?") — otherwise it grabs /dev/tty, and launching
+# Codex makes the launch's exit status masquerade as an install failure.
 update_cli "codex" "$HOME/.local/bin/codex" \
-  "curl $CURL_RETRY -fsSL https://chatgpt.com/codex/install.sh | sh"
+  "curl $CURL_RETRY -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
 
 update_cli "cursor-agent" "$HOME/.local/bin/cursor-agent" \
   "\"$HOME/.local/bin/cursor-agent\" update"
