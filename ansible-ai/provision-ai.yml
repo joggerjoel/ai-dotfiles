@@ -143,6 +143,14 @@
         executable: /bin/bash
         creates: "{{ ansible_env.HOME }}/.local/bin/cursor-agent"
 
+    - name: Install Cortex Code CLI (Snowflake installer -> ~/.local/bin/cortex)
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl {{ curl_retry }} -fsSL https://ai.snowflake.com/static/cc-scripts/install.sh | sh
+      args:
+        executable: /bin/bash
+        creates: "{{ ansible_env.HOME }}/.local/bin/cortex"
+
     - name: Is opencode present? (installer dir varies)
       ansible.builtin.shell: |
         for p in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
@@ -231,9 +239,10 @@
         for p in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
           [ -x "$p" ] && { oc=present; break; }
         done
-        printf 'codex=%s cursor=%s opencode=%s gemini=%s' \
+        printf 'codex=%s cursor=%s cortex=%s opencode=%s gemini=%s' \
           "$([ -x "$HOME/.local/bin/codex" ] && echo present || echo MISSING)" \
           "$([ -x "$HOME/.local/bin/cursor-agent" ] && echo present || echo MISSING)" \
+          "$([ -x "$HOME/.local/bin/cortex" ] && echo present || echo MISSING)" \
           "$oc" \
           "$(command -v gemini >/dev/null 2>&1 && echo present || echo MISSING)"
       args:
