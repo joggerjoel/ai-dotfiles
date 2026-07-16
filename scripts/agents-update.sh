@@ -103,7 +103,7 @@ update_cli "codex" "$HOME/.local/bin/codex" "$CODEX_INSTALL" "$CODEX_INSTALL"
 
 update_cli "cursor-agent" "$HOME/.local/bin/cursor-agent" \
   "\"$HOME/.local/bin/cursor-agent\" update" \
-  "curl $CURL_RETRY https://cursor.com/install -fsS | bash"
+  "curl $CURL_RETRY -fsSL https://cursor.com/install | bash"
 
 # https://docs.snowflake.com/en/user-guide/cortex-code/cortex-code-cli
 update_cli "cortex" "$HOME/.local/bin/cortex" \

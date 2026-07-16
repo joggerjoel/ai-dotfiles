@@ -130,7 +130,7 @@
     - name: Install Codex CLI (standalone installer -> ~/.local/bin/codex)
       ansible.builtin.shell: |
         set -o pipefail
-        curl {{ curl_retry }} -fsSL https://chatgpt.com/codex/install.sh | sh
+        curl {{ curl_retry }} -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh
       args:
         executable: /bin/bash
         creates: "{{ ansible_env.HOME }}/.local/bin/codex"
@@ -138,7 +138,7 @@
     - name: Install Cursor CLI (official installer -> ~/.local/bin/cursor-agent)
       ansible.builtin.shell: |
         set -o pipefail
-        curl {{ curl_retry }} https://cursor.com/install -fsS | bash
+        curl {{ curl_retry }} -fsSL https://cursor.com/install | bash
       args:
         executable: /bin/bash
         creates: "{{ ansible_env.HOME }}/.local/bin/cursor-agent"
