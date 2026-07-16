@@ -118,6 +118,14 @@ cd ansible-ai && ansible-playbook update.yml   # Fleet: both layers on every
                                                # server + this machine
 ```
 
+**Hands-off option:** schedule the whole thing from the control node — one
+cron entry here updates every computer daily; individual targets need nothing:
+
+```bash
+./scripts/fleet-cron-setup.sh            # daily at 6:15 (CRON_HOUR/CRON_MIN to change)
+tail -f ~/.claude/.changelog/fleet-update.log
+```
+
 There's also a **push mode** for testing uncommitted config fleet-wide with no
 GitHub round-trip — it rsyncs this machine's working tree to the servers and
 re-applies without git (the next pull-based update reverts anything you never
