@@ -2,18 +2,22 @@
 set -euo pipefail
 
 # ─────────────────────────────────────────────────────────────────
-# update.sh — upgrade Claude Code to the latest release, safely.
+# update.sh — upgrade the AI CLI stack to the latest releases, safely.
 #
-#   1. Check the currently-installed version.
+#   1. Check the currently-installed Claude Code version.
 #   2. Snapshot config into backup/YYYYMMDD_HHMMSS/ with a generated
 #      rollback.sh, so any upgrade can be reverted.
-#   3. Upgrade to latest (native `claude update`, or npm if that's how
-#      it was installed).
-#   4. Prune old backups (last 7 days + first-of-month snapshots).
+#   3. Upgrade Claude Code to latest (native `claude update`, or npm
+#      if that's how it was installed).
+#   4. Upgrade the sibling agent CLIs when present — codex,
+#      cursor-agent, opencode, gemini (scripts/agents-update.sh, the
+#      same script ansible-ai/update.yml runs on the fleet).
+#   5. Prune old backups (last 7 days + first-of-month snapshots).
 #
 # Flags:
-#   --dry-run   Take the backup, but DON'T upgrade (prints what it would do).
-#   --no-prune  Skip the post-upgrade backup prune.
+#   --dry-run      Take the backup, but DON'T upgrade (prints what it would do).
+#   --claude-only  Skip the sibling agent CLIs (step 4).
+#   --no-prune     Skip the post-upgrade backup prune.
 # ─────────────────────────────────────────────────────────────────
 
 # ── Colors & helpers ─────────────────────────────────────────────
@@ -31,14 +35,16 @@ CLAUDE_JSON="$HOME/.claude.json"
 BACKUP_ROOT="$DOTFILES_DIR/backup"
 TS="$(date +%Y%m%d_%H%M%S)"
 
-DRY_RUN="no"; RUN_PRUNE="yes"
+DRY_RUN="no"; RUN_PRUNE="yes"; RUN_AGENTS="yes"
 for arg in "$@"; do
   case "$arg" in
-    --dry-run)  DRY_RUN="yes" ;;
-    --no-prune) RUN_PRUNE="no" ;;
+    --dry-run)     DRY_RUN="yes" ;;
+    --claude-only) RUN_AGENTS="no" ;;
+    --no-prune)    RUN_PRUNE="no" ;;
     -h|--help)
-      echo "Usage: ./update.sh [--dry-run] [--no-prune]"
-      echo "  Backs up config to backup/<timestamp>/ then upgrades Claude Code."
+      echo "Usage: ./update.sh [--dry-run] [--claude-only] [--no-prune]"
+      echo "  Backs up config to backup/<timestamp>/ then upgrades Claude Code"
+      echo "  and the sibling agent CLIs (codex, cursor-agent, opencode, gemini)."
       exit 0 ;;
     *) warn "Unknown flag: $arg (ignored)" ;;
   esac
@@ -167,7 +173,14 @@ else
 fi
 echo -e "  ${DIM}Roll back anytime:  ${CYAN}backup/$TS/rollback.sh${RESET}"
 
-# ── 3. Prune old backups ─────────────────────────────────────────
+# ── 3. Sibling agent CLIs ────────────────────────────────────────
+if [ "$RUN_AGENTS" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/agents-update.sh" ]; then
+  echo
+  "$DOTFILES_DIR/scripts/agents-update.sh" || warn "Some agent CLI upgrades failed (non-fatal)."
+fi
+
+# ── 4. Prune old backups ─────────────────────────────────────────
 if [ "$RUN_PRUNE" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/backup-prune.sh" ]; then
+  echo
   "$DOTFILES_DIR/scripts/backup-prune.sh" || warn "Backup prune had issues (non-fatal)."
 fi
