@@ -24,9 +24,15 @@ The Remote Control choice lives in the machine-local, gitignored
 
 ```bash
 cd ~/ai-dotfiles   # or wherever this repo is checked out
+mkdir -p .local
 echo yes > .local/.remote-control
 ./setup.sh update
 ```
+
+> If `.local/` didn't exist, none of this machine's setup answers were saved
+> and every update has been applying **defaults** (desktop profile). Seed the
+> rest too: `echo vps > .local/.profile` on a server (plus `.github-user` and
+> `.hide-ai`), or re-run `./setup.sh`.
 
 Then **restart Claude Code** — the env vars are read at startup.
 
@@ -40,8 +46,11 @@ Remotely, via the fleet tooling (one host):
 
 ```bash
 cd ansible-ai
-ansible <host> -m shell -a 'cd ~/ai-dotfiles && echo yes > .local/.remote-control && bash setup.sh update'
+ansible <host> -m shell -a 'cd ~/ai-dotfiles && mkdir -p .local && echo yes > .local/.remote-control && bash setup.sh update'
 ```
+
+(On the fleet, the repo lives at `~/ai-dotfiles` — that's `dotfiles_dir` from
+the inventory; only the control node uses its own checkout path.)
 
 ## Why it doesn't deploy to the whole fleet
 

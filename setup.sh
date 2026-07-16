@@ -1077,6 +1077,12 @@ cmd_update() {
   local profile="desktop" github_user="" hide_ai="no" remote_control="no"
   if [ -f "$DOTFILES_DIR/.local/.profile" ]; then
     profile=$(cat "$DOTFILES_DIR/.local/.profile")
+  else
+    # A missing .local/ means NO answers were saved — updating with defaults
+    # silently applies the desktop profile, which put two fleet servers on
+    # the wrong profile once. Warn loudly; don't guess quietly.
+    warn "No saved profile (.local/.profile) — defaulting to 'desktop'"
+    warn "Fleet host? Fix with:  mkdir -p .local && echo vps > .local/.profile"
   fi
   if [ -f "$DOTFILES_DIR/.local/.github-user" ]; then
     github_user=$(cat "$DOTFILES_DIR/.local/.github-user")
