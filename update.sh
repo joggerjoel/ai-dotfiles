@@ -15,7 +15,8 @@ set -euo pipefail
 #   5. Prune old backups (last 7 days + first-of-month snapshots).
 #
 # Flags:
-#   --dry-run      Take the backup, but DON'T upgrade (prints what it would do).
+#   --dry-run      Take the backup, but DON'T upgrade. Previews the Claude
+#                  step only — sibling CLIs and prune are skipped entirely.
 #   --claude-only  Skip the sibling agent CLIs (step 4).
 #   --no-prune     Skip the post-upgrade backup prune.
 # ─────────────────────────────────────────────────────────────────

@@ -50,16 +50,23 @@
         chdir: "{{ dotfiles_dir }}"
         executable: /bin/bash
       register: dotfiles_update
-      changed_when: "'Updating' in dotfiles_update.stdout"
+      # setup.sh prints "pull-status: updated" only when HEAD actually moved,
+      # and exits non-zero with a PULL-FAILED sentinel when the sync fails —
+      # so a wedged host colors the recap red instead of claiming "refreshed".
+      changed_when: "'pull-status: updated' in dotfiles_update.stdout"
       when: dotfiles_stat.stat.exists
 
     # Runs AFTER the repo refresh so the freshly-pulled script is used.
     # scripts/agents-update.sh is the single source of truth for the CLI
     # list — ./update.sh runs the same script locally.
-    - name: Upgrade the sibling agent CLIs (codex, cursor, cortex, opencode, gemini) when present
+    - name: Upgrade the sibling agent CLIs (codex, cursor, cortex, opencode, gemini)
       ansible.builtin.command: bash scripts/agents-update.sh
       args:
         chdir: "{{ dotfiles_dir }}"
+      environment:
+        # Install missing CLIs unattended so the fleet roster converges —
+        # otherwise hosts provisioned before a CLI was added never get it.
+        AGENTS_AUTO_INSTALL: "1"
       register: agents_update
       changed_when: false
       failed_when: false
@@ -80,7 +87,13 @@
           -> {{ ver_after.stdout | default('n/a', true) }} |
           dotfiles: {{ 'refreshed' if dotfiles_stat.stat.exists else 'not installed' }}
 
+    # Always reports — an empty stdout with rc=127 (script missing after a
+    # failed pull) used to vanish entirely from the recap.
     - name: Report sibling agent CLI results
       ansible.builtin.debug:
-        msg: "{{ agents_update.stdout_lines[1:] | map('trim') | list }}"
-      when: agents_update.stdout_lines is defined and agents_update.stdout_lines | length > 1
+        msg: >-
+          {{ agents_update.stdout_lines[1:] | map('trim') | list
+             if (agents_update.stdout_lines | default([]) | length > 1)
+             else ['agents-update.sh produced no report — rc=' ~ (agents_update.rc | default('n/a'))
+                   ~ ' err: ' ~ (agents_update.stderr | default('') | trim | truncate(120))] }}
+      when: agents_update is not skipped

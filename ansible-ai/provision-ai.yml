@@ -255,7 +255,7 @@
       ansible.builtin.debug:
         msg: >-
           {{ inventory_hostname }} ->
-          tmux: {{ 'present' if tmux_check.rc == 0 else 'installed' }} |
+          tmux: {{ 'present' if tmux_check.rc == 0 else ('installed' if ansible_os_family == 'Debian' else 'MISSING (non-Debian — install manually)') }} |
           claude: {{ claude_ver.stdout | default('MISSING', true) }} |
           {{ sibling_clis.stdout | default('codex=? cursor=?', true) }} |
           dotfiles: {{ 'configured' if (install_dotfiles | bool) else 'skipped' }}

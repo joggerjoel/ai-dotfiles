@@ -34,6 +34,10 @@ local_ai:
       ansible_connection: local
   vars:
     claude_bin: "{{ ansible_env.HOME }}/.local/bin/claude"
+    # Set to YOUR local checkout of this repo — it's often somewhere like
+    # ~/Developer/Git/ai-dotfiles, not the fleet's ~/ai-dotfiles. If this is
+    # wrong, update.yml silently reports "dotfiles: not installed" for
+    # localhost on every run.
     dotfiles_dir: "{{ ansible_env.HOME }}/ai-dotfiles"
 
 # ── The everyday update target: fleet + control node ─────────────

@@ -69,7 +69,12 @@ latest_gh_release() {
 
 # ── Refresh: run the real checks, rewrite the cache atomically ───────
 do_refresh() {
-    # Single-flight: if another refresh holds the lock, bail.
+    # Single-flight: if another refresh holds the lock, bail. A reboot or
+    # kill -9 mid-refresh leaves the lock behind forever — treat >60min as
+    # stale so the notifier can't freeze on a cached result indefinitely.
+    if [ -d "$LOCK" ]; then
+      find "$LOCK" -maxdepth 0 -mmin +60 -exec rmdir {} \; 2>/dev/null || true
+    fi
     if ! mkdir "$LOCK" 2>/dev/null; then exit 0; fi
     trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 

@@ -65,3 +65,14 @@ for d in "$BACKUP_ROOT"/*/; do
 done
 
 echo -e "  ${DIM}kept ${kept}, pruned ${pruned}$([ "$DRY_RUN" = "yes" ] && echo " (dry run — nothing deleted)")${RESET}"
+
+# ~/.claude/.backups accumulates per-update config snapshots on every machine
+# and nothing else prunes it. Age-based: keep 60 days; never the CHANGELOG.
+CLAUDE_BACKUPS="$HOME/.claude/.backups"
+if [ -d "$CLAUDE_BACKUPS" ]; then
+  stale=$(find "$CLAUDE_BACKUPS" -mindepth 1 -maxdepth 1 -mtime +60 ! -name 'CHANGELOG.md' | wc -l | tr -d ' ')
+  if [ "$stale" -gt 0 ] && [ "$DRY_RUN" = "no" ]; then
+    find "$CLAUDE_BACKUPS" -mindepth 1 -maxdepth 1 -mtime +60 ! -name 'CHANGELOG.md' -exec rm -rf {} +
+  fi
+  echo -e "  ${DIM}~/.claude/.backups: ${stale} entries older than 60d$([ "$DRY_RUN" = "yes" ] && echo " (dry run — kept)")${RESET}"
+fi

@@ -24,6 +24,11 @@ export PATH
 command -v claude &>/dev/null || exit 0
 
 mkdir -p "$(dirname "$LOG")"
+
+# Cron appends daily and nothing rotated this — keep it bounded.
+if [ -f "$LOG" ] && [ "$(wc -l <"$LOG")" -gt 4000 ]; then
+  tail -n 2000 "$LOG" >"$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+fi
 {
   echo "── $(date '+%Y-%m-%d %H:%M:%S') marketplace update ──"
   claude plugin marketplace update

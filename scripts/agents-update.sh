@@ -38,26 +38,41 @@ LOG="$(mktemp)"
 trap 'rm -f "$LOG"' EXIT
 
 # Prompt only when a human is attached — Ansible and cron runs must
-# stay unattended, so missing CLIs are skipped there.
+# stay unattended, so missing CLIs are skipped there (unless
+# AGENTS_AUTO_INSTALL=1, which the fleet playbook sets so the CLI
+# roster converges on hosts provisioned before a CLI was added).
 INTERACTIVE="no"
 [ -t 0 ] && [ -e /dev/tty ] && INTERACTIVE="yes"
 
+# A hung vendor updater must not stall the whole fleet play.
+RUN_TIMEOUT=""
+if command -v timeout >/dev/null 2>&1; then RUN_TIMEOUT="timeout 300"
+elif command -v gtimeout >/dev/null 2>&1; then RUN_TIMEOUT="gtimeout 300"; fi
+
 # offer_install <name> <install command>
-# Interactive runs get a y/N offer to install a missing CLI; anything
-# else (no tty, no install command) just reports the skip.
+# Interactive runs get a y/N offer to install a missing CLI;
+# AGENTS_AUTO_INSTALL=1 installs without asking; anything else
+# (no tty, no install command) just reports the skip.
 offer_install() {
   local name="$1" cmd="${2:-}" answer="" ver=""
-  if [ "$INTERACTIVE" != "yes" ] || [ -z "$cmd" ]; then
+  if [ -z "$cmd" ]; then
     skip "$name not installed"
     return 0
   fi
-  printf "  ${DIM}○${RESET} %s not installed — install it? [y/N] " "$name"
-  IFS= read -r answer </dev/tty || answer=""   # EOF-tolerant
+  if [ "${AGENTS_AUTO_INSTALL:-0}" = "1" ]; then
+    answer="y"
+  elif [ "$INTERACTIVE" = "yes" ]; then
+    printf "  ${DIM}○${RESET} %s not installed — install it? [y/N] " "$name"
+    IFS= read -r answer </dev/tty || answer=""   # EOF-tolerant
+  else
+    skip "$name not installed"
+    return 0
+  fi
   case "$answer" in
     y | Y | yes | YES) ;;
     *) skip "$name skipped"; return 0 ;;
   esac
-  if bash -c "$cmd" >"$LOG" 2>&1; then
+  if $RUN_TIMEOUT bash -c "$cmd" >"$LOG" 2>&1; then
     command -v "$name" >/dev/null 2>&1 && ver="$("$name" --version 2>/dev/null | head -1)"
     ok "$name installed${ver:+ (${ver})}"
   else
@@ -72,15 +87,18 @@ echo -e "${BOLD}Sibling agent CLIs${RESET}"
 # update_cli <name> <binary path or command name> <upgrade command> [install command]
 # Offers to install when the binary is absent; otherwise runs the
 # upgrade and reports old → new version (installers are quiet unless
-# they fail).
+# they fail). "%BIN%" in the upgrade command is replaced with the
+# RESOLVED binary path, so a CLI found outside ~/.local/bin still
+# upgrades itself rather than a hardcoded path that doesn't exist.
 update_cli() {
   local name="$1" bin="$2" cmd="$3" install_cmd="${4:-}" before="" after=""
   if [ ! -x "$bin" ]; then
     bin="$(command -v "$bin" 2>/dev/null || true)"
     [ -n "$bin" ] || { offer_install "$name" "$install_cmd"; return 0; }
   fi
+  cmd="${cmd//%BIN%/$bin}"
   before="$("$bin" --version 2>/dev/null | head -1)"
-  if bash -c "$cmd" >"$LOG" 2>&1; then
+  if $RUN_TIMEOUT bash -c "$cmd" >"$LOG" 2>&1; then
     after="$("$bin" --version 2>/dev/null | head -1)"
     if [ -n "$after" ] && [ "$after" = "$before" ]; then
       ok "$name: already latest (${after})"
@@ -101,13 +119,20 @@ update_cli() {
 CODEX_INSTALL="curl $CURL_RETRY -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
 update_cli "codex" "$HOME/.local/bin/codex" "$CODEX_INSTALL" "$CODEX_INSTALL"
 
-update_cli "cursor-agent" "$HOME/.local/bin/cursor-agent" \
-  "\"$HOME/.local/bin/cursor-agent\" update" \
-  "curl $CURL_RETRY -fsSL https://cursor.com/install | bash"
+# cursor-agent needs the macOS login keychain, which is locked over
+# SSH — a doomed attempt would just pollute the report every run.
+if [ "$(uname -s)" = "Darwin" ] && [ -n "${SSH_CONNECTION:-}" ] \
+   && ! security show-keychain-info >/dev/null 2>&1; then
+  skip "cursor-agent: login keychain locked over SSH — update from a local session"
+else
+  update_cli "cursor-agent" "$HOME/.local/bin/cursor-agent" \
+    "\"%BIN%\" update" \
+    "curl $CURL_RETRY -fsSL https://cursor.com/install | bash"
+fi
 
 # https://docs.snowflake.com/en/user-guide/cortex-code/cortex-code-cli
 update_cli "cortex" "$HOME/.local/bin/cortex" \
-  "\"$HOME/.local/bin/cortex\" update" \
+  "\"%BIN%\" update" \
   "curl $CURL_RETRY -LsS https://ai.snowflake.com/static/cc-scripts/install.sh | sh"
 
 # opencode's installer dir varies between versions.
@@ -118,7 +143,7 @@ for p in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
 done
 [ -z "$OPENCODE_BIN" ] && OPENCODE_BIN="$(command -v opencode 2>/dev/null || true)"
 if [ -n "$OPENCODE_BIN" ]; then
-  update_cli "opencode" "$OPENCODE_BIN" "\"$OPENCODE_BIN\" upgrade || $OPENCODE_INSTALL"
+  update_cli "opencode" "$OPENCODE_BIN" "\"%BIN%\" upgrade || $OPENCODE_INSTALL"
 else
   offer_install "opencode" "$OPENCODE_INSTALL"
 fi

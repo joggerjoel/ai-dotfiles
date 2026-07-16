@@ -80,7 +80,11 @@ case "$PLAYBOOK_CHOICE" in
 esac
 
 [[ -f "$SSH_CONFIG" ]] || { echo "No ssh config at $SSH_CONFIG" >&2; exit 1; }
-[[ -f "$INVENTORY" ]] || { echo "No inventory at $INVENTORY" >&2; exit 1; }
+[[ -f "$INVENTORY" ]] || {
+  echo "No inventory at $INVENTORY" >&2
+  echo "Bootstrap it first:  cp $SCRIPT_DIR/inventory.example.yml $INVENTORY" >&2
+  exit 1
+}
 grep -qE '^  hosts:' "$INVENTORY" || { echo "inventory.local.yml has no '  hosts:' line" >&2; exit 1; }
 grep -qE '^  vars:'  "$INVENTORY" || { echo "inventory.local.yml has no '  vars:' line" >&2; exit 1; }
 

@@ -1022,18 +1022,44 @@ cmd_update() {
   local self="$DOTFILES_DIR/setup.sh" before_hash=""
   if [ -f "$self" ]; then before_hash="$(cksum "$self" 2>/dev/null || true)"; fi
 
-  # Auto-resolve the common case — a dirty tree from local config edits — so
-  # anyone can run update without committing first. `--autostash` stashes local
-  # changes, rebases, and re-applies them atomically; plain `git pull --rebase`
-  # would instead refuse and (with stderr hidden) surface the misleading
-  # "(not a git repo?)" warning. Distinguish a genuine non-repo from a failed
-  # pull so the message is accurate.
+  # Sync with the remote. Fleet checkouts (vps profile) are deploy mirrors —
+  # plugin installs write enabledPlugins through the settings.json symlink and
+  # dirty the tree on every host, and `pull --rebase --autostash` against that
+  # dirt eventually re-applies the stash with CONFLICT MARKERS in the live
+  # settings file while git still exits 0. So vps hard-resets to upstream
+  # (install_settings + the profile re-apply below regenerate everything).
+  # Desktop checkouts are real working copies and keep rebase+autostash — but
+  # failures are loud now: a host with stale config must never report OK.
+  # "PULL-FAILED" is a sentinel ansible-ai/update.yml can grep for.
+  local saved_profile="desktop" head_before="" pull_status="up-to-date"
+  [ -f "$DOTFILES_DIR/.local/.profile" ] && saved_profile="$(cat "$DOTFILES_DIR/.local/.profile")"
   if ! git rev-parse --git-dir >/dev/null 2>&1; then
     skip "Not a git repo — skipping pull"
-  elif git pull --rebase --autostash 2>/dev/null; then
-    ok "Pulled latest changes (local edits preserved)"
   else
-    warn "Git pull failed (no upstream, network issue, or stash conflict — check: git status)"
+    head_before="$(git rev-parse HEAD 2>/dev/null || true)"
+    if [ "$saved_profile" = "vps" ]; then
+      if git fetch origin && git reset --hard '@{u}'; then
+        ok "Synced to upstream (deploy mirror — host-local edits discarded)"
+      else
+        fail "PULL-FAILED: git fetch/reset failed — config would go stale, aborting"
+        exit 1
+      fi
+    else
+      if git pull --rebase --autostash; then
+        ok "Pulled latest changes (local edits preserved)"
+      else
+        fail "PULL-FAILED: git pull failed (see git's error above; check: git status)"
+        exit 1
+      fi
+    fi
+    # An autostash re-apply can conflict while the pull itself exits 0 — and
+    # these files are what the live ~/.claude config symlinks point at.
+    if [ -n "$(git ls-files -u)" ]; then
+      fail "PULL-FAILED: unmerged files in the tree (fix: git status, then git stash drop or resolve)"
+      exit 1
+    fi
+    [ "$head_before" != "$(git rev-parse HEAD 2>/dev/null || true)" ] && pull_status="updated"
+    echo -e "  ${DIM}pull-status: ${pull_status}${RESET}"
   fi
 
   # Re-exec when the pull rewrote setup.sh itself. bash parsed the OLD file into

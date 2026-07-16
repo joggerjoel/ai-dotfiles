@@ -152,7 +152,7 @@ offer_group() {
     printf "      ${DIM}%-32s${RESET} %s\n" "${entry%%|*}" "${entry##*|}"
   done
   echo -ne "  Install this group? (y/N): "
-  read -r ans
+  read -r ans || ans=""
   case "${ans:-n}" in
     y|Y|yes)
       for entry in "${group[@]}"; do install_plugin "${entry%%|*}" "${entry##*|}"; done ;;
