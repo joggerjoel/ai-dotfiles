@@ -93,7 +93,15 @@ No personal info is committed — infrastructure, IPs, and SSH live in gitignore
 
 ## Updating
 
-Three layers, three commands:
+The one-command path — commit, push, and update every target, runnable from
+any directory (it resolves the repo from its own location):
+
+```bash
+./deploy.sh -m "feat: my change"   # or bare ./deploy.sh when already committed
+./deploy.sh --check                # extra args pass through to ansible-playbook
+```
+
+Or the three layers individually:
 
 ```bash
 ./update.sh             # Binaries: Claude Code + the sibling agent CLIs
