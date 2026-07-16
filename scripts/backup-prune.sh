@@ -34,21 +34,12 @@ else
   CUTOFF="$(date -d "-${RETAIN_DAYS} days" +%Y%m%d)"  # GNU / Linux
 fi
 
-# Snapshot names sort lexically == chronologically, so the earliest name in a
-# month is that month's "first" snapshot.
-declare -A MONTH_FIRST
-for d in "$BACKUP_ROOT"/*/; do
-  [ -d "$d" ] || continue
-  name="$(basename "$d")"
-  [[ "$name" =~ ^[0-9]{8}_[0-9]{6}$ ]] || continue
-  ym="${name:0:6}"
-  if [ -z "${MONTH_FIRST[$ym]:-}" ] || [[ "$name" < "${MONTH_FIRST[$ym]}" ]]; then
-    MONTH_FIRST[$ym]="$name"
-  fi
-done
-
 echo -e "${BOLD}Pruning backups${RESET} ${DIM}(keep < ${RETAIN_DAYS}d + first-of-month; cutoff ${CUTOFF})${RESET}"
 
+# Snapshot names sort lexically == chronologically and glob expansion is
+# sorted, so the first name seen for a month is that month's first snapshot.
+# (Plain variable, not an associative array — macOS /bin/bash is 3.2.)
+prev_ym=""
 kept=0; pruned=0
 for d in "$BACKUP_ROOT"/*/; do
   [ -d "$d" ] || continue
@@ -57,9 +48,15 @@ for d in "$BACKUP_ROOT"/*/; do
   date_part="${name:0:8}"
   ym="${name:0:6}"
 
+  month_first="no"
+  if [ "$ym" != "$prev_ym" ]; then
+    month_first="yes"
+    prev_ym="$ym"
+  fi
+
   if [ "$date_part" -ge "$CUTOFF" ]; then
     keep_msg "$name" "within ${RETAIN_DAYS}d"; kept=$((kept+1))
-  elif [ "${MONTH_FIRST[$ym]}" = "$name" ]; then
+  elif [ "$month_first" = "yes" ]; then
     keep_msg "$name" "first of ${ym}"; kept=$((kept+1))
   else
     prune_msg "$name"; pruned=$((pruned+1))
