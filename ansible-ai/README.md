@@ -24,10 +24,15 @@ provisioning each aorus box in two stages.
 | `setup.sh` **vps profile**, unattended | CLAUDE.md, core plugin stack, guardrails, memory |
 
 Without Stage B, `ssh aorusN-claude` gives **vanilla** Claude Code (no plugins/
-skills/MCP). Toggle Stage B with `install_dotfiles` in `inventory.yml`.
+skills/MCP). Toggle Stage B with `install_dotfiles` in `inventory.local.yml`.
 
-ProxyJump (`203.0.113.1`) is baked into `inventory.yml`, so this does **not**
-depend on `~/.ssh/config`.
+The jump host (ProxyJump) is baked into `inventory.local.yml`, so this does
+**not** depend on `~/.ssh/config`. That file is **gitignored** — real IPs,
+jump hosts, and usernames never go in the tracked repo. First-time setup:
+
+```bash
+cp inventory.example.yml inventory.local.yml   # then fill in your hosts
+```
 
 ## Unattended answers seeded into setup.sh
 
@@ -95,7 +100,7 @@ installs any newly-listed CORE plugins. No `-K` needed — no package installs.
 
 ## Syncing the inventory from `~/.ssh/config`
 
-`inventory.yml` is the source of truth for which servers the playbooks target.
+`inventory.local.yml` is the source of truth for which servers the playbooks target.
 Instead of hand-editing it, run:
 
 ```bash
@@ -105,7 +110,7 @@ Instead of hand-editing it, run:
 ```
 
 It parses every `Host` in `~/.ssh/config` and shows a checklist. Hosts **already in
-`inventory.yml` start checked** `[x]`; the rest start `[ ]`. Toggle by number
+`inventory.local.yml` start checked** `[x]`; the rest start `[ ]`. Toggle by number
 (`a`=all, `n`=none, `d`=done), confirm, and only the `hosts:` block is rewritten —
 the group `vars:` (user, ProxyJump, dotfiles vars) is preserved, and a `.bak` is
 saved.

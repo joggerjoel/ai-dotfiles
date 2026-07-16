@@ -1,0 +1,43 @@
+# Example inventory — copy to inventory.local.yml and fill in your hosts.
+# inventory.local.yml is gitignored: real IPs, jump hosts, and usernames
+# never belong in the tracked repo (this repo is public).
+#
+#   cp inventory.example.yml inventory.local.yml
+#
+# The IPs below are documentation placeholders (RFC 5737 TEST-NET).
+aorus_ai:
+  hosts:
+    server1: { ansible_host: 192.0.2.10 }
+    server2: { ansible_host: 192.0.2.11 }
+  vars:
+    ansible_user: youruser
+    # ProxyJump is optional — drop the line if you reach hosts directly.
+    ansible_ssh_common_args: >-
+      -o ProxyJump=203.0.113.1
+      -o ConnectTimeout=15
+      -o StrictHostKeyChecking=accept-new
+    # Consumed by the playbooks:
+    claude_bin: "{{ ansible_env.HOME }}/.local/bin/claude"
+    projects_dir: "{{ ansible_env.HOME }}/Documents/Projects"
+    # ai-dotfiles (config layer) — vps profile, unattended:
+    install_dotfiles: true
+    dotfiles_repo: "https://github.com/joggerjoel/ai-dotfiles.git"
+    dotfiles_dir: "{{ ansible_env.HOME }}/ai-dotfiles"
+    dotfiles_github_user: "youruser"
+    dotfiles_hide_ai: "y"
+
+# ── Local control node (the machine you run ansible from) ────────
+# `ansible_connection: local` runs tasks here directly — no SSH.
+local_ai:
+  hosts:
+    localhost:
+      ansible_connection: local
+  vars:
+    claude_bin: "{{ ansible_env.HOME }}/.local/bin/claude"
+    dotfiles_dir: "{{ ansible_env.HOME }}/ai-dotfiles"
+
+# ── The everyday update target: fleet + control node ─────────────
+ai_all:
+  children:
+    aorus_ai:
+    local_ai:

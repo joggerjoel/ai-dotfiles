@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ssh-ansible-sync.sh
-# Sync hosts from ~/.ssh/config into ansible-ai/inventory.yml.
+# Sync hosts from ~/.ssh/config into ansible-ai/inventory.local.yml.
 #
 # Presents an interactive checklist of the servers found in ~/.ssh/config.
-# Hosts ALREADY in inventory.yml start [x] (checked); the rest start [ ].
+# Hosts ALREADY in inventory.local.yml start [x] (checked); the rest start [ ].
 # Toggle with numbers, confirm, and the inventory's `hosts:` block is rewritten
 # from your selection. The group `vars:` block (user, ProxyJump, dotfiles vars)
 # is preserved untouched.
@@ -16,20 +16,20 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SSH_CONFIG="${SSH_CONFIG:-$HOME/.ssh/config}"
-INVENTORY="${INVENTORY:-$SCRIPT_DIR/inventory.yml}"
+INVENTORY="${INVENTORY:-$SCRIPT_DIR/inventory.local.yml}"
 UPDATE_PLAYBOOK="${UPDATE_PLAYBOOK:-$SCRIPT_DIR/update.yml}"
 PROVISION_PLAYBOOK="${PROVISION_PLAYBOOK:-$SCRIPT_DIR/provision-ai.yml}"
 
 usage() {
   cat <<'EOF'
-ssh-ansible-sync.sh — sync ~/.ssh/config hosts into inventory.yml, and
+ssh-ansible-sync.sh — sync ~/.ssh/config hosts into inventory.local.yml, and
 plan/deploy playbooks against them.
 
   No arguments        open the interactive checklist menu
   action flag         run non-interactively (scripts/CI)
 
 Actions (choose one; omit for the menu):
-  --write             write the selection into inventory.yml
+  --write             write the selection into inventory.local.yml
   --plan              ansible-playbook --check --diff against the selected hosts
   --deploy            real ansible-playbook run against the selected hosts
 
@@ -81,8 +81,8 @@ esac
 
 [[ -f "$SSH_CONFIG" ]] || { echo "No ssh config at $SSH_CONFIG" >&2; exit 1; }
 [[ -f "$INVENTORY" ]] || { echo "No inventory at $INVENTORY" >&2; exit 1; }
-grep -qE '^  hosts:' "$INVENTORY" || { echo "inventory.yml has no '  hosts:' line" >&2; exit 1; }
-grep -qE '^  vars:'  "$INVENTORY" || { echo "inventory.yml has no '  vars:' line" >&2; exit 1; }
+grep -qE '^  hosts:' "$INVENTORY" || { echo "inventory.local.yml has no '  hosts:' line" >&2; exit 1; }
+grep -qE '^  vars:'  "$INVENTORY" || { echo "inventory.local.yml has no '  vars:' line" >&2; exit 1; }
 
 # Group defaults (used to decide when a per-host override is worth writing).
 DEFAULT_USER="$(awk '/^  vars:/{v=1} v && /ansible_user:/{print $2; exit}' "$INVENTORY")"
@@ -152,7 +152,7 @@ render() {
   local cursor="$1" goto="$2" clr=""
   $TUI && clr=$'\033[K'          # clear-to-EOL so shrinking lines leave no cruft
   echo
-  printf "  Sync ~/.ssh/config -> inventory.yml   ([x] = will be in inventory)%s\n" "$clr"
+  printf "  Sync ~/.ssh/config -> inventory.local.yml   ([x] = will be in inventory)%s\n" "$clr"
   printf "  ----------------------------------------------------------------%s\n" "$clr"
   for i in "${!NAMES[@]}"; do
     local box="[ ]"; [[ ${CHECK[$i]} -eq 1 ]] && box="[x]"
@@ -281,7 +281,7 @@ render_inventory() {
   } >"$dest"
 }
 
-# ── 5a. Write the selection into inventory.yml (backup first) ─────────────────
+# ── 5a. Write the selection into inventory.local.yml (backup first) ─────────────────
 write_inventory() {
   local new; new="$(gen_hosts)"
   [[ -n "$new" ]] || { echo "  Nothing selected — inventory unchanged." >&2; return 1; }
@@ -317,7 +317,7 @@ resolve_playbook() {
 }
 
 # run_playbook plan|deploy [playbook] — run the playbook against a throwaway
-# inventory containing only the checked hosts (inventory.yml is left untouched).
+# inventory containing only the checked hosts (inventory.local.yml is left untouched).
 # With no playbook arg it prompts (menu); deploy confirms unless --yes was given.
 run_playbook() {
   local mode="$1" pb="${2:-}"
@@ -335,7 +335,7 @@ run_playbook() {
   # A real `.yml` file is required so ansible picks its YAML inventory plugin
   # (a suffix-less temp file falls back to the ini parser and finds no hosts).
   local tmpd; tmpd="$(mktemp -d "${TMPDIR:-/tmp}/inv.XXXXXX")"
-  local tmp="$tmpd/inventory.yml"
+  local tmp="$tmpd/inventory.local.yml"
   render_inventory "$tmp"
   local flags=(); [[ "$mode" == plan ]] && flags=(--check --diff)
   echo "  + ansible-playbook -i <temp:${n} host(s)> $(basename "$pb") ${flags[*]}"
@@ -385,7 +385,7 @@ echo "  hosts:"
 echo "$NEW_HOSTS"
 echo
 
-if $DRY_RUN; then echo "  (dry-run — inventory.yml not modified)"; exit 0; fi
+if $DRY_RUN; then echo "  (dry-run — inventory.local.yml not modified)"; exit 0; fi
 
 # --yes stays fully non-interactive: write and exit (unchanged CI behavior).
 if $ASSUME_YES; then write_inventory; exit $?; fi
