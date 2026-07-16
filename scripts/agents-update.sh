@@ -3,7 +3,8 @@ set -uo pipefail
 
 # ─────────────────────────────────────────────────────────────────
 # agents-update.sh — upgrade the sibling agent CLIs, when installed:
-#   codex (OpenAI), cursor-agent (Cursor), opencode, gemini (Google).
+#   codex (OpenAI), cursor-agent (Cursor), opencode, gemini (Google),
+#   cortex (Snowflake Cortex Code).
 #
 # Single source of truth for "update every AI CLI besides claude":
 # called by ./update.sh locally and by ansible-ai/update.yml on the
@@ -68,6 +69,9 @@ update_cli "codex" "$HOME/.local/bin/codex" \
 
 update_cli "cursor-agent" "$HOME/.local/bin/cursor-agent" \
   "\"$HOME/.local/bin/cursor-agent\" update"
+
+update_cli "cortex" "$HOME/.local/bin/cortex" \
+  "\"$HOME/.local/bin/cortex\" update"
 
 # opencode's installer dir varies between versions.
 OPENCODE_BIN=""
