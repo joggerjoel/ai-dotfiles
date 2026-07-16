@@ -79,3 +79,8 @@
           claude: {{ ver_before.stdout | default('n/a', true) }}
           -> {{ ver_after.stdout | default('n/a', true) }} |
           dotfiles: {{ 'refreshed' if dotfiles_stat.stat.exists else 'not installed' }}
+
+    - name: Report sibling agent CLI results
+      ansible.builtin.debug:
+        msg: "{{ agents_update.stdout_lines[1:] | map('trim') | list }}"
+      when: agents_update.stdout_lines is defined and agents_update.stdout_lines | length > 1

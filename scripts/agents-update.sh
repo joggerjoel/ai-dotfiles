@@ -14,7 +14,13 @@ set -uo pipefail
 # the remaining CLIs; failures are collected and reported instead.
 # ─────────────────────────────────────────────────────────────────
 
-BOLD='\033[1m'; DIM='\033[2m'; GREEN='\033[32m'; YELLOW='\033[33m'; RESET='\033[0m'
+# Colors only on a terminal — Ansible captures this output, and ANSI
+# escapes would garble the per-host report.
+if [ -t 1 ]; then
+  BOLD='\033[1m'; DIM='\033[2m'; GREEN='\033[32m'; YELLOW='\033[33m'; RESET='\033[0m'
+else
+  BOLD=""; DIM=""; GREEN=""; YELLOW=""; RESET=""
+fi
 ok()   { echo -e "  ${GREEN}✓${RESET} $1"; }
 skip() { echo -e "  ${DIM}○ $1${RESET}"; }
 warn() { echo -e "  ${YELLOW}!${RESET} $1"; }
