@@ -543,6 +543,20 @@ link_agent_instructions() {
   link_file "$canonical" "$HOME/.gemini/GEMINI.md"
   link_file "$canonical" "$HOME/AGENTS.md"
   link_codex_prompts
+  link_claude_hooks
+}
+
+# Claude Code hooks (hooks/*.sh -> ~/.claude/hooks/<name>). The shared
+# profile settings.json references these by $HOME path, so a machine that
+# skips this step gets a "No such file or directory" PreToolUse error on
+# every Bash call. Symlinked so a repo pull updates the live hooks.
+link_claude_hooks() {
+  [ -d "$DOTFILES_DIR/hooks" ] || return 0
+  local f
+  for f in "$DOTFILES_DIR"/hooks/*.sh; do
+    [ -f "$f" ] || continue
+    link_file "$f" "$CLAUDE_DIR/hooks/$(basename "$f")"
+  done
 }
 
 # Codex custom prompts (codex/prompts/*.md -> ~/.codex/prompts/<name>.md,
