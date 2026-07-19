@@ -31,10 +31,11 @@
     # never attempt a doomed curl-based install on a box that lacks curl.
     # apt + sudo only apply to the Debian/Ubuntu fleet. macOS hosts get these
     # from Homebrew already; the gate task below verifies they're present.
-    - name: Install prerequisite packages (curl, git, jq, unzip, ca-certificates)
+    # pipx is headroom's installer (python CLI, isolated venv per package).
+    - name: Install prerequisite packages (curl, git, jq, unzip, ca-certificates, pipx)
       become: true
       ansible.builtin.package:
-        name: [curl, git, jq, unzip, ca-certificates, tar, gzip]
+        name: [curl, git, jq, unzip, ca-certificates, tar, gzip, pipx]
         state: present
       failed_when: false # a pkg-mgr hiccup shouldn't abort; the gate below decides
       register: prereqs
@@ -192,6 +193,21 @@
         executable: /bin/bash
       when: gemini_check.rc != 0
 
+    # headroom (context-optimization proxy the CLIs can route through).
+    # pipx-managed; skips gracefully where pipx is absent (e.g. a macOS
+    # host without brew pipx) — the verify report below surfaces it.
+    - name: Install Headroom (pipx -> ~/.local/bin/headroom)
+      ansible.builtin.shell: |
+        set -o pipefail
+        if ! command -v pipx >/dev/null 2>&1; then
+          echo "pipx not available — headroom skipped"
+          exit 0
+        fi
+        pipx install 'headroom-ai[all]'
+      args:
+        executable: /bin/bash
+        creates: "{{ ansible_env.HOME }}/.local/bin/headroom"
+
     # ── Stage B: ai-dotfiles config (vps profile) ────────────────
     # (git/jq/curl already ensured in Stage 0)
     # force: true discards local runtime pollution — the live ~/.claude/settings.json
@@ -239,12 +255,13 @@
         for p in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
           [ -x "$p" ] && { oc=present; break; }
         done
-        printf 'codex=%s cursor=%s cortex=%s opencode=%s gemini=%s' \
+        printf 'codex=%s cursor=%s cortex=%s opencode=%s gemini=%s headroom=%s' \
           "$([ -x "$HOME/.local/bin/codex" ] && echo present || echo MISSING)" \
           "$([ -x "$HOME/.local/bin/cursor-agent" ] && echo present || echo MISSING)" \
           "$([ -x "$HOME/.local/bin/cortex" ] && echo present || echo MISSING)" \
           "$oc" \
-          "$(command -v gemini >/dev/null 2>&1 && echo present || echo MISSING)"
+          "$(command -v gemini >/dev/null 2>&1 && echo present || echo MISSING)" \
+          "$([ -x "$HOME/.local/bin/headroom" ] && echo present || echo MISSING)"
       args:
         executable: /bin/bash
       register: sibling_clis

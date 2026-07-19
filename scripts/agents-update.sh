@@ -162,12 +162,26 @@ fi
 update_cli "gemini" "gemini" "$GEMINI_UPGRADE" "$GEMINI_INSTALL"
 
 # headroom is pipx-managed; `headroom update` confirms on a tty, so
-# drive pipx directly. An already-running proxy keeps serving the old
-# code after an upgrade — warn instead of restarting it, since other
-# CLIs may be mid-stream through it.
-update_cli "headroom" "$HOME/.local/bin/headroom" \
-  "pipx upgrade headroom-ai" \
-  "pipx install 'headroom-ai[all]'"
+# drive pipx directly. Resolve pipx by absolute path — Ansible/cron
+# shells are non-login, so brew's bin dir may be off PATH. An
+# already-running proxy keeps serving the old code after an upgrade —
+# warn instead of restarting it, since other CLIs may be mid-stream
+# through it.
+PIPX="$(command -v pipx 2>/dev/null || true)"
+if [ -z "$PIPX" ]; then
+  for p in /opt/homebrew/bin/pipx /usr/local/bin/pipx "$HOME/.local/bin/pipx"; do
+    [ -x "$p" ] && { PIPX="$p"; break; }
+  done
+fi
+if [ -n "$PIPX" ]; then
+  update_cli "headroom" "$HOME/.local/bin/headroom" \
+    "\"$PIPX\" upgrade headroom-ai" \
+    "\"$PIPX\" install 'headroom-ai[all]'"
+elif [ -x "$HOME/.local/bin/headroom" ]; then
+  warn "headroom installed but pipx not found — can't upgrade it"
+else
+  skip "headroom skipped (pipx not available)"
+fi
 HEADROOM_BIN="$HOME/.local/bin/headroom"
 [ -x "$HEADROOM_BIN" ] || HEADROOM_BIN="$(command -v headroom 2>/dev/null || true)"
 if [ -n "$HEADROOM_BIN" ]; then
