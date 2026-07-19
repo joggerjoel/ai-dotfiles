@@ -1,0 +1,86 @@
+---
+# Deploy / update 9router (OpenAI-compatible AI gateway) via docker compose.
+# Internal-only (127.0.0.1:20128 + headroom 8787). Idempotent: secrets are generated
+# on first run and PRESERVED on every re-run, so this doubles as the update path
+# (re-pulls :latest, recreates containers, never rotates JWT_SECRET/INITIAL_PASSWORD).
+#
+# Needs inventory.local.yml with the target under group `aorus_ai` (see inventory.example.yml).
+#   Setup / update:  cd ansible-ai && ansible-playbook deploy-9router.yml
+#   Dry run first:   ansible-playbook deploy-9router.yml --check --diff
+#   First-login pw:  ssh <host> 'sudo grep INITIAL_PASSWORD /opt/9router/.env'
+- name: Deploy/update 9router AI gateway
+  hosts: aorus_ai
+  gather_facts: false
+  become: true
+  vars:
+    ninerouter_dir: /opt/9router
+    ninerouter_port: 20128
+    ninerouter_headroom_port: 8787
+  tasks:
+    - name: Ensure deploy dir exists
+      ansible.builtin.file:
+        path: "{{ ninerouter_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Render docker-compose.yml
+      ansible.builtin.template:
+        src: templates/9router.docker-compose.yml.j2
+        dest: "{{ ninerouter_dir }}/docker-compose.yml"
+        mode: "0644"
+
+    # First run only (creates: guard). Secrets never rotate on update, so the admin
+    # password and issued API keys stay stable. openssl runs on the host.
+    - name: Generate .env with secrets (first run only; preserved on update)
+      ansible.builtin.shell: |
+        umask 077
+        cat > {{ ninerouter_dir }}/.env <<EOF
+        JWT_SECRET=$(openssl rand -hex 32)
+        INITIAL_PASSWORD=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | cut -c1-20)
+        API_KEY_SECRET=$(openssl rand -hex 24)
+        MACHINE_ID_SALT=$(openssl rand -hex 16)
+        DATA_DIR=/app/data
+        PORT={{ ninerouter_port }}
+        NODE_ENV=production
+        OBSERVABILITY_ENABLED=true
+        AUTH_COOKIE_SECURE=false
+        REQUIRE_API_KEY=false
+        BASE_URL=http://127.0.0.1:{{ ninerouter_port }}
+        CLOUD_URL=https://9router.com
+        EOF
+      args:
+        creates: "{{ ninerouter_dir }}/.env"
+
+    - name: Ensure .env perms (0600)
+      ansible.builtin.file:
+        path: "{{ ninerouter_dir }}/.env"
+        mode: "0600"
+
+    - name: Pull latest images
+      ansible.builtin.command:
+        cmd: docker compose -f {{ ninerouter_dir }}/docker-compose.yml pull
+      register: pull
+      changed_when: "'Pulled' in pull.stderr or 'Downloaded newer' in pull.stdout"
+
+    - name: Start / recreate containers
+      ansible.builtin.command:
+        cmd: docker compose -f {{ ninerouter_dir }}/docker-compose.yml up -d
+      register: up
+      changed_when: "'Started' in up.stderr or 'Created' in up.stderr or 'Recreated' in up.stderr"
+
+  post_tasks:
+    - name: Wait for 9router health
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ ninerouter_port }}/api/health"
+        status_code: 200
+      register: health
+      retries: 18
+      delay: 5
+      until: health.status == 200
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          9router healthy on 127.0.0.1:{{ ninerouter_port }} (headroom on
+          {{ ninerouter_headroom_port }}). First-login password:
+          `ssh <host> 'sudo grep INITIAL_PASSWORD /opt/9router/.env'` — change it after login.
