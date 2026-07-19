@@ -6,6 +6,9 @@
 #      --autostash, then re-apply the SAVED vps profile — fully unattended)
 #   3. Upgrade the sibling agent CLIs   (scripts/agents-update.sh from the
 #      freshly-pulled repo: codex, cursor-agent, cortex, opencode, gemini)
+#   4. Update the 9router gateway   (imports deploy-9router.yml — aorus
+#      hosts only; recreates containers only when the image changed.
+#      Skip with --skip-tags 9router)
 #
 # Workflow: push changes to github.com/joggerjoel/ai-dotfiles, then run this
 # to propagate them to the whole fleet.
@@ -97,3 +100,12 @@
              else ['agents-update.sh produced no report — rc=' ~ (agents_update.rc | default('n/a'))
                    ~ ' err: ' ~ (agents_update.stderr | default('') | trim | truncate(120))] }}
       when: agents_update is not skipped
+
+# ── 4. 9router gateway (Docker on the aorus hosts) ───────────────
+# deploy-9router.yml doubles as the update path: it re-pulls :latest and
+# `docker compose up -d` recreates the containers ONLY when the image
+# actually changed — a no-update run never restarts a gateway other CLIs
+# may be streaming through. Secrets are preserved across re-runs.
+# Skip entirely with:  ansible-playbook update.yml --skip-tags 9router
+- import_playbook: deploy-9router.yml
+  tags: [9router]

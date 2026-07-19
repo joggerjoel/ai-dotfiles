@@ -5,6 +5,8 @@ set -uo pipefail
 # agents-update.sh — upgrade the sibling agent CLIs, when installed:
 #   codex (OpenAI), cursor-agent (Cursor), opencode, gemini (Google),
 #   cortex (Snowflake Cortex Code), headroom (context-optimization proxy).
+# Also reports (but never updates) the 9router gateway — a Docker
+# service on the fleet, not a local CLI; see the block at the bottom.
 #
 # Single source of truth for "update every AI CLI besides claude":
 # called by ./update.sh locally and by ansible-ai/update.yml on the
@@ -192,6 +194,28 @@ if [ -n "$HEADROOM_BIN" ]; then
   if [ -n "$proxy_ver" ] && [ -n "$cli_ver" ] && [ "$proxy_ver" != "$cli_ver" ]; then
     warn "headroom proxy on :${HEADROOM_PORT} still runs ${proxy_ver} — restart it to load ${cli_ver}"
   fi
+fi
+
+# 9router is not a local CLI — it's a Docker service (decolua/9router) on
+# the aorus fleet, bound to 127.0.0.1:20128 there. Status report only:
+# reachable directly on a fleet host, or via an SSH tunnel
+# (ssh -N -L 20128:127.0.0.1:20128 <host>) from elsewhere. Updating it
+# means re-running ansible-ai/deploy-9router.yml — never from here, since
+# other CLIs may be mid-stream through the gateway.
+NINEROUTER_PORT="${NINEROUTER_PORT:-20128}"
+nine_ver_json="$(curl -m 2 -fsS "http://127.0.0.1:${NINEROUTER_PORT}/api/version" 2>/dev/null)"
+if [ -n "$nine_ver_json" ]; then
+  nine_cur="$(printf '%s' "$nine_ver_json" | grep -o '"currentVersion":"[^"]*"' | cut -d'"' -f4)"
+  nine_latest="$(printf '%s' "$nine_ver_json" | grep -o '"latestVersion":"[^"]*"' | cut -d'"' -f4)"
+  if printf '%s' "$nine_ver_json" | grep -q '"hasUpdate":true'; then
+    warn "9router gateway on :${NINEROUTER_PORT} runs ${nine_cur:-?} — ${nine_latest:-newer} available (re-run ansible-ai/deploy-9router.yml)"
+  else
+    ok "9router: gateway up on :${NINEROUTER_PORT} (${nine_cur:-?}, latest)"
+  fi
+elif curl -m 2 -fsS "http://127.0.0.1:${NINEROUTER_PORT}/api/health" >/dev/null 2>&1; then
+  ok "9router: gateway up on :${NINEROUTER_PORT}"
+else
+  skip "9router: not reachable on :${NINEROUTER_PORT} — Docker service on the fleet; update via ansible-ai/deploy-9router.yml"
 fi
 
 if [ -n "$FAILED" ]; then

@@ -12,13 +12,15 @@ set -euo pipefail
 #   4. Upgrade the sibling agent CLIs when present — codex,
 #      cursor-agent, cortex, opencode, gemini, headroom
 #      (scripts/agents-update.sh, the same script ansible-ai/update.yml
-#      runs on the fleet).
-#   5. Prune old backups (last 7 days + first-of-month snapshots).
+#      runs on the fleet; also reports 9router gateway status).
+#   5. Re-vendor the 9router skills from upstream and deploy them to
+#      ~/.claude/skills (scripts/vendor-9router-skills.sh --deploy).
+#   6. Prune old backups (last 7 days + first-of-month snapshots).
 #
 # Flags:
 #   --dry-run      Take the backup, but DON'T upgrade. Previews the Claude
 #                  step only — sibling CLIs and prune are skipped entirely.
-#   --claude-only  Skip the sibling agent CLIs (step 4).
+#   --claude-only  Skip the sibling agent CLIs and 9router skills (4-5).
 #   --no-prune     Skip the post-upgrade backup prune.
 # ─────────────────────────────────────────────────────────────────
 
@@ -181,7 +183,27 @@ if [ "$RUN_AGENTS" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/agents-update.sh" ];
   "$DOTFILES_DIR/scripts/agents-update.sh" || warn "Some agent CLI upgrades failed (non-fatal)."
 fi
 
-# ── 4. Prune old backups ─────────────────────────────────────────
+# ── 4. 9router skills (vendored from decolua/9router) ────────────
+# Re-vendors the skill set from upstream and deploys it to
+# ~/.claude/skills. Writes into the repo's skills/ dir, so changes
+# still need a commit + push before the fleet sees them.
+if [ "$RUN_AGENTS" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/vendor-9router-skills.sh" ]; then
+  header "9router skills"
+  if ! command -v gh &>/dev/null; then
+    skip "gh CLI not available — skills not re-vendored"
+  elif "$DOTFILES_DIR/scripts/vendor-9router-skills.sh" --deploy >/dev/null 2>&1; then
+    if git -C "$DOTFILES_DIR" status --porcelain -- skills/9router\* 2>/dev/null | grep -q .; then
+      ok "Re-vendored from decolua/9router → ~/.claude/skills"
+      warn "skills/ has uncommitted changes — commit + push so the fleet picks them up"
+    else
+      ok "Already current (deployed to ~/.claude/skills)"
+    fi
+  else
+    warn "9router skills re-vendor failed (non-fatal — check gh auth / network)"
+  fi
+fi
+
+# ── 5. Prune old backups ─────────────────────────────────────────
 if [ "$RUN_PRUNE" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/backup-prune.sh" ]; then
   echo
   "$DOTFILES_DIR/scripts/backup-prune.sh" || warn "Backup prune had issues (non-fatal)."
