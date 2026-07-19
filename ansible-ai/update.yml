@@ -5,7 +5,8 @@
 #   2. Refresh ai-dotfiles config   (`setup.sh update`: git pull --rebase
 #      --autostash, then re-apply the SAVED vps profile — fully unattended)
 #   3. Upgrade the sibling agent CLIs   (scripts/agents-update.sh from the
-#      freshly-pulled repo: codex, cursor-agent, cortex, opencode, gemini)
+#      freshly-pulled repo: codex, cursor-agent, cortex, opencode, gemini,
+#      headroom — plus a 9router gateway status line)
 #   4. Update the 9router gateway   (imports deploy-9router.yml — aorus
 #      hosts only; recreates containers only when the image changed.
 #      Skip with --skip-tags 9router)
@@ -62,7 +63,7 @@
     # Runs AFTER the repo refresh so the freshly-pulled script is used.
     # scripts/agents-update.sh is the single source of truth for the CLI
     # list — ./update.sh runs the same script locally.
-    - name: Upgrade the sibling agent CLIs (codex, cursor, cortex, opencode, gemini)
+    - name: Upgrade the sibling agent CLIs (codex, cursor, cortex, opencode, gemini, headroom; reports 9router)
       ansible.builtin.command: bash scripts/agents-update.sh
       args:
         chdir: "{{ dotfiles_dir }}"

@@ -90,7 +90,9 @@ grep -qE '^  vars:'  "$INVENTORY" || { echo "inventory.local.yml has no '  vars:
 
 # Group defaults (used to decide when a per-host override is worth writing).
 DEFAULT_USER="$(awk '/^  vars:/{v=1} v && /ansible_user:/{print $2; exit}' "$INVENTORY")"
-GROUP_JUMP="$(grep -oE 'ProxyJump=[^ ]+' "$INVENTORY" | head -1 | cut -d= -f2)"
+# `|| true`: an inventory without ProxyJump (hosts reached via ~/.ssh/config
+# aliases) is valid — a no-match grep must not kill the script under `set -e`.
+GROUP_JUMP="$(grep -oE 'ProxyJump=[^ ]+' "$INVENTORY" | head -1 | cut -d= -f2 || true)"
 
 # ── 1. Parse ~/.ssh/config -> name|hostname|user|proxyjump ────────────────────
 # awk splits on whitespace regardless of indentation; keywords are case-insensitive.

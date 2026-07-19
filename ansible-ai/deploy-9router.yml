@@ -4,12 +4,15 @@
 # on first run and PRESERVED on every re-run, so this doubles as the update path
 # (re-pulls :latest, recreates containers, never rotates JWT_SECRET/INITIAL_PASSWORD).
 #
-# Needs inventory.local.yml with the target under group `aorus_ai` (see inventory.example.yml).
+# Needs inventory.local.yml with the target under group `ninerouter_ai` (see
+# inventory.example.yml). Deliberately NOT the whole fleet: update.yml imports
+# this playbook, so targeting `aorus_ai` would install the gateway on every
+# fleet host each update run (it did exactly that once — aorus8, 2026-07-19).
 #   Setup / update:  cd ansible-ai && ansible-playbook deploy-9router.yml
 #   Dry run first:   ansible-playbook deploy-9router.yml --check --diff
 #   First-login pw:  ssh <host> 'sudo grep INITIAL_PASSWORD /opt/9router/.env'
 - name: Deploy/update 9router AI gateway
-  hosts: aorus_ai
+  hosts: ninerouter_ai
   gather_facts: false
   become: true
   vars:

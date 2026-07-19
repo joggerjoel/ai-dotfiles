@@ -26,6 +26,15 @@ aorus_ai:
     dotfiles_github_user: "youruser"
     dotfiles_hide_ai: "y"
 
+# ── 9router gateway host(s) — deploy-9router.yml targets ONLY this ─
+# A subset of aorus_ai (list the host in both groups so it inherits the
+# connection vars above). Membership here means "runs the 9router Docker
+# stack" — update.yml imports deploy-9router.yml, so putting the whole
+# fleet here would install the gateway on every host each update run.
+ninerouter_ai:
+  hosts:
+    server1:
+
 # ── Local control node (the machine you run ansible from) ────────
 # `ansible_connection: local` runs tasks here directly — no SSH.
 local_ai:
