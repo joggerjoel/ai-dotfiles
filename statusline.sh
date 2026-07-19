@@ -1,6 +1,6 @@
 #!/bin/bash
 # Multi-line status line for Claude Code
-# Line 1: Model | Directory | Git branch + status | Output style
+# Line 1: Model | Directory | Git branch + status | Output style | Headroom
 # Line 2: Context bar (color-coded) | Cost | Duration | Lines changed
 
 input=$(cat)
@@ -62,6 +62,39 @@ fi
 
 IFS='|' read -r BRANCH STAGED MODIFIED UNTRACKED < "$CACHE_FILE"
 
+# ── Headroom routing indicator (cached) ─────────────────────────
+# "Using headroom" means BOTH: this session's ANTHROPIC_BASE_URL points
+# at the local proxy (env is inherited from the claude process, so it
+# reflects the actual routing) AND the proxy answers /livez. Routed but
+# dead proxy = red — that's the silent state where every request fails.
+HR_CACHE="/tmp/claude-statusline-hr-cache"
+HR_MAX_AGE=10
+HR_SEG=""
+# PATH-independent install check: the statusline runs in a minimal env
+# where ~/.local/bin (pipx's bin dir) may be absent from PATH.
+if command -v headroom > /dev/null 2>&1 || [ -x "$HOME/.local/bin/headroom" ]; then
+    HR_PORT="${HEADROOM_PORT:-8787}"
+    if [ ! -f "$HR_CACHE" ] || \
+       [ $(($(date +%s) - $(stat_mtime "$HR_CACHE"))) -gt $HR_MAX_AGE ]; then
+        if curl -m 0.3 -fsS "http://127.0.0.1:${HR_PORT}/livez" > /dev/null 2>&1; then
+            echo "up" > "$HR_CACHE"
+        else
+            echo "down" > "$HR_CACHE"
+        fi
+    fi
+    HR_PROXY=$(cat "$HR_CACHE")
+    case "${ANTHROPIC_BASE_URL:-}" in
+        *"127.0.0.1:${HR_PORT}"* | *"localhost:${HR_PORT}"*)
+            if [ "$HR_PROXY" = "up" ]; then
+                HR_SEG="${GREEN}HR✓${RESET}"
+            else
+                HR_SEG="${RED}HR✗${RESET}"
+            fi ;;
+        *)
+            HR_SEG="${DIM}HR off${RESET}" ;;
+    esac
+fi
+
 # ── Line 1: [Session] Model | Dir | Git | Style ────────────────
 if [ -n "$SESSION_NAME" ]; then
     LABEL="${SESSION_NAME}"
@@ -82,6 +115,7 @@ fi
 
 [ -n "$VIM_MODE" ] && LINE1="${LINE1} ${DIM}|${RESET} ${VIM_MODE}"
 LINE1="${LINE1} ${DIM}|${RESET} ${DIM}${STYLE}${RESET}"
+[ -n "$HR_SEG" ] && LINE1="${LINE1} ${DIM}|${RESET} ${HR_SEG}"
 
 # ── Line 2: Context bar | Cost | Duration | Lines ──────────────
 # Color-coded context bar
