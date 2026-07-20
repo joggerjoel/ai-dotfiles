@@ -17,13 +17,23 @@ Two gateways, deployed via `ai-dotfiles/ansible-ai/deploy-9router.yml` (docker c
 
 ### Decomposed / parallel workloads (how we use this)
 
-Strategy: frontier models by default; the gateway is the fan-out mechanism, not the fleet.
+Strategy: the gateway is the **bulk/cheap tier only**. Frontier credentials deliberately stay **OUT of 9router** — a shared gateway key must never be able to spend or misuse frontier accounts. Frontier reasoning happens in the orchestrating agent itself (Claude Code, with its own governed credentials), never via `NINEROUTER_URL`. Do NOT add frontier provider accounts (Anthropic/OpenAI/Google/OpenRouter-paid) in the dashboard.
 
 - **Decompose on one orchestrator** (usually the MacBook via Claude Code). Parallelism = concurrent HTTP calls against `NINEROUTER_URL`; the bottleneck is provider rate limits, so ssh-distributing API calls across fleet hosts adds nothing.
-- **"Other targets" = provider accounts.** Add several frontier accounts in the dashboard and chain them in a **combo** (e.g. `combo/frontier`): requests auto-fall back on 429/outage, spreading load across accounts. Orchestration code stays dumb — one URL, one key, one model id per tier.
-- **Tier subtasks by difficulty.** Mechanical steps (extract, classify, dedupe, reformat) → a cheap tier; reasoning/synthesis → `combo/frontier`. Note `mmf` (free tier) injects a ~2k-token system prompt per call — fine for smoke tests, poor for high-volume subtasks.
+- **Tier subtasks by difficulty.** Mechanical steps (extract, classify, dedupe, reformat) → the gateway's cheap tier; reasoning/synthesis → the orchestrator does it itself with its frontier model. Note `mmf` (free tier) injects a ~2k-token system prompt per call and has aggressive risk-control rate limits — fine for smoke tests, poor for high-volume subtasks.
+- **Combos spread the bulk tier across cheap/free accounts** (e.g. `combo/bulk`): requests auto-fall back on 429/outage. Orchestration code stays dumb — one URL, one key, one model id. The misuse blast radius of a leaked `NINEROUTER_KEY` stays limited to free/cheap capacity by design.
 - **Optional local tier:** macstudio runs ollama, LAN-bound on `:11434` and reachable from aorus4 (LAN IPs live in `ansible-ai/inventory.local.yml`, not here — repo is public). Pull a model, then register `http://<macstudio-lan-ip>:11434/v1` as an OpenAI-compatible provider in the dashboard.
 - **Fleet hosts enter only when a subtask needs tools/repo state on that machine:** run headless agents there (`claude -p` / `codex exec` over ssh), each pointing its model calls at the gateway.
+
+### Run summary (required at the end of every gateway-driven task)
+
+Whenever a task sent requests through 9router, END the task by reporting a **9Router run summary** so routing stays visible and misconfigured providers or silent fallbacks are caught immediately. Sum the `usage` fields from responses:
+
+| tier | model         | requests | ok  | failed | prompt tok | completion tok |
+| ---- | ------------- | -------- | --- | ------ | ---------- | -------------- |
+| bulk | mmf/mimo-auto | 4        | 4   | 0      | 8,140      | 96             |
+
+Also note: gateway host used, and any 404 `No active credentials` / 429 / fallback events with the provider name.
 <!-- END LOCAL DEPLOYMENT -->
 
 # 9Router
