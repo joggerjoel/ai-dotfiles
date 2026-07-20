@@ -441,6 +441,22 @@ install_skills() {
   ok "$count skill(s) installed to ~/.claude/skills/"
 }
 
+# Copies repo commands/<name>.md into ~/.claude/commands/<name>.md (copy model,
+# like skills). Only touches command files the repo owns; leaves user-local
+# commands untouched. These are thin slash-command wrappers that typically just
+# invoke a repo-owned skill.
+install_commands() {
+  [ -d "$DOTFILES_DIR/commands" ] || return 0
+  mkdir -p "$CLAUDE_DIR/commands"
+  local count=0
+  for cmd_file in "$DOTFILES_DIR"/commands/*.md; do
+    [ -f "$cmd_file" ] || continue
+    cp "$cmd_file" "$CLAUDE_DIR/commands/$(basename "$cmd_file")"
+    count=$((count+1))
+  done
+  ok "$count command(s) installed to ~/.claude/commands/"
+}
+
 # ── CLAUDE.md assembly ───────────────────────────────────────────
 assemble_claude_md() {
   local profile="$1" github_user="${2:-}" hide_ai="${3:-no}"
@@ -714,6 +730,9 @@ cmd_setup() {
 
   # Install repo-owned skills
   install_skills
+
+  # Install repo-owned slash commands
+  install_commands
 
   # Assemble CLAUDE.md from layers
   assemble_claude_md "$profile" "$github_user" "$hide_ai"
@@ -1138,6 +1157,9 @@ cmd_update() {
 
   # Re-install repo-owned skills
   install_skills
+
+  # Re-install repo-owned slash commands
+  install_commands
 
   # Refresh the plugin stack: pull latest marketplace catalogs (so installed
   # plugins update on next start) and install any newly-listed CORE plugins.
