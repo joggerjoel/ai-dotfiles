@@ -163,26 +163,52 @@ if command -v brew >/dev/null 2>&1; then
 fi
 update_cli "gemini" "gemini" "$GEMINI_UPGRADE" "$GEMINI_INSTALL"
 
-# headroom is pipx-managed; `headroom update` confirms on a tty, so
-# drive pipx directly. Resolve pipx by absolute path — Ansible/cron
-# shells are non-login, so brew's bin dir may be off PATH. An
-# already-running proxy keeps serving the old code after an upgrade —
-# warn instead of restarting it, since other CLIs may be mid-stream
-# through it.
-PIPX="$(command -v pipx 2>/dev/null || true)"
-if [ -z "$PIPX" ]; then
-  for p in /opt/homebrew/bin/pipx /usr/local/bin/pipx "$HOME/.local/bin/pipx"; do
-    [ -x "$p" ] && { PIPX="$p"; break; }
-  done
+# headroom is a pipx- or uv-tool-managed python CLI; `headroom update`
+# confirms on a tty, so drive the manager directly. Resolve both by
+# absolute path — Ansible/cron shells are non-login, so brew's bin dir
+# and ~/.local/bin may be off PATH. An already-running proxy keeps
+# serving the old code after an upgrade — warn instead of restarting
+# it, since other CLIs may be mid-stream through it.
+resolve_tool() {
+  local found p
+  found="$(command -v "$1" 2>/dev/null || true)"
+  if [ -z "$found" ]; then
+    for p in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin" "$HOME/.cargo/bin"; do
+      [ -x "$p/$1" ] && { found="$p/$1"; break; }
+    done
+  fi
+  printf '%s' "$found"
+}
+PIPX="$(resolve_tool pipx)"
+UV="$(resolve_tool uv)"
+
+# pipx ≥1.8 shells out to `uv` when the venv was built with the uv
+# backend, and it searches PATH itself — resolving pipx by absolute
+# path isn't enough. Expose uv's dir; without uv, force the pip
+# backend (pipx accepts it even for uv-built venvs).
+if [ -n "$UV" ]; then
+  export PATH="$(dirname "$UV"):$PATH"
+else
+  export PIPX_DEFAULT_BACKEND=pip
 fi
-if [ -n "$PIPX" ]; then
+
+if [ -n "$UV" ] && [ -d "$HOME/.local/share/uv/tools/headroom-ai" ]; then
+  # installed as a uv tool (hosts provisioned without pipx)
+  update_cli "headroom" "$HOME/.local/bin/headroom" \
+    "\"$UV\" tool upgrade headroom-ai" \
+    "\"$UV\" tool install 'headroom-ai[all]'"
+elif [ -n "$PIPX" ]; then
   update_cli "headroom" "$HOME/.local/bin/headroom" \
     "\"$PIPX\" upgrade headroom-ai" \
     "\"$PIPX\" install 'headroom-ai[all]'"
+elif [ -n "$UV" ]; then
+  update_cli "headroom" "$HOME/.local/bin/headroom" \
+    "\"$UV\" tool upgrade headroom-ai" \
+    "\"$UV\" tool install 'headroom-ai[all]'"
 elif [ -x "$HOME/.local/bin/headroom" ]; then
-  warn "headroom installed but pipx not found — can't upgrade it"
+  warn "headroom installed but neither pipx nor uv found — can't upgrade it"
 else
-  skip "headroom skipped (pipx not available)"
+  skip "headroom skipped (pipx/uv not available)"
 fi
 HEADROOM_BIN="$HOME/.local/bin/headroom"
 [ -x "$HEADROOM_BIN" ] || HEADROOM_BIN="$(command -v headroom 2>/dev/null || true)"

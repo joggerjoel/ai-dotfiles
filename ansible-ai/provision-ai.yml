@@ -194,16 +194,33 @@
       when: gemini_check.rc != 0
 
     # headroom (context-optimization proxy the CLIs can route through).
-    # pipx-managed; skips gracefully where pipx is absent (e.g. a macOS
-    # host without brew pipx) — the verify report below surfaces it.
-    - name: Install Headroom (pipx -> ~/.local/bin/headroom)
+    # pipx- or uv-managed: Debian's pipx package isn't reliably available
+    # (the Stage 0 install is best-effort), so fall back to `uv tool` and
+    # bootstrap uv itself when neither manager exists. Both are resolved
+    # by absolute path — Ansible shells are non-login, so brew's bin dir
+    # and ~/.local/bin may be off PATH. agents-update.sh upgrades along
+    # the same pipx-or-uv split.
+    - name: Install Headroom (pipx or uv tool -> ~/.local/bin/headroom)
       ansible.builtin.shell: |
         set -o pipefail
-        if ! command -v pipx >/dev/null 2>&1; then
-          echo "pipx not available — headroom skipped"
-          exit 0
+        resolve() {
+          command -v "$1" 2>/dev/null && return
+          for d in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin" "$HOME/.cargo/bin"; do
+            [ -x "$d/$1" ] && { echo "$d/$1"; return; }
+          done
+        }
+        PIPX="$(resolve pipx)"; UV="$(resolve uv)"
+        if [ -z "$PIPX" ] && [ -z "$UV" ]; then
+          curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null
+          UV="$(resolve uv)"
         fi
-        pipx install 'headroom-ai[all]'
+        # pipx ≥1.8 may shell out to uv (searched on PATH); without uv,
+        # force the pip backend so a bare pipx still works.
+        if [ -n "$UV" ]; then PATH="$(dirname "$UV"):$PATH"; else export PIPX_DEFAULT_BACKEND=pip; fi
+        if [ -n "$PIPX" ]; then "$PIPX" install 'headroom-ai[all]'
+        elif [ -n "$UV" ]; then "$UV" tool install 'headroom-ai[all]'
+        else echo "pipx/uv not available — headroom skipped"; exit 0
+        fi
       args:
         executable: /bin/bash
         creates: "{{ ansible_env.HOME }}/.local/bin/headroom"
