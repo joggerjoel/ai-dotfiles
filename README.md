@@ -109,6 +109,10 @@ Or the three layers individually:
                         # Snapshots config to backup/<timestamp>/ with a
                         # generated rollback.sh first. Offers to install
                         # missing CLIs when run interactively.
+./update.sh --all       # Same, then propagates to the fleet servers via
+                        # ansible-ai/update.yml --limit aorus_ai. Binaries +
+                        # config everywhere in one command (servers pull
+                        # origin/main — push config changes with deploy.sh).
 ./setup.sh update       # Config: git pull + reassemble CLAUDE.md/settings
                         # + refresh the plugin/skill stack
 ```

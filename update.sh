@@ -16,10 +16,19 @@ set -euo pipefail
 #   5. Re-vendor the 9router skills from upstream and deploy them to
 #      ~/.claude/skills (scripts/vendor-9router-skills.sh --deploy).
 #   6. Prune old backups (last 7 days + first-of-month snapshots).
+#   7. With --all: propagate to the fleet servers via
+#      ansible-ai/update.yml --limit aorus_ai (this machine was already
+#      updated by steps 1-6, so the playbook skips it).
 #
 # Flags:
+#   --all          After the local update, run the fleet playbook so every
+#                  server gets the same treatment. Requires ansible + an
+#                  inventory (ansible-ai/inventory.local.yml). Note: servers
+#                  pull from origin/main — use ./deploy.sh to publish config
+#                  changes first.
 #   --dry-run      Take the backup, but DON'T upgrade. Previews the Claude
-#                  step only — sibling CLIs and prune are skipped entirely.
+#                  step only — sibling CLIs, 9router skills, prune, and
+#                  fleet are all skipped.
 #   --claude-only  Skip the sibling agent CLIs and 9router skills (4-5).
 #   --no-prune     Skip the post-upgrade backup prune.
 # ─────────────────────────────────────────────────────────────────
@@ -39,16 +48,18 @@ CLAUDE_JSON="$HOME/.claude.json"
 BACKUP_ROOT="$DOTFILES_DIR/backup"
 TS="$(date +%Y%m%d_%H%M%S)"
 
-DRY_RUN="no"; RUN_PRUNE="yes"; RUN_AGENTS="yes"
+DRY_RUN="no"; RUN_PRUNE="yes"; RUN_AGENTS="yes"; RUN_FLEET="no"
 for arg in "$@"; do
   case "$arg" in
+    --all)         RUN_FLEET="yes" ;;
     --dry-run)     DRY_RUN="yes" ;;
     --claude-only) RUN_AGENTS="no" ;;
     --no-prune)    RUN_PRUNE="no" ;;
     -h|--help)
-      echo "Usage: ./update.sh [--dry-run] [--claude-only] [--no-prune]"
+      echo "Usage: ./update.sh [--all] [--dry-run] [--claude-only] [--no-prune]"
       echo "  Backs up config to backup/<timestamp>/ then upgrades Claude Code"
       echo "  and the sibling agent CLIs (codex, cursor-agent, cortex, opencode, gemini, headroom)."
+      echo "  --all also runs ansible-ai/update.yml against the fleet servers afterward."
       exit 0 ;;
     *) warn "Unknown flag: $arg (ignored)" ;;
   esac
@@ -154,6 +165,7 @@ if [ "$DRY_RUN" = "yes" ]; then
   else
     skip "Would run: claude update"
   fi
+  [ "$RUN_FLEET" = "yes" ] && skip "Would run: ansible-playbook update.yml --limit aorus_ai  (fleet servers)"
   ok "Backup created; no upgrade performed."
   exit 0
 fi
@@ -207,4 +219,26 @@ fi
 if [ "$RUN_PRUNE" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/backup-prune.sh" ]; then
   echo
   "$DOTFILES_DIR/scripts/backup-prune.sh" || warn "Backup prune had issues (non-fatal)."
+fi
+
+# ── 6. Fleet propagation (--all) ─────────────────────────────────
+# Servers only (--limit aorus_ai): this machine was already updated above,
+# and update.yml's local play would redo the same work. Servers pull the
+# repo from origin/main — publish config changes with ./deploy.sh first.
+if [ "$RUN_FLEET" = "yes" ]; then
+  header "Fleet update (ansible-ai/update.yml --limit aorus_ai)"
+  INV="$DOTFILES_DIR/ansible-ai/inventory.local.yml"
+  if ! command -v ansible-playbook &>/dev/null; then
+    fail "ansible-playbook not found — install ansible, or run this from the control node."
+    exit 1
+  elif [ ! -f "$INV" ]; then
+    fail "No inventory at ansible-ai/inventory.local.yml"
+    echo -e "  ${DIM}Bootstrap it:  cp ansible-ai/inventory.example.yml ansible-ai/inventory.local.yml${RESET}"
+    exit 1
+  fi
+  if (cd "$DOTFILES_DIR/ansible-ai" && ansible-playbook update.yml --limit aorus_ai); then
+    ok "Fleet servers updated."
+  else
+    warn "Fleet update finished with failures — offline hosts are skipped; check the recap above."
+  fi
 fi
