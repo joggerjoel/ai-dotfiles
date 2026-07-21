@@ -560,6 +560,20 @@ link_agent_instructions() {
   link_file "$canonical" "$HOME/AGENTS.md"
   link_codex_prompts
   link_claude_hooks
+  link_bin_tools
+}
+
+# Repo CLI helpers (bin/* -> ~/.local/bin/<name>). Symlinked so a repo pull
+# updates the live tools. Current roster: isolate (clean-room single-shot
+# model call for cold-eyes reviews).
+link_bin_tools() {
+  [ -d "$DOTFILES_DIR/bin" ] || return 0
+  local f
+  for f in "$DOTFILES_DIR"/bin/*; do
+    [ -f "$f" ] || continue
+    chmod +x "$f"
+    link_file "$f" "$HOME/.local/bin/$(basename "$f")"
+  done
 }
 
 # Claude Code hooks (hooks/*.sh -> ~/.claude/hooks/<name>). The shared

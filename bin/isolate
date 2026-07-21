@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# isolate — clean-room, zero-context, single-shot call to ONE model (sonnet).
+#
+#   pbpaste | isolate                 # clipboard -> sterile sonnet
+#   isolate < plan.md                 # file
+#   isolate "inline prompt"           # inline
+#   isolate --output-format json < todo.md    # extra claude flags pass through
+#
+# One model, always the same, always cold: the reviewer role needs a single
+# consistent cold reader — fresh session, replaced system prompt, no skills,
+# no memory, no MCP, no tools, no CLAUDE.md, neutral empty cwd. Without
+# --system-prompt the default prompt still leaks the skills listing and
+# memory system — the replacement is the load-bearing flag.
+# (ISOLATE_MODEL env overrides the model if that ever needs to change.)
+set -euo pipefail
+
+MODEL="${ISOLATE_MODEL:-sonnet}"
+PROMPT="${1:-}"
+if [ -n "$PROMPT" ] && [ "${PROMPT#--}" = "$PROMPT" ]; then shift; else PROMPT=""; fi
+[ -n "$PROMPT" ] || { [ -t 0 ] && { echo "isolate: pipe a prompt in (pbpaste | isolate) or pass one as an argument" >&2; exit 2; }; PROMPT="$(cat)"; }
+[ -n "$PROMPT" ] || { echo "isolate: empty prompt" >&2; exit 2; }
+
+# Neutral, empty working directory: nothing project-shaped to pick up.
+SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/isolate.XXXXXX")"
+trap 'rmdir "$SANDBOX" 2>/dev/null || true' EXIT
+cd "$SANDBOX"
+
+exec claude -p "$PROMPT" \
+  --model "$MODEL" \
+  --system-prompt "You are a careful expert reviewer. Work only from the message provided — you have no other context, files, or tools. Answer directly and completely." \
+  --setting-sources "" \
+  --strict-mcp-config \
+  --disallowedTools "*" \
+  "$@"
