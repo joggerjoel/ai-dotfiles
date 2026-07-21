@@ -20,6 +20,14 @@ do not invent findings. This mirrors the contract's `source_status: none` branch
 Compute a `source_fingerprint` (first 6 words … last 6 words) once, up front. Every lens must
 review the _same_ text — reject any merge where fingerprints disagree (`version_guard`).
 
+**Isolate pre-loop (recommended):** before convening 8 lenses, run the document through
+`isolate` (`bin/isolate` — cold, zero-context single reviewer), fix what it finds, and repeat
+**until a pass returns no new material findings** — convergence is the exit condition, not a
+round count (typically 2–3 rounds; cap at 5 as a backstop). Each round is one model call; the
+council's dedupe and consensus scoring then spend their budget on hard structural defects
+instead of noise. After the council's fixes are written back, run the same isolate loop to
+convergence again — fixes are new text from a context-loaded author and need fresh eyes too.
+
 ## Step 1 — pick the execution mode
 
 Three tiers, best first. Default to the best one available in the current environment.

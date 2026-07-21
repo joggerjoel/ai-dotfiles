@@ -4,7 +4,8 @@
 > a validation gate written before the build beats reviewing after it.
 
 This document explains the fusion tooling that lives here — what it is, why it exists,
-and how to use it — for developers who want to run it or port the pattern.
+and how to use it — for developers who want to run it or port the pattern. The
+operational command sheet for the full review-and-ship pipeline is **`SHIPIT.md`**.
 
 ## Lineage
 
@@ -121,5 +122,26 @@ propagates everything.
 | A plan/spec about to become code                           | council review               |
 
 Cost scales with rigor: isolate is one model call; fuse is three; a council run is
-eight-plus. Reach for the level the decision deserves — and remember the whole point:
-**the wrong question is "which model." The right question is "which role."**
+eight-plus. Reach for the level the decision deserves.
+
+## The review pipeline for a serious document
+
+For a plan that will become code, don't pick one level — sequence them, and let
+`isolate` **bracket** the council:
+
+1. **`isolate` pre-loop.** A cold read catches the cheap gaps — undefined terms,
+   promises with no owner, missing sections. Fix what it finds and run it again;
+   **loop until a pass comes back with no new material findings** (typically 2–3
+   rounds; each fix is new text and can introduce its own gaps). Convergence, not a
+   round count, is the exit condition — cap at 5 rounds as a runaway backstop. This
+   is lint-before-human-review economics: each round is one model call.
+2. **Council on the converged draft (8+ calls).** The mandated lenses find what a
+   general cold reader structurally cannot (the provisioning-lens class of gap).
+3. **Write the fixes back.**
+4. **`isolate` post-loop.** Same convergence rule on the revised document. The fixes
+   are new text written by a context-loaded author — empirically this loop keeps
+   finding real items after a clean council verdict, and it usually dries up within
+   2–3 rounds.
+
+And remember the whole point: **the wrong question is "which model." The right
+question is "which role."**
