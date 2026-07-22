@@ -8,6 +8,10 @@ This is the actual agentic setup I use to run [Sigma Synapses](https://sigmasyna
 
 Like a ghost in the shell, it sees beyond the data — and it's wired to make you fast.
 
+<p align="center">
+  <img src="assets/ai-tooling-overview.png" alt="ai-dotfiles at a glance: the kitchen — 40+ skills across review, planning, design, writing, web, and dev, plus three model tiers (frontier, bulk via 9router, local) and 7 harnesses — with firstmate, the optional crew manager, on top" width="100%" />
+</p>
+
 > **New here?** After `./setup.sh`, open Claude Code and say **`help me get started`** — it walks you through building and shipping with zero coding experience. Or read **[GETTING-STARTED.md](GETTING-STARTED.md)** first.
 
 ## What you get
