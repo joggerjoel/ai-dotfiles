@@ -17,10 +17,10 @@
   tasks:
     - name: Is ai-dotfiles present on the node?
       ansible.builtin.stat:
-        path: "{{ dotfiles_dir }}/scripts/provision-firstmate.sh"
-      register: fm_script
+        path: "{{ dotfiles_dir }}/setup.sh"
+      register: fm_dotfiles_present
 
-    - name: Refresh ai-dotfiles first (so the freshly-pulled script runs)
+    - name: Refresh ai-dotfiles first (pulls the latest provisioning script)
       ansible.builtin.shell: bash setup.sh update
       args:
         chdir: "{{ dotfiles_dir }}"
@@ -28,7 +28,13 @@
       register: fm_dotfiles
       changed_when: "'pull-status: updated' in fm_dotfiles.stdout"
       failed_when: false
-      when: fm_script.stat.exists
+      when: fm_dotfiles_present.stat.exists
+
+    - name: Is the provisioning script present after refresh?
+      ansible.builtin.stat:
+        path: "{{ dotfiles_dir }}/scripts/provision-firstmate.sh"
+      register: fm_script
+      when: fm_dotfiles_present.stat.exists
 
     - name: Provision the firstmate toolchain (idempotent, fail-loud)
       ansible.builtin.command: bash scripts/provision-firstmate.sh
@@ -40,7 +46,7 @@
       register: fm_provision
       changed_when: "'built' in fm_provision.stdout or 'installed' in fm_provision.stdout or 'cloned' in fm_provision.stdout"
       failed_when: fm_provision.rc != 0
-      when: fm_script.stat.exists
+      when: fm_dotfiles_present.stat.exists and (fm_script.stat.exists | default(false))
 
     - name: Report node provisioning result
       ansible.builtin.debug:
@@ -48,9 +54,9 @@
           {{ inventory_hostname }} ->
           {{ 'firstmate node ready' if (fm_provision.rc | default(1)) == 0
              else 'NOT ready — see: ' ~ (fm_provision.stdout_lines[-3:] | default(['(no output)']) | join(' | ')) }}
-      when: fm_script.stat.exists
+      when: fm_provision is not skipped
 
     - name: Warn if ai-dotfiles is absent
       ansible.builtin.debug:
         msg: "{{ inventory_hostname }} -> ai-dotfiles not installed; run provision-ai.yml first"
-      when: not fm_script.stat.exists
+      when: not fm_dotfiles_present.stat.exists
