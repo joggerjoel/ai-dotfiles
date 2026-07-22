@@ -33,6 +33,13 @@ MISSING=""
 mkdir -p "$LOCAL_BIN" "$SRC_DIR"
 export NO_MISTAKES_TELEMETRY=off   # opt out of no-mistakes' Umami telemetry
 
+# PATH hardening — ansible/cron/non-login shells miss brew, ~/.local/bin, bun,
+# corepack, etc. Prepend the usual tool locations so `command -v` sees the real
+# toolchain regardless of how this script was invoked (the fleet-proven fix).
+export PATH="$LOCAL_BIN:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"
+# Load Homebrew's full shellenv when available (sets GOPATH-ish PATHs, etc.).
+if [ -x /opt/homebrew/bin/brew ]; then eval "$(/opt/homebrew/bin/brew shellenv)"; fi
+
 IS_MAC=no; [ "$(uname -s)" = "Darwin" ] && IS_MAC=yes
 
 need() { command -v "$1" >/dev/null 2>&1; }
@@ -73,7 +80,8 @@ fi
 # ── Go tools: treehouse, no-mistakes (build from source) ─────────
 # clone_build_go <repo> <bin-name> — clone/pull, `go build`, install to ~/.local/bin
 clone_build_go() {
-  local repo="$1" bin="$2" dir="$SRC_DIR/$repo"
+  local repo="$1" bin="$2" dir
+  dir="$SRC_DIR/$repo"
   if need "$bin"; then ok "$bin present ($("$bin" --version 2>/dev/null | head -1 | awk '{print $NF}'))"; return 0; fi
   [ -d "$dir/.git" ] || git clone -q "$GH_ORG/$repo.git" "$dir" || { fail "$repo clone failed"; MISSING="$MISSING $bin"; return 1; }
   git -C "$dir" pull -q --ff-only 2>/dev/null || true
@@ -90,7 +98,8 @@ clone_build_go no-mistakes no-mistakes
 # ── pnpm axi tools: build from source, symlink dist bin ──────────
 # clone_build_axi <repo> — clone/pull, pnpm install+build, symlink bin (path from package.json)
 clone_build_axi() {
-  local repo="$1" dir="$SRC_DIR/$repo"
+  local repo="$1" dir
+  dir="$SRC_DIR/$repo"
   if need "$repo"; then ok "$repo present ($("$repo" --version 2>/dev/null | head -1))"; return 0; fi
   [ -d "$dir/.git" ] || git clone -q "$GH_ORG/$repo.git" "$dir" || { fail "$repo clone failed"; MISSING="$MISSING $repo"; return 1; }
   git -C "$dir" pull -q --ff-only 2>/dev/null || true
