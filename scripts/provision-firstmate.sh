@@ -36,7 +36,7 @@ export NO_MISTAKES_TELEMETRY=off   # opt out of no-mistakes' Umami telemetry
 # PATH hardening — ansible/cron/non-login shells miss brew, ~/.local/bin, bun,
 # corepack, etc. Prepend the usual tool locations so `command -v` sees the real
 # toolchain regardless of how this script was invoked (the fleet-proven fix).
-export PATH="$LOCAL_BIN:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"
+export PATH="$LOCAL_BIN:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.opencode/bin:$PATH"
 # Load Homebrew's full shellenv when available (sets GOPATH-ish PATHs, etc.).
 if [ -x /opt/homebrew/bin/brew ]; then eval "$(/opt/homebrew/bin/brew shellenv)"; fi
 
@@ -55,18 +55,24 @@ elif need corepack; then corepack enable pnpm >/dev/null 2>&1 && corepack prepar
 else fail "pnpm/corepack missing — install node with corepack"; MISSING="$MISSING pnpm"; fi
 need gh && ok "gh present" || warn "gh missing — firstmate needs 'gh auth login' (install: brew install gh)"
 
-# ── Harnesses (delegate to the ai-dotfiles roster) ───────────────
-header "Harnesses (via agents-update.sh)"
-if [ -x "$DOTFILES_DIR/scripts/agents-update.sh" ]; then
-  AGENTS_AUTO_INSTALL=1 "$DOTFILES_DIR/scripts/agents-update.sh" >/dev/null 2>&1 \
-    && ok "roster run (claude/codex/pi/grok/opencode…)" \
-    || warn "agents-update.sh reported issues — re-run it directly to see them"
-else
-  warn "agents-update.sh not found — install pi/grok/opencode manually"
-fi
-for h in claude codex pi grok opencode; do
-  need "$h" && ok "$h present" || { warn "$h missing"; MISSING="$MISSING $h"; }
-done
+# ── Harnesses ────────────────────────────────────────────────────
+# claude/codex are expected already (ai-dotfiles control node). pi/grok/opencode
+# are installed DIRECTLY here — delegating to agents-update.sh proved unreliable
+# under a non-login shell (it misreported success while the npm globals never
+# landed). Explicit, idempotent installs with the exact roster commands.
+header "Harnesses"
+ensure_harness() { # name install-cmd
+  local name="$1" cmd="$2"
+  if need "$name"; then ok "$name present"; return 0; fi
+  warn "$name missing — installing…"
+  eval "$cmd" >/dev/null 2>&1 || true
+  if need "$name"; then ok "$name installed"; else fail "$name install failed"; MISSING="$MISSING $name"; fi
+}
+need claude && ok "claude present" || { fail "claude missing (provision ai-dotfiles first)"; MISSING="$MISSING claude"; }
+need codex  && ok "codex present"  || { fail "codex missing (provision ai-dotfiles first)"; MISSING="$MISSING codex"; }
+ensure_harness pi   "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
+ensure_harness grok "npm install -g @xai-official/grok@latest"
+ensure_harness opencode "curl -fsSL https://opencode.ai/install | bash"
 
 # ── herdr (session backend the node runs) ────────────────────────
 header "herdr (session backend)"
