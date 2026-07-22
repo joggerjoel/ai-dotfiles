@@ -1,0 +1,56 @@
+---
+# Provision the firstmate NODE — the always-on box that runs first mate + crew.
+# Deliberately scoped to inventory group `firstmate_ai` (macstudio), NOT the
+# whole fleet: only the node runs firstmate; the HUD (a laptop) just SSH-attaches
+# to the node's herdr session, and the aorus workers are reached by crewmates.
+#
+# Runs scripts/provision-firstmate.sh on the node — installs herdr, the source-
+# built Go/pnpm toolchain (treehouse, no-mistakes, the *-axi suite), the harnesses
+# (via agents-update.sh), and the firstmate clone. Idempotent + fail-loud.
+#
+#   cd ansible-ai && ansible-playbook provision-firstmate.yml
+#   Dry run:  ansible-playbook provision-firstmate.yml --check
+#   After it succeeds: 'gh auth login' on the node, then launch a harness in ~/firstmate.
+- name: Provision the firstmate node
+  hosts: firstmate_ai
+  gather_facts: true
+  tasks:
+    - name: Is ai-dotfiles present on the node?
+      ansible.builtin.stat:
+        path: "{{ dotfiles_dir }}/scripts/provision-firstmate.sh"
+      register: fm_script
+
+    - name: Refresh ai-dotfiles first (so the freshly-pulled script runs)
+      ansible.builtin.shell: bash setup.sh update
+      args:
+        chdir: "{{ dotfiles_dir }}"
+        executable: /bin/bash
+      register: fm_dotfiles
+      changed_when: "'pull-status: updated' in fm_dotfiles.stdout"
+      failed_when: false
+      when: fm_script.stat.exists
+
+    - name: Provision the firstmate toolchain (idempotent, fail-loud)
+      ansible.builtin.command: bash scripts/provision-firstmate.sh
+      args:
+        chdir: "{{ dotfiles_dir }}"
+      environment:
+        AGENTS_AUTO_INSTALL: "1"
+        NO_MISTAKES_TELEMETRY: "off"
+      register: fm_provision
+      changed_when: "'built' in fm_provision.stdout or 'installed' in fm_provision.stdout or 'cloned' in fm_provision.stdout"
+      failed_when: fm_provision.rc != 0
+      when: fm_script.stat.exists
+
+    - name: Report node provisioning result
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} ->
+          {{ 'firstmate node ready' if (fm_provision.rc | default(1)) == 0
+             else 'NOT ready — see: ' ~ (fm_provision.stdout_lines[-3:] | default(['(no output)']) | join(' | ')) }}
+      when: fm_script.stat.exists
+
+    - name: Warn if ai-dotfiles is absent
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} -> ai-dotfiles not installed; run provision-ai.yml first"
+      when: not fm_script.stat.exists

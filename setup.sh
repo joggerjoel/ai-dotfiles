@@ -256,6 +256,21 @@ ensure_claude() {
   fi
 }
 
+# herdr — agent-aware terminal session manager, the firstmate session backend
+# (better than cmux: verified secondmate liveness probes). macOS/brew ONLY by
+# design: firstmate runs on the Mac control nodes (macstudio/this laptop), not
+# the Linux aorus fleet — so this is deliberately absent from the ansible CLI
+# roster and provisioner. On Linux it no-ops (see herdr.dev/docs/install for the
+# curl installer if a Linux host ever needs it).
+ensure_herdr() {
+  [ "$PKG_MANAGER" = "brew" ] || { skip "herdr skipped (macOS/brew only — firstmate backend)"; return 0; }
+  command -v herdr &>/dev/null && { ok "herdr present"; return 0; }
+  warn "herdr missing — installing via brew (firstmate session backend)..."
+  brew install herdr >/dev/null 2>&1 \
+    && ok "herdr installed" \
+    || warn "herdr install failed — brew install herdr (non-fatal)"
+}
+
 # Serena opens a browser dashboard tab on every `start-mcp-server` launch by
 # default. The global config is the single control point that all launchers
 # (the serena plugin included) honor, so disable it there — this is what stops
@@ -321,6 +336,7 @@ ensure_dependencies() {
   ensure_bun     # JS/TS package manager
   ensure_uv      # Python package manager (serena runs via uvx)
   ensure_claude  # Claude Code itself
+  ensure_herdr   # firstmate session backend (macOS/brew only — no-ops on Linux)
   ensure_serena_dashboard_off  # suppress serena's browser dashboard popup
 }
 
@@ -1257,6 +1273,9 @@ case "${1:-}" in
   update)   cmd_update "${2:-}" ;;
   env)      cmd_env "${2:-}" "${3:-}" ;;
   supabase) configure_supabase "${2:-}" ;;
+  # Opt-in: stand up THIS machine as a firstmate node (herdr + source toolchain
+  # + firstmate clone). Never part of `setup.sh` or `setup.sh update`.
+  provision-firstmate) exec bash "$DOTFILES_DIR/scripts/provision-firstmate.sh" ;;
   help|--help|-h)
     echo "Claude Code Dotfiles Setup"
     echo ""
