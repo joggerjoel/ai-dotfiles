@@ -176,6 +176,18 @@ update_cli "pi" "pi" "\"%BIN%\" update self || $PI_INSTALL" "$PI_INSTALL"
 GROK_INSTALL="npm install -g @xai-official/grok@latest"
 update_cli "grok" "grok" "$GROK_INSTALL" "$GROK_INSTALL"
 
+# just (command runner — the justfile launchpad). Same split as gemini:
+# brew-managed where brew manages it, otherwise the official installer,
+# which always fetches the latest prebuilt binary into ~/.local/bin — so
+# install and upgrade are the same command on the Linux fleet.
+JUST_INSTALL="curl $CURL_RETRY --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to \"\$HOME/.local/bin\""
+JUST_UPGRADE="$JUST_INSTALL"
+if command -v brew >/dev/null 2>&1; then
+  JUST_INSTALL="brew install just"
+  brew list --formula just >/dev/null 2>&1 && JUST_UPGRADE="brew upgrade just"
+fi
+update_cli "just" "just" "$JUST_UPGRADE" "$JUST_INSTALL"
+
 # headroom is a pipx- or uv-tool-managed python CLI; `headroom update`
 # confirms on a tty, so drive the manager directly. Resolve both by
 # absolute path — Ansible/cron shells are non-login, so brew's bin dir
