@@ -9,13 +9,18 @@
 # the remote server with zero ssh, and WITHOUT disturbing this machine's own
 # local herdr server (a separate XDG profile keeps the two sockets apart).
 #
-#   ./scripts/herdr-remote.sh            # ensure the bridge, then attach the TUI
-#   ./scripts/herdr-remote.sh up         # just start the local socat bridge
-#   ./scripts/herdr-remote.sh status     # remote server/session state over the mesh
+#   ./scripts/herdr-remote.sh            # attach the TUI (herdr --remote over SSH/tailnet)
+#   ./scripts/herdr-remote.sh up         # start the local socat bridge (control plane)
+#   ./scripts/herdr-remote.sh status     # remote server/session state over the mesh (no ssh)
 #   ./scripts/herdr-remote.sh down       # stop the local socat bridge
 #
+# Attach is SSH (herdr --remote): the TUI's client socket passes file
+# descriptors, which cannot cross a TCP bridge. The socat/mesh bridge remains
+# for the CONTROL PLANE only — status, session list, api — with zero ssh.
+#
 # Env:
-#   HERDR_REMOTE_HOST   node's tailnet name/IP (default "mac" via MagicDNS)
+#   HERDR_REMOTE_SSH    ssh alias for interactive attach (default "macstudio")
+#   HERDR_REMOTE_HOST   node's tailnet name/IP for the bridge (default "mac" via MagicDNS)
 #   HERDR_BRIDGE_PORT   node's bridge port (default 7070)
 #   HERDR_REMOTE_CFG    isolated XDG dir for the remote profile (default ~/.herdr-remote-cfg)
 set -uo pipefail
@@ -29,7 +34,8 @@ header(){ echo -e "\n${BOLD}$1${RESET}"; }
 
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"
 
-HOST="${HERDR_REMOTE_HOST:-mac}"
+HOST="${HERDR_REMOTE_HOST:-mac}"                  # tailnet name/IP — control-plane bridge
+SSH_TARGET="${HERDR_REMOTE_SSH:-macstudio}"       # ssh alias — interactive attach
 PORT="${HERDR_BRIDGE_PORT:-7070}"
 REMOTE_CFG="${HERDR_REMOTE_CFG:-$HOME/.herdr-remote-cfg}"
 SOCK="$REMOTE_CFG/herdr/herdr.sock"
@@ -61,11 +67,14 @@ cmd_up() {
   fi
 }
 
+# Interactive attach uses herdr's native --remote (SSH transport): the TUI
+# needs herdr's client socket, which passes file descriptors and therefore
+# CANNOT cross the TCP bridge — the bridge is control-plane only (status/api).
+# Tailscale makes this SSH direct from anywhere (no jump host).
 cmd_attach() {
-  header "herdr remote · attach ($HOST)"
-  cmd_up
-  ok "attaching remote session (Ctrl-b d or your detach key to leave; crew keeps running on the node)"
-  exec env XDG_CONFIG_HOME="$REMOTE_CFG" herdr
+  header "herdr remote · attach ($SSH_TARGET)"
+  ok "attaching via herdr --remote (Ctrl-b q to detach; captain + crew keep running on the node)"
+  exec herdr --remote "$SSH_TARGET"
 }
 
 cmd_status() {

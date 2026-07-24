@@ -34,10 +34,17 @@ node-services:
     ssh {{node}} '~/ai-dotfiles/scripts/herdr-node.sh service install all'
 
 # ── captain (firstmate) ─────────────────────────────────────────────
-# [captain] become the captain: open firstmate on the node (interactive)
-# PATH hardening: `ssh -t 'cmd'` is a non-login shell — ~/.zshrc never sources,
-# so brew/~/.local/bin tools read "command not found" without this prefix.
+# [captain] PERSISTENT captain: ensure a captain tab (claude in ~/firstmate)
+# inside the node's herdr session, then attach. Survives laptop lids, dropped
+# connections, and reboots — detach with Ctrl-b q, the crew keeps cooking.
 captain: node-up
+    ssh {{node}} '~/ai-dotfiles/scripts/herdr-node.sh captain-tab'
+    herdr --remote {{node}}
+
+# [captain] quick EPHEMERAL captain in your ssh tty — dies with your
+# connection; crewmates it spawned survive in herdr. One-offs only.
+# PATH hardening: `ssh -t 'cmd'` is a non-login shell — ~/.zshrc never sources.
+captain-quick: node-up
     ssh -t {{node}} 'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$PATH"; cd ~/firstmate && claude'
 
 # ── lifecycle (install/maintain: scripts + Setup hook + agentic prompts) ──

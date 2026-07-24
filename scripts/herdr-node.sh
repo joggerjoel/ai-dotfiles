@@ -15,6 +15,7 @@
 #   ./scripts/herdr-node.sh status             # server + session state
 #   ./scripts/herdr-node.sh restart            # down then up
 #   ./scripts/herdr-node.sh down               # stop the server
+#   ./scripts/herdr-node.sh captain-tab        # ensure a persistent firstmate captain tab
 #   ./scripts/herdr-node.sh service install [node|bridge|all]   # launchd (default all)
 #   ./scripts/herdr-node.sh service uninstall [node|bridge|all] # remove launchd agent(s)
 #   ./scripts/herdr-node.sh bridge [PORT]      # EXPERIMENTAL non-ssh socket bridge (mesh-only)
@@ -115,6 +116,37 @@ cmd_status() {
   echo
   echo -e "  ${DIM}sessions:${RESET}"
   herdr session list 2>&1 | sed 's/^/  /'
+}
+
+# --- captain tab (persistent firstmate captain inside the session) -----------
+# Idempotent: ensures one tab labeled "captain" exists in the running session,
+# with claude launched in ~/firstmate. The captain then lives IN herdr — it
+# survives laptop lids, dropped SSH, and reboots (launchd restarts the server;
+# herdr restores panes). Ephemeral ssh-tty captains are for quick one-offs only.
+cmd_captain_tab() {
+  require_herdr
+  command -v jq >/dev/null 2>&1 || { fail "jq required for captain-tab"; exit 1; }
+  server_running || { fail "server not running — run '$0 up' first"; exit 1; }
+  local fm_dir="${FIRSTMATE_DIR:-$HOME/firstmate}"
+  [ -d "$fm_dir" ] || { fail "firstmate not found at $fm_dir"; exit 1; }
+  local tab_id
+  tab_id=$(herdr tab list 2>/dev/null | jq -r '.result.tabs[]? | select(.label=="captain") | .tab_id' | head -1)
+  if [ -n "$tab_id" ]; then
+    skip "captain tab already present ($tab_id) — attach and keep going"
+    return 0
+  fi
+  # --no-focus: never steal focus from someone already attached and working.
+  herdr tab create --cwd "$fm_dir" --label captain --no-focus >/dev/null 2>&1
+  sleep 1
+  tab_id=$(herdr tab list 2>/dev/null | jq -r '.result.tabs[]? | select(.label=="captain") | .tab_id' | head -1)
+  [ -n "$tab_id" ] || { fail "captain tab did not appear after create"; exit 1; }
+  local pane_id
+  pane_id=$(herdr pane list 2>/dev/null | jq -r --arg t "$tab_id" '.result.panes[]? | select(.tab_id==$t) | .pane_id' | head -1)
+  [ -n "$pane_id" ] || { fail "no pane found in captain tab $tab_id"; exit 1; }
+  herdr pane send-text "$pane_id" "claude" >/dev/null 2>&1 \
+    && herdr pane send-keys "$pane_id" enter >/dev/null 2>&1 \
+    || { fail "could not launch claude in pane $pane_id"; exit 1; }
+  ok "captain tab created ($tab_id) — claude starting in $fm_dir"
 }
 
 # --- launchd (always-on node) ------------------------------------------------
@@ -263,6 +295,7 @@ case "${1:-up}" in
   down|stop) cmd_down ;;
   restart)  cmd_restart ;;
   status)   cmd_status ;;
+  captain-tab) cmd_captain_tab ;;
   service)
     svc_target="${3:-all}"
     case "${2:-}" in
