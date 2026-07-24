@@ -271,6 +271,23 @@ ensure_herdr() {
     || warn "herdr install failed — brew install herdr (non-fatal)"
 }
 
+ensure_just() {
+  command -v just &>/dev/null && { ok "just present"; return 0; }
+  if [ "$PKG_MANAGER" = "brew" ]; then
+    warn "just missing — installing via brew (fleet command runner)..."
+    brew install just >/dev/null 2>&1 \
+      && ok "just installed" \
+      || warn "just install failed — brew install just (non-fatal)"
+  else
+    warn "just missing — installing (official installer → ~/.local/bin)..."
+    mkdir -p "$HOME/.local/bin"
+    curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+      | bash -s -- --to "$HOME/.local/bin" >/dev/null 2>&1 \
+      && ok "just installed (~/.local/bin — open a new shell to pick it up)" \
+      || warn "just install failed — see https://just.systems (non-fatal)"
+  fi
+}
+
 # Serena opens a browser dashboard tab on every `start-mcp-server` launch by
 # default. The global config is the single control point that all launchers
 # (the serena plugin included) honor, so disable it there — this is what stops
@@ -337,6 +354,7 @@ ensure_dependencies() {
   ensure_uv      # Python package manager (serena runs via uvx)
   ensure_claude  # Claude Code itself
   ensure_herdr   # firstmate session backend (macOS/brew only — no-ops on Linux)
+  ensure_just    # fleet command runner (cross-platform: brew or install.sh)
   ensure_serena_dashboard_off  # suppress serena's browser dashboard popup
 }
 

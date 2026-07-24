@@ -1,0 +1,62 @@
+---
+# Install the `just` command runner on every fleet host (ai_all = aorus fleet +
+# macstudio + this box). macOS -> Homebrew; Linux -> the official install.sh into
+# ~/.local/bin (just is absent from older Debian apt repos, and install.sh is
+# distro-agnostic — a prebuilt-binary fetcher, no package manager needed).
+#
+# Idempotent: skips any host that already has `just`.
+# Offline hosts are reported unreachable and skipped (ignore_unreachable).
+- name: Install `just` on the fleet
+  hosts: ai_all
+  gather_facts: true
+  ignore_unreachable: true
+  vars:
+    # Retry transient CDN/network errors so a blip doesn't hard-fail a host.
+    curl_retry: "--retry 5 --retry-delay 2 --retry-connrefused"
+  tasks:
+    - name: Check whether just is already installed
+      ansible.builtin.shell: |
+        export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        command -v just
+      register: just_check
+      changed_when: false
+      failed_when: false
+
+    - name: Install just via Homebrew (macOS)
+      ansible.builtin.shell: |
+        export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+        brew install just
+      args:
+        executable: /bin/bash
+      when:
+        - just_check.rc | default(1) != 0
+        - ansible_system | default('') == "Darwin"
+      changed_when: true
+
+    - name: Install just via official installer (Linux -> ~/.local/bin)
+      ansible.builtin.shell: |
+        set -o pipefail
+        mkdir -p "$HOME/.local/bin"
+        curl {{ curl_retry }} --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+          | bash -s -- --to "$HOME/.local/bin"
+      args:
+        executable: /bin/bash
+      when:
+        - just_check.rc | default(1) != 0
+        - ansible_system | default('') == "Linux"
+      changed_when: true
+
+    # Skipped on hosts with no gathered facts (offline/unreachable) so a down
+    # box recaps as a clean skip, never a false failure.
+    - name: Verify just is now available and report the version
+      ansible.builtin.shell: |
+        export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        just --version
+      register: just_ver
+      changed_when: false
+      failed_when: just_ver.rc | default(0) != 0
+      when: ansible_system is defined
+
+    - name: Report installed version
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ just_ver.stdout | default('(host offline — skipped)') | trim }}"
