@@ -5,7 +5,7 @@
 > specialized engineering team. Talk to one agent; it does the work.
 
 <p align="center">
-  <img src="assets/ai-tooling-overview.png" alt="ai-dotfiles at a glance: the base — 40+ skills across review, planning, design, writing, web, and dev; three model tiers (frontier, bulk via 9router, local); and 7 harnesses — with firstmate, the optional crew manager, on top" width="100%" />
+  <img src="assets/ai-tooling-overview.png" alt="ai-dotfiles at a glance: the pass (just — one menu that fires every order), firstmate the optional crew manager on top, the base kitchen — 40+ skills, three model tiers, 7 harnesses — and the supply line underneath: ansible + setup.sh + agents-update keeping a chain of 8 machines provisioned, restocked, and health-checked" width="100%" />
 </p>
 
 It started as dotfiles. It's now the **config + provisioning + orchestration** layer for running an
@@ -28,11 +28,20 @@ AI workforce across a fleet of machines. The name stuck; the scope didn't.
   agents in parallel, provisioned onto your always-on node by ai-dotfiles. Add it only when
   juggling many jobs at once is the real bottleneck.
 
-The overview image above is the map: base at the bottom, crew manager on top.
+The overview image above is the map: base at the bottom, crew manager on top. For the **runtime
+view** — the six-layer stack (operator → `just` → provisioning → herdr session → crew → models),
+machine roles, and how a typed command flows through it — see
+**[docs/orchestration.md](docs/orchestration.md)**.
 
 ## What you get
 
-- **One-command provisioning** of any machine — CLIs, skills, MCP servers, tokens, safety rails.
+- **One menu for everything** — `just` lists every workflow (herdr, fleet, firstmate, lifecycle);
+  each recipe knows _where_ it runs, so you never think about which machine you're on.
+- **One-command provisioning** of any machine — CLIs, skills, MCP servers, tokens, safety rails —
+  and an **agentic install/maintain lifecycle**: a Setup-hook census plus `/install` and
+  `/maintain` prompts that read the logs, close gaps, and carry the known-issues playbook.
+- **Persistent sessions on an always-on node** — herdr keeps the crew running when your laptop
+  closes; attach from anywhere on the mesh (`just attach`).
 - **On-demand multi-agent power commands** — `/fusion`, `/council`, `isolate`, `/ship` — plus a
   40+-skill library (review, plan, design, write, web, dev).
 - **Three model tiers, routed by the work** — frontier (subscription), bulk (9router: 458 models
@@ -82,6 +91,30 @@ cd ai-dotfiles
 Detects your OS, assembles config, installs the skills, offers the plugin stack, walks you through
 MCP. Or open Claude Code in the folder and say **"set this up for me."** Drop tokens into
 `~/.claude/.env` and the agent becomes the operator — it builds, commits, opens PRs, deploys.
+
+## The launchpad — type `just`
+
+Every workflow in this repo — herdr, fleet ansible, firstmate, install/maintain — is indexed in the
+[`justfile`](justfile). How the layers fit together (operator → launchpad → provisioning → session →
+crew → models) and how one command flows through them:
+**[docs/orchestration.md](docs/orchestration.md)** — the high-level map. The menu itself:
+
+```bash
+just                # list every recipe (setup.sh installs `just`; fleet-wide: `just fleet-just`)
+just attach         # laptop → the node's herdr session
+just captain        # firstmate on the node — you're the captain
+just fleet-update   # ansible update across every host
+just install-hil    # agentic, human-in-the-loop machine onboarding
+```
+
+The justfile is the single source of truth for commands — recipes are documented there, not
+duplicated here. New machine or new engineer? `git clone && just install-hil`: the Claude Code
+**Setup hook** ([.claude/settings.json](.claude/settings.json)) runs a deterministic tool census
+(`claude --init` → `scripts/setup-init.sh`, logged to `~/.claude/logs/setup.log`), then the
+`/install` command reads that log, closes the gaps, and walks you through role choices
+(HUD / node / worker). `just maintain` is the same pattern for upkeep — report-first, confirm
+before mutating. The agentic prompts live in [commands/](commands/) and carry the known-issues
+playbook, so second-order fixes live in the repo, not in one engineer's memory.
 
 ## The fleet — deployment
 
@@ -139,9 +172,11 @@ and the base's `isolate`/`fusion`/`council` commands become crew skills. You tal
 runs the fleet. Integration plan and topology: kept in a sibling
 `firstmate-integration` repo. It's genuinely optional — the base is a complete system without it.
 
-## Profiles, structure & commands
+## Under the hood — profiles & config assembly
 
-Two profiles — **Desktop** (full browser tooling) and **VPS** (headless, Docker/systemctl perms).
+How the dotfiles layer assembles itself (the machinery `just`/`setup.sh` drive for you — most days
+you won't touch this directly). Two profiles — **Desktop** (full browser tooling) and **VPS**
+(headless, Docker/systemctl perms).
 Your `~/.claude/CLAUDE.md` is assembled from `base/` + `profiles/<profile>/` + gitignored `.local/`.
 
 ```bash
