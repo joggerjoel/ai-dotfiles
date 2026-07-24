@@ -35,8 +35,10 @@ node-services:
 
 # ── captain (firstmate) ─────────────────────────────────────────────
 # [captain] become the captain: open firstmate on the node (interactive)
+# PATH hardening: `ssh -t 'cmd'` is a non-login shell — ~/.zshrc never sources,
+# so brew/~/.local/bin tools read "command not found" without this prefix.
 captain: node-up
-    ssh -t {{node}} 'cd ~/firstmate && claude'
+    ssh -t {{node}} 'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$PATH"; cd ~/firstmate && claude'
 
 # ── lifecycle (install/maintain: scripts + Setup hook + agentic prompts) ──
 # [lifecycle] deterministic tool-floor census only (no agent)
