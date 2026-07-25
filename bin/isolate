@@ -1,34 +1,122 @@
 #!/usr/bin/env bash
-# isolate — clean-room, zero-context, single-shot call to ONE model (sonnet).
+# isolate — clean-room, zero-context cold review calls.
 #
-#   pbpaste | isolate                 # clipboard -> sterile sonnet
+#   pbpaste | isolate                 # clipboard -> sterile FIND-grade cold pass
 #   isolate < plan.md                 # file
 #   isolate "inline prompt"           # inline
+#   isolate --review < plan.md        # wrap input in the MATERIAL/NIT review rubric
+#   isolate --wide < plan.md          # 4 cheap lens passes + 1 deep pass, in parallel, merged
+#   isolate -m sonnet < plan.md       # explicit model override
 #   isolate --output-format json < todo.md    # extra claude flags pass through
 #
-# One model, always the same, always cold: the reviewer role needs a single
-# consistent cold reader — fresh session, replaced system prompt, no skills,
-# no memory, no MCP, no tools, no CLAUDE.md, neutral empty cwd. Without
-# --system-prompt the default prompt still leaks the skills listing and
-# memory system — the replacement is the load-bearing flag.
-# (ISOLATE_MODEL env overrides the model if that ever needs to change.)
+# Reviewer economics (why the defaults are what they are): iteration count in a
+# review loop is driven by FINDINGS PER PASS. A single mid-tier cold pass
+# surfaces a fraction of the material issues each round, so convergence takes
+# 3-5 write-back cycles. Two levers multiply findings per pass:
+#   1. FIND with the strongest model (default: fable) — one deep pass.
+#   2. BREADTH from parallel cheap lenses (--wide: completeness, consistency,
+#      sequencing, failure-modes on sonnet) merged with the deep pass.
+# And one rule: NEVER declare convergence from a weak reviewer's silence — a
+# reviewer that misses things finding nothing is absence of evidence. The
+# convergence pass must come from the strongest model.
+#
+# Always cold: fresh session, replaced system prompt, no skills, no memory, no
+# MCP, no tools, no CLAUDE.md, neutral empty cwd. Without --system-prompt the
+# default prompt still leaks the skills listing and memory system — the
+# replacement is the load-bearing flag.
+#
+# Env: ISOLATE_MODEL (deep pass, default fable) · ISOLATE_WIDE_MODEL (lens
+# passes, default sonnet)
 set -euo pipefail
 
-MODEL="${ISOLATE_MODEL:-sonnet}"
-PROMPT="${1:-}"
-if [ -n "$PROMPT" ] && [ "${PROMPT#--}" = "$PROMPT" ]; then shift; else PROMPT=""; fi
+MODEL="${ISOLATE_MODEL:-fable}"
+WIDE_MODEL="${ISOLATE_WIDE_MODEL:-sonnet}"
+WIDE=0
+REVIEW=0
+PROMPT=""
+PASSTHRU=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -m|--model) MODEL="$2"; shift 2 ;;
+    --wide)     WIDE=1; REVIEW=1; shift ;;
+    --review)   REVIEW=1; shift ;;
+    --*)        PASSTHRU+=("$1"); [ $# -gt 1 ] && { PASSTHRU+=("$2"); shift; }; shift ;;
+    *)          PROMPT="$1"; shift ;;
+  esac
+done
+
 [ -n "$PROMPT" ] || { [ -t 0 ] && { echo "isolate: pipe a prompt in (pbpaste | isolate) or pass one as an argument" >&2; exit 2; }; PROMPT="$(cat)"; }
 [ -n "$PROMPT" ] || { echo "isolate: empty prompt" >&2; exit 2; }
 
+BASE_SYS="You are a careful expert reviewer. Work only from the message provided — you have no other context, files, or tools. Answer directly and completely."
+
+RUBRIC="Review the document below as a cold, adversarial expert reviewer.
+List every defect you find. Label each finding MATERIAL (would change behavior,
+correctness, sequencing, security, a stated gate, or a promise with no producer)
+or NIT (wording, style, formatting). No praise, no summary of the document.
+End with exactly one line: 'MATERIAL: <n> | NIT: <m>'.
+If nothing material remains, the counts line is 'MATERIAL: 0 | NIT: <m>'.
+
+DOCUMENT:
+"
+
 # Neutral, empty working directory: nothing project-shaped to pick up.
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/isolate.XXXXXX")"
-trap 'rmdir "$SANDBOX" 2>/dev/null || true' EXIT
+cleanup() { rm -f "$SANDBOX"/lens-*.out 2>/dev/null; rmdir "$SANDBOX" 2>/dev/null || true; }
+trap cleanup EXIT
 cd "$SANDBOX"
 
-exec claude -p "$PROMPT" \
-  --model "$MODEL" \
-  --system-prompt "You are a careful expert reviewer. Work only from the message provided — you have no other context, files, or tools. Answer directly and completely." \
-  --setting-sources "" \
-  --strict-mcp-config \
-  --disallowedTools "*" \
-  "$@"
+FULL_PROMPT="$PROMPT"
+[ "$REVIEW" = 1 ] && FULL_PROMPT="${RUBRIC}${PROMPT}"
+
+run_cold() { # <model> <system-prompt>
+  claude -p "$FULL_PROMPT" \
+    --model "$1" \
+    --system-prompt "$2" \
+    --setting-sources "" \
+    --strict-mcp-config \
+    --disallowedTools "*" \
+    ${PASSTHRU+"${PASSTHRU[@]}"}
+}
+
+if [ "$WIDE" = 0 ]; then
+  echo "isolate: one cold $MODEL pass$([ "$REVIEW" = 1 ] && echo ' (MATERIAL/NIT rubric)') — output arrives when it completes; 1–3 min is normal for a doc review…" >&2
+  run_cold "$MODEL" "$BASE_SYS"
+  rc=$?
+  echo "isolate: done." >&2
+  exit $rc
+fi
+
+# --wide: 4 cheap lens passes + 1 deep pass, in parallel, merged. One command =
+# one round with maximal findings-per-pass.
+LENS_NAMES=(completeness consistency sequencing failure-modes)
+LENS_SYS=(
+  "$BASE_SYS Focus ONLY on completeness: missing steps, undefined terms, promises or gate conditions with no task that produces them, capabilities claimed but never implemented."
+  "$BASE_SYS Focus ONLY on internal consistency: contradictions between sections, stale references to superseded decisions, numbers or names that disagree, headers that claim what the body does not deliver."
+  "$BASE_SYS Focus ONLY on sequencing and gating: ordering errors, steps that consume artifacts produced later, gates declared but never scheduled, review steps positioned after the work they are meant to gate."
+  "$BASE_SYS Focus ONLY on failure modes: what happens on error, rollback paths, silent no-ops, fail-open controls, security gaps, unverified assumptions about tools or environments."
+)
+
+echo "isolate --wide: launching 1 deep pass ($MODEL) + ${#LENS_NAMES[@]} lenses ($WIDE_MODEL) in parallel — merged output when ALL finish (2–5 min typical)…" >&2
+i=0
+PIDS=(); LABELS=()
+for name in "${LENS_NAMES[@]}"; do
+  run_cold "$WIDE_MODEL" "${LENS_SYS[$i]}" > "$SANDBOX/lens-$name.out" 2>&1 &
+  PIDS+=($!); LABELS+=("lens:$name")
+  i=$((i+1))
+done
+run_cold "$MODEL" "$BASE_SYS" > "$SANDBOX/lens-deep.out" 2>&1 &
+PIDS+=($!); LABELS+=("deep:$MODEL")
+for i in "${!PIDS[@]}"; do
+  wait "${PIDS[$i]}" 2>/dev/null || true
+  echo "isolate: ${LABELS[$i]} finished ($((i+1))/${#PIDS[@]})" >&2
+done
+
+echo "════════ DEEP PASS ($MODEL) ════════"
+cat "$SANDBOX/lens-deep.out"
+for name in "${LENS_NAMES[@]}"; do
+  echo
+  echo "════════ LENS: $name ($WIDE_MODEL) ════════"
+  cat "$SANDBOX/lens-$name.out"
+done

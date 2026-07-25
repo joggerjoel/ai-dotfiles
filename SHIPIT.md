@@ -14,34 +14,42 @@ isolate pre-loop  →  council  →  write-back  →  isolate post-loop  →  sh
 ```
 
 Every loop's exit condition is **convergence, not a round count**: repeat until a
-pass returns no new material findings. Typical cost is 2–3 rounds; 5 is the runaway
-cap. Fixes are new text from a context-loaded author, which is why both loops exist —
-each round of fixing can introduce its own gaps.
+pass returns no new material findings. Fixes are new text from a context-loaded
+author, which is why both loops exist — each round of fixing can introduce its own
+gaps.
+
+**Reviewer economics** — iteration count is driven by _findings per pass_. A single
+mid-tier cold pass (the old sonnet default) surfaces a fraction of the material
+issues each round, which is how loops stretch to 4–5 rounds. `isolate` now defaults
+to a **find-grade deep pass (fable)**, and `isolate --wide` adds four parallel cheap
+lenses (completeness, consistency, sequencing, failure-modes) merged with it — one
+command, one round, maximal surface. Expected cost drops to 1–2 rounds. One rule is
+non-negotiable: **convergence is only declared by the strongest model's silence** —
+a weak reviewer finding nothing is absence of evidence, not convergence.
 
 ## Phase 1 — isolate pre-loop (shell)
 
-Cold single-reviewer triage so the council spends its budget on hard defects,
-not noise. Each round is one model call.
+Cold triage so the council spends its budget on hard defects, not noise.
 
 ```bash
-isolate < docs/plan.md            # round 1: cold, zero-context review
-# fix what it found, then run the SAME command again; repeat until dry
+isolate --wide < docs/plan.md     # round 1: deep fable pass + 4 sonnet lenses, parallel, merged
+# write back everything MATERIAL, then:
+isolate --review < docs/plan.md   # convergence check: ONE deep pass, MATERIAL/NIT rubric
+# repeat write-back + --review until it reports 'MATERIAL: 0'
 ```
+
+`--review` wraps the doc in a rubric that labels every finding **MATERIAL** (changes
+behavior, correctness, sequencing, security, a gate, or a promise with no producer)
+or **NIT**, ending with a counts line — `MATERIAL: 0` from the deep model is the
+phase-done signal. (Model counts wobble; trust the labels over the arithmetic.)
 
 Variants:
 
 ```bash
-pbpaste | isolate                                   # review the clipboard
-isolate "$(cat docs/plan.md docs/todo.md)"          # multiple docs as one review
+pbpaste | isolate                                   # generic cold call (no rubric)
+isolate --review "$(cat docs/plan.md docs/todo.md)" # multiple docs as one review
+isolate -m sonnet < docs/plan.md                    # explicit model override
 ```
-
-With an explicit stop signal for the loop:
-
-```bash
-{ echo "Review this plan for gaps, ambiguities, and promises with no producer. If nothing material remains, reply exactly: NO MATERIAL GAPS."; cat docs/plan.md; } | isolate
-```
-
-`NO MATERIAL GAPS` → phase 1 is done.
 
 ## Phase 2 — council (Claude Code session)
 
@@ -65,7 +73,7 @@ revision-log entry so the audit trail lives in the doc itself.
 ## Phase 4 — isolate post-loop (shell)
 
 ```bash
-isolate < docs/plan.md            # same convergence loop, on the revised doc
+isolate --wide < docs/plan.md     # same find-then-converge loop, on the revised doc
 ```
 
 This phase is not optional. Post-council cold passes empirically keep finding real
