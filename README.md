@@ -43,8 +43,10 @@ machine roles, and how a typed command flows through it — see
 
 ## What you get
 
-- **One menu for everything** — `just` lists every workflow (herdr, fleet, firstmate, lifecycle);
-  each recipe knows _where_ it runs, so you never think about which machine you're on.
+- **One menu for everything** — `just` lists every workflow (herdr, fleet, firstmate, lifecycle).
+  Recipes are **role-aware**: node-targeting ones ssh to your node from anywhere else and run
+  locally on the node itself (`FLEET_ROLE=node` in its `.env`); fleet recipes fail fast with a
+  pointer unless the machine holds your inventory. Local recipes run wherever you are.
 - **One-command provisioning** of any machine — CLIs, skills, MCP servers, tokens, safety rails —
   and an **agentic install/maintain lifecycle**: a Setup-hook census plus `/install` and
   `/maintain` prompts that read the logs, close gaps, and carry the known-issues playbook.

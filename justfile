@@ -2,14 +2,21 @@
 #   just            → list every recipe (this menu)
 #   just <recipe>   → run it
 #
-# Recipes are grouped: [herdr] the node session backend · [fleet] ansible over
-# all hosts · [captain] firstmate · [local] this machine. Node-targeting recipes
-# ssh to `node`; local recipes run here — so you never have to remember whether a
-# command belongs on the laptop (HUD) or macstudio (node).
+# Recipes are grouped: [herdr] the node session backend · [captain] firstmate ·
+# [lifecycle] install/maintain · [fleet] ansible over all hosts · [local] this
+# machine. Node-targeting recipes are ROLE-AWARE: set FLEET_ROLE=node in the
+# node's own .env and they run locally there instead of ssh-ing to themselves;
+# everywhere else they ssh to `node`. Fleet recipes need a control machine
+# (one with your gitignored ansible-ai/inventory.local.yml) and fail fast with
+# a pointer if this isn't one.
+#
+# NOTE for doc comments: `just --list` shows the LAST comment line above a
+# recipe — keep the summary line immediately above the recipe name.
 
 set dotenv-load := true                    # auto-load ./.env if present
 
 node := env_var_or_default("FLEET_NODE", "macstudio")   # the always-on node
+role := env_var_or_default("FLEET_ROLE", "hud")         # hud | node | worker (this machine)
 dotfiles := justfile_directory()
 
 # Default: show the menu.
@@ -17,33 +24,53 @@ default:
     @just --list --unsorted
 
 # ── herdr (the node session backend) ────────────────────────────────
-# [herdr] attach the node's herdr session from here over the mesh (no ssh TUI)
+# [herdr] attach the node's herdr session (TUI; on the node itself attaches directly)
 attach:
-    herdr-remote
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{role}}" = "node" ]; then exec herdr; else exec herdr-remote; fi
 
 # [herdr] node herdr server + session + bridge health
 node-status:
-    ssh {{node}} '~/ai-dotfiles/scripts/herdr-node.sh status'
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-node.sh" status
+    else exec ssh {{node}} '~/ai-dotfiles/scripts/herdr-node.sh status'; fi
 
 # [herdr] (re)start herdr server + mesh bridge on the node
 node-up:
-    ssh {{node}} '~/ai-dotfiles/scripts/herdr-node.sh up'
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-node.sh" up
+    else exec ssh {{node}} '~/ai-dotfiles/scripts/herdr-node.sh up'; fi
 
 # [herdr] install the node's launchd agents (server + bridge, always-on)
 node-services:
-    ssh {{node}} '~/ai-dotfiles/scripts/herdr-node.sh service install all'
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-node.sh" service install all
+    else exec ssh {{node}} '~/ai-dotfiles/scripts/herdr-node.sh service install all'; fi
 
 # ── captain (firstmate) ─────────────────────────────────────────────
-# [captain] PERSISTENT captain: ensure a captain tab (claude in ~/firstmate)
-# inside the node's herdr session, then attach. Survives laptop lids, dropped
-# connections, and reboots — detach with Ctrl-b q, the crew keeps cooking.
+# Ensures a persistent captain tab (claude in ~/firstmate) inside the node's
+# herdr session, then attaches. Survives laptop lids, dropped connections, and
+# reboots — detach with Ctrl-b q, the crew keeps cooking.
+# [captain] PERSISTENT captain: ensure the captain tab on the node, then attach
 captain: node-up
-    ssh {{node}} '~/ai-dotfiles/scripts/herdr-node.sh captain-tab'
-    herdr --remote {{node}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{role}}" = "node" ]; then
+      "{{dotfiles}}/scripts/herdr-node.sh" captain-tab
+      exec herdr
+    else
+      ssh {{node}} '~/ai-dotfiles/scripts/herdr-node.sh captain-tab'
+      exec herdr --remote {{node}}
+    fi
 
-# [captain] quick EPHEMERAL captain in your ssh tty — dies with your
-# connection; crewmates it spawned survive in herdr. One-offs only.
-# PATH hardening: `ssh -t 'cmd'` is a non-login shell — ~/.zshrc never sources.
+# Ephemeral: claude in your ssh tty — dies with your connection (crewmates it
+# spawned survive in herdr). PATH prefix because `ssh -t 'cmd'` is a non-login
+# shell where ~/.zshrc never sources.
+# [captain] quick EPHEMERAL captain in your ssh tty — one-offs only
 captain-quick: node-up
     ssh -t {{node}} 'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$PATH"; cd ~/firstmate && claude'
 
@@ -65,32 +92,49 @@ maintain:
     cd {{dotfiles}} && claude --maintenance "/maintain"
 
 # [lifecycle] agentic maintenance across all hosts (report-first, confirm gates)
-fleet-maintain:
+fleet-maintain: _control
     cd {{dotfiles}} && claude --maintenance "/maintain fleet"
 
-# ── fleet (ansible over all hosts) ──────────────────────────────────
-# [fleet] update every host (ai_all: aorus fleet + macstudio + this box)
-fleet-update:
+# ── review (SHIPIT cold passes; run from anywhere via `just -g`) ────
+# [review] round 1 FIND pass: deep fable + 4 sonnet lenses on the given file(s)
+review-wide +FILES:
+    isolate --wide "$(cat {{FILES}})"
+
+# [review] convergence check: one deep pass, MATERIAL/NIT rubric — done at MATERIAL: 0
+review +FILES:
+    isolate --review "$(cat {{FILES}})"
+
+# ── fleet (ansible over all hosts; control machine only) ────────────
+# Guard: fleet recipes need this machine to hold YOUR inventory (gitignored).
+_control:
+    @test -f "{{dotfiles}}/ansible-ai/inventory.local.yml" || { \
+      echo "✗ not a control machine: ansible-ai/inventory.local.yml is absent."; \
+      echo "  Fleet recipes run from a machine holding your inventory —"; \
+      echo "  generate one from ~/.ssh/config: ansible-ai/ssh-ansible-sync.sh"; \
+      exit 1; }
+
+# [fleet] update every host (ai_all: the whole fleet incl. this box)
+fleet-update: _control
     cd {{dotfiles}}/ansible-ai && ansible-playbook update.yml
 
 # [fleet] install/refresh `just` on every host
-fleet-just:
+fleet-just: _control
     cd {{dotfiles}}/ansible-ai && ansible-playbook provision-just.yml
 
 # [fleet] refresh the agent CLIs (claude/codex/pi/grok/…) everywhere
-fleet-harnesses:
+fleet-harnesses: _control
     cd {{dotfiles}}/ansible-ai && ansible-playbook update.yml --tags harnesses
 
 # [fleet] push local config out to the fleet
-fleet-push:
+fleet-push: _control
     cd {{dotfiles}}/ansible-ai && ansible-playbook push-config.yml
 
-# [fleet] provision macstudio as the firstmate node
-provision-node:
+# [fleet] provision the always-on node as the firstmate node
+provision-node: _control
     cd {{dotfiles}}/ansible-ai && ansible-playbook provision-firstmate.yml
 
 # [fleet] ad-hoc: reachability check across the fleet
-ping:
+ping: _control
     cd {{dotfiles}}/ansible-ai && ansible ai_all -m ping
 
 # ── local (this machine) ────────────────────────────────────────────
