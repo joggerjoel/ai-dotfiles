@@ -214,7 +214,81 @@ probe_skills() {
   done < <(find "$SKILLS_DIR" -maxdepth 2 -name SKILL.md 2>/dev/null)
 }
 
+# The checker's own dependencies. Missing ones mean exit 2 — "could not run" —
+# which must never be confused with exit 1, "ran and found failures".
+check_preconditions() {
+  local missing=()
+  command -v jq >/dev/null 2>&1 || missing+=("jq")
+  command -v claude >/dev/null 2>&1 || missing+=("claude")
+  if [ ${#missing[@]} -gt 0 ]; then
+    CHECKER_BROKEN=1
+    CHECKER_REASON="missing required tools: ${missing[*]}"
+  fi
+}
+
+# Print all findings for one class. Passes collapse onto a single line, so a
+# clean report stays skimmable. Body is buffered so the header can print first
+# with the correct total.
+render_class() {
+  local class="$1" label="$2" f c n v d passes=() total=0 body=""
+  for f in ${FINDINGS+"${FINDINGS[@]}"}; do
+    IFS='|' read -r c n v d _ <<<"$f"
+    [ "$c" = "$class" ] || continue
+    total=$((total + 1))
+    case "$v" in
+      pass)     passes+=("$n") ;;
+      fail)     body+="$(printf '  ✘ %-18s %s' "$n" "$d")"$'\n' ;;
+      unknown)  body+="$(printf '  ! %-18s %s' "$n" "$d")"$'\n' ;;
+      untested) body+="$(printf '  · %-18s %s' "$n" "$d")"$'\n' ;;
+    esac
+  done
+  [ "$total" -eq 0 ] && return
+  printf '\n%-40s %3d\n' "$label" "$total"
+  if [ ${#passes[@]} -gt 0 ]; then
+    printf '  ✔ %s\n' "${passes[*]}"
+  fi
+  [ -n "$body" ] && printf '%s' "$body"
+}
+
+render_human() {
+  local pass fail unknown untested total containable f v c
+  pass=$(count_verdict pass)
+  fail=$(count_verdict fail)
+  unknown=$(count_verdict unknown)
+  untested=$(count_verdict untested)
+  total=$(( pass + fail + unknown + untested ))
+
+  printf 'PREFLIGHT  %s\n' "$(date '+%Y-%m-%d %H:%M')"
+
+  render_class mcp   "MCP SERVERS"
+  render_class cli   "MANDATED CLIS"
+  render_class env   "ENV-VAR SERVICES"
+  render_class hook  "HOOKS & SCRIPTS"
+  render_class skill "REPO SKILLS"
+
+  containable=0
+  for f in ${FINDINGS+"${FINDINGS[@]}"}; do
+    IFS='|' read -r _ _ v _ c <<<"$f"
+    [ "$v" = "fail" ] && [ "$c" = "yes" ] && containable=$((containable + 1))
+  done
+
+  printf '\n%s\n' "────────────────────────────────────────────"
+  printf '%d assets · %d pass · %d fail · %d unknown\n' "$total" "$pass" "$fail" "$unknown"
+  if [ "$containable" -gt 0 ]; then
+    printf 'contain %d of %d:  just preflight --quarantine\n' "$containable" "$fail"
+  fi
+  if [ "$(( fail - containable ))" -gt 0 ]; then
+    printf '%d failures need you — not containable\n' "$(( fail - containable ))"
+  fi
+}
+
 main() {
+  check_preconditions
+  if [ "$CHECKER_BROKEN" -eq 1 ]; then
+    echo "preflight could not run: $CHECKER_REASON" >&2
+    exit 2
+  fi
+
   probe_mcp
   probe_clis
   probe_env
@@ -230,21 +304,9 @@ main() {
     echo "MCP handshake timed out after ${MCP_TIMEOUT}s — all servers reported unknown"
   fi
 
-  local f class name verdict detail
-  for f in ${FINDINGS+"${FINDINGS[@]}"}; do
-    IFS='|' read -r class name verdict detail _ <<<"$f"
-    case "$verdict" in
-      pass)    echo "  ✔ $class $name" ;;
-      fail)    echo "  ✘ $class $name — $detail" ;;
-      unknown) echo "  ! $class $name — $detail (unknown)" ;;
-    esac
-  done
+  render_human
 
-  local fails
-  fails=$(count_verdict fail)
-  if [ "$fails" -gt 0 ]; then
-    exit 1
-  fi
+  [ "$(count_verdict fail)" -gt 0 ] && exit 1
   exit 0
 }
 

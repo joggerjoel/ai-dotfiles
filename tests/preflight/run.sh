@@ -52,8 +52,11 @@ fi
 # firecrawl-mcp), all connected. Assert on the exact count and identity of
 # passing MCP findings, not merely the absence of a "FAIL" string — a
 # regression that makes probe_mcp silently emit nothing would still pass
-# the weaker check above.
-mcp_pass_count=$(grep -c '✔ mcp ' <<<"$out")
+# the weaker check above. render_class collapses passes onto one line under
+# the "MCP SERVERS" header, so count words on that line rather than grepping
+# one "✔ mcp <name>" line per server.
+mcp_pass_line=$(sed -n '/MCP SERVERS/,/^$/p' <<<"$out" | grep '✔')
+mcp_pass_count=$(( $(wc -w <<<"$mcp_pass_line") - 1 ))
 if [ "$mcp_pass_count" -eq 3 ]; then
   report pass "healthy fixture produces exactly 3 passing MCP findings"
 else
@@ -61,7 +64,7 @@ else
 fi
 
 for want in context7 github firecrawl-mcp; do
-  if grep -q "✔ mcp $want\$" <<<"$out"; then
+  if grep -qE "✔ .*\b$want\b" <<<"$mcp_pass_line"; then
     report pass "healthy fixture reports $want as a passing MCP finding"
   else
     report fail "healthy fixture reports $want as a passing MCP finding" "$out"
@@ -135,7 +138,9 @@ else
   report fail "ghost fixture reports ghost-server" "$out"
 fi
 
-if grep -qE 'ghost-server.*\(unknown\)' <<<"$out"; then
+# render_class marks unknown findings with a "!" prefix (never "(unknown)"
+# text — that suffix belonged to the old flat per-line report format).
+if grep -qE '! *ghost-server' <<<"$out"; then
   report pass "ghost fixture classifies ghost-server unknown"
 else
   report fail "ghost fixture classifies ghost-server unknown" "$out"
@@ -158,10 +163,42 @@ fi
 
 # --- mandated CLIs: jq is definitely installed, so it must pass --------------
 out=$(run_preflight healthy 2>&1)
-if grep -qE '✔ cli jq' <<<"$out"; then
+cli_pass_line=$(sed -n '/MANDATED CLIS/,/^$/p' <<<"$out" | grep '✔')
+if grep -qE "✔ .*\bjq\b" <<<"$cli_pass_line"; then
   report pass "reports jq as a passing CLI"
 else
   report fail "reports jq as a passing CLI" "$out"
+fi
+
+# --- exit 2: the checker itself could not run -------------------------------
+# An empty stub dir plus a PATH with no `claude` must report "could not run",
+# NOT "everything failed". Distinguishing 2 from 1 is what stops a green cron
+# job from hiding a checker that has been crashing for a month.
+out=$(PATH="$TESTS_DIR/stubs-noclaude:/usr/bin:/bin" \
+      PREFLIGHT_FIXTURE="$TESTS_DIR/fixtures/healthy" \
+      PREFLIGHT_CLAUDE_JSON="$TESTS_DIR/fixtures/healthy/claude.json" \
+      PREFLIGHT_SETTINGS_JSON="$TESTS_DIR/fixtures/healthy/settings.json" \
+      PREFLIGHT_ENV_FILE="$TESTS_DIR/fixtures/healthy/env" \
+      PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/healthy/skills" \
+      bash "$REPO_DIR/scripts/preflight.sh" 2>&1); rc=$?
+if [ "$rc" -eq 2 ]; then
+  report pass "missing claude yields exit 2, not 1"
+else
+  report fail "missing claude yields exit 2, not 1" "got rc=$rc: $out"
+fi
+
+# --- summary line -----------------------------------------------------------
+out=$(run_preflight regression 2>&1)
+if grep -qE '[0-9]+ assets · [0-9]+ pass · [0-9]+ fail' <<<"$out"; then
+  report pass "prints a summary line"
+else
+  report fail "prints a summary line" "$out"
+fi
+
+if grep -q 'just preflight --quarantine' <<<"$out"; then
+  report pass "suggests --quarantine when containable failures exist"
+else
+  report fail "suggests --quarantine when containable failures exist" "$out"
 fi
 
 echo ""
