@@ -18,6 +18,34 @@ SKILLS_DIR="${PREFLIGHT_SKILLS_DIR:-$DOTFILES_DIR/skills}"
 SMOKE_DIR="${PREFLIGHT_SMOKE_DIR:-$DOTFILES_DIR/tests/smoke}"
 MCP_TIMEOUT="${PREFLIGHT_MCP_TIMEOUT:-180}"
 
+OPT_JSON=0
+OPT_QUARANTINE=0
+OPT_SMOKE=0
+
+parse_args() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json)       OPT_JSON=1 ;;
+      --quarantine) OPT_QUARANTINE=1 ;;
+      --smoke)      OPT_SMOKE=1 ;;
+      -h|--help)
+        cat <<'USAGE'
+preflight.sh — verify configured assets actually work
+
+  --json         machine-readable output (schema 1)
+  --quarantine   disable failing MCP servers (backs up first)
+  --smoke        also run tests/smoke/ for assets that passed
+  -h, --help     this message
+USAGE
+        exit 0 ;;
+      *)
+        echo "unknown option: $1" >&2
+        exit 2 ;;
+    esac
+    shift
+  done
+}
+
 # class|name|verdict|detail|containable
 FINDINGS=()
 
@@ -282,7 +310,34 @@ render_human() {
   fi
 }
 
+render_json() {
+  local f c n v d cont
+  {
+    printf '{"schema":1,'
+    printf '"ranAt":"%s",' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    printf '"tier":%d,' "$(( OPT_SMOKE ? 3 : 2 ))"
+    printf '"summary":{"assets":%d,"pass":%d,"fail":%d,"unknown":%d,"untested":%d},' \
+      "${#FINDINGS[@]}" "$(count_verdict pass)" "$(count_verdict fail)" \
+      "$(count_verdict unknown)" "$(count_verdict untested)"
+    printf '"assets":['
+    local first=1
+    for f in ${FINDINGS+"${FINDINGS[@]}"}; do
+      IFS='|' read -r c n v d cont <<<"$f"
+      [ "$first" -eq 0 ] && printf ','
+      first=0
+      printf '{"class":%s,"name":%s,"verdict":%s,"detail":%s,"containable":%s}' \
+        "$(jq -Rn --arg x "$c" '$x')" \
+        "$(jq -Rn --arg x "$n" '$x')" \
+        "$(jq -Rn --arg x "$v" '$x')" \
+        "$(jq -Rn --arg x "$d" '$x')" \
+        "$([ "$cont" = "yes" ] && echo true || echo false)"
+    done
+    printf ']}'
+  } | jq .
+}
+
 main() {
+  parse_args "$@"
   check_preconditions
   if [ "$CHECKER_BROKEN" -eq 1 ]; then
     echo "preflight could not run: $CHECKER_REASON" >&2
@@ -301,10 +356,16 @@ main() {
   fi
 
   if [ "$MCP_TIMED_OUT" -eq 1 ]; then
-    echo "MCP handshake timed out after ${MCP_TIMEOUT}s — all servers reported unknown"
+    # stderr, not stdout: --json callers pipe stdout straight into `jq` and
+    # must see nothing but the JSON object there.
+    echo "MCP handshake timed out after ${MCP_TIMEOUT}s — all servers reported unknown" >&2
   fi
 
-  render_human
+  if [ "$OPT_JSON" -eq 1 ]; then
+    render_json
+  else
+    render_human
+  fi
 
   [ "$(count_verdict fail)" -gt 0 ] && exit 1
   exit 0

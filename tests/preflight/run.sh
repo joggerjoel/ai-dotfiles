@@ -201,6 +201,52 @@ else
   report fail "suggests --quarantine when containable failures exist" "$out"
 fi
 
+
+# --- JSON output ------------------------------------------------------------
+out=$(run_preflight regression --json 2>/dev/null)
+if jq -e '.schema == 1' <<<"$out" >/dev/null 2>&1; then
+  report pass "--json emits schema 1"
+else
+  report fail "--json emits schema 1" "$out"
+fi
+
+if jq -e '[.assets[] | select(.verdict=="fail")] | length >= 3' <<<"$out" >/dev/null 2>&1; then
+  report pass "--json lists the failing assets"
+else
+  report fail "--json lists the failing assets" "$out"
+fi
+
+if jq -e '[.assets[] | select(.name=="plugin:stripe:stripe" and .verdict=="unknown")] | length == 1' <<<"$out" >/dev/null 2>&1; then
+  report pass "--json marks stripe unknown"
+else
+  report fail "--json marks stripe unknown" "$out"
+fi
+
+# --json must not print the human report alongside the JSON — a caller piping
+# stdout into `jq` needs parseable output with nothing else mixed in.
+if [ "$(jq -e '.' <<<"$out" >/dev/null 2>&1; echo $?)" -eq 0 ] && ! grep -q '✘\|PREFLIGHT ' <<<"$out"; then
+  report pass "--json does not also print the human report"
+else
+  report fail "--json does not also print the human report" "$out"
+fi
+
+# --- exit codes are unchanged by --json --------------------------------------
+run_preflight regression --json >/dev/null 2>&1; rc_json=$?
+run_preflight regression >/dev/null 2>&1; rc_human=$?
+if [ "$rc_json" -eq 1 ] && [ "$rc_json" -eq "$rc_human" ]; then
+  report pass "--json exits 1 same as human output"
+else
+  report fail "--json exits 1 same as human output" "json rc=$rc_json human rc=$rc_human"
+fi
+
+# --- unknown option: checker could not run, exit 2, not 1 --------------------
+out=$(run_preflight healthy --bogus-flag 2>&1); rc=$?
+if [ "$rc" -eq 2 ]; then
+  report pass "unknown option yields exit 2, not 1"
+else
+  report fail "unknown option yields exit 2, not 1" "got rc=$rc: $out"
+fi
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
