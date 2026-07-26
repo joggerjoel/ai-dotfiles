@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "widget": { "command": "npx", "args": ["-y", "widget-mcp"] }
+  }
+}

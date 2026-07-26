@@ -21,7 +21,7 @@
 - MCP handshake timeout: 180 seconds. A timeout yields `unknown` for every server, never `fail`.
 - JSON output carries `"schema": 1`.
 - All scripts must pass `shellcheck -S warning` (`just lint`). `shellcheck` is not installed on the dev machine; if unavailable, run `bash -n` and note the gap in the commit.
-- Findings record format is exactly: `class|name|verdict|detail|containable`.
+- `add_finding`'s public signature is `add_finding class name verdict detail containable` — call sites never move. The on-disk record format stores fields in a different order, `class|name|verdict|containable|detail`, with `detail` LAST so a detail containing a literal `|` survives `read` intact instead of shifting `containable` out of position.
 - File paths used by the checker are overridable by environment variable so tests never touch the real `$HOME`.
 
 ---
@@ -297,7 +297,9 @@ SKILLS_DIR="${PREFLIGHT_SKILLS_DIR:-$DOTFILES_DIR/skills}"
 SMOKE_DIR="${PREFLIGHT_SMOKE_DIR:-$DOTFILES_DIR/tests/smoke}"
 MCP_TIMEOUT="${PREFLIGHT_MCP_TIMEOUT:-180}"
 
-# class|name|verdict|detail|containable
+# On-disk field order: class|name|verdict|containable|detail (detail LAST —
+# see the M7 fix note below: a `|` inside a real detail must not shift
+# containable out of position).
 FINDINGS=()
 
 add_finding() {
@@ -1677,6 +1679,12 @@ No gaps.
 
 **Placeholder scan:** none. Every step contains runnable code or an exact command with expected output.
 
-**Type consistency:** the finding record is `class|name|verdict|detail|containable` in Tasks 2–8. `add_finding` takes those five positionally throughout. `count_verdict` reads field 3 everywhere. Class strings are `mcp`, `cli`, `env`, `hook`, `skill`, `smoke` — the same set in `render_class` calls, `run_smoke`, and `apply_quarantine`'s `[ "$c" = "mcp" ]` guard.
+**Type consistency:** `add_finding` takes five positional arguments — `class name verdict detail containable` — throughout Tasks 2–8, and no call site has ever moved. The on-disk finding record itself is `class|name|verdict|containable|detail` (detail stored LAST; see the 2026-07-26 minor-backlog fix below). `count_verdict` reads field 3 everywhere. Class strings are `mcp`, `cli`, `env`, `hook`, `skill`, `smoke` — the same set in `render_class` calls, `run_smoke`, and `apply_quarantine`'s `[ "$c" = "mcp" ]` guard.
 
 **One known deviation from the spec:** the spec says quarantine writes its backup "in the format `update.sh` already uses". Task 7 writes `~/.claude.json.preflight-<timestamp>.bak` beside the original instead, because `update.sh`'s snapshot layout is a whole-directory format built for rollback of an upgrade, and reusing it for a single-file change would require exporting internals from `update.sh`. The backup is still automatic and adjacent. Flag this to the user during execution; if they want true `rollback.sh` compatibility, that is a follow-up task.
+
+**2026-07-26 minor-backlog fixes (post-implementation):** the initial build described above shipped with two related gaps, closed on branch `fix/preflight-minor-backlog`:
+
+- The finding record originally stored `detail` before `containable` (`class|name|verdict|detail|containable`). A failure detail containing a literal `|` shifted `containable` out of position on read. `add_finding`'s signature is unchanged; only the stored order moved detail to the last field, since `read` assigns the remainder of the line — pipes and all — to its final variable.
+- The backup filename was a bare `preflight-<timestamp>.bak`, colliding across two runs in the same second. It is now built with `mktemp` (X's last, no suffix — BSD `mktemp` doesn't substitute a suffix placed after the X run) so it can never collide.
+- `scripts/preflight.sh` gained a `BASH_SOURCE`-vs-`$0` guard so tests can source it without running `main`, and `SCRIPT_DIR` now derives from `${BASH_SOURCE[0]}` instead of `$0` so path resolution stays correct when sourced.
