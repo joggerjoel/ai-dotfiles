@@ -56,22 +56,40 @@ standalone rather than shipping as an extension. Patterns worth copying:
   quiet connection survives
 - `maxPerDay` throttling on proactive delivery, default 3
 
-**OpenBrain** (`~/Documents/Projects/openbrain/openbrain-mcp`) already stores
-personal memory in Postgres 17 with pgvector, embeds through Ollama, and exposes
-a FastAPI on port 3000. Its `thoughts` table already lists `relationship` among
-its categories.
+**OpenBrain** (`richardahasting/openbrain-mcp`) is a personal memory system —
+Postgres 17 with pgvector, Ollama embeddings — and an earlier draft of this spec
+routed all writes through it. **That was wrong, on three counts verified against
+the repository rather than its README:**
 
-Mapping the draft's objects onto what exists:
+1. **We have read-only access.** `permissions: {push: false, admin: false}`. It is
+   not our project. Every option that required adding endpoints, extending
+   `capture_thought`, or landing a migration in its `migrations/` directory was
+   never available.
+2. **It exposes no write API.** `main.py` serves `POST /mcp` (JSON-RPC for LLM
+   tool-calling) plus read-only `/export`, `/backup`, `/metrics`. The "one shared
+   write path" that justified the coupling does not exist.
+3. **Adding `visibility` to its `thoughts` table would leak private DMs.** None of
+   its read paths — `/export`, `/backup`, `search`, `browse`, `digest` — filter on
+   a column they do not know about. The private channel would have been a trap
+   from the first message.
 
-| Draft object | OpenBrain today                                                                             |
-| ------------ | ------------------------------------------------------------------------------------------- |
-| Memory       | `thoughts` — embedding(768), tsv, `confidence`, `trust_weight`, `verified_at`, `expires_at` |
-| Relationship | `thought_links` — `source_id`, `target_id`, `relation_type`                                 |
-| Interaction  | `thoughts` with `source`, plus `daily_logs`                                                 |
-| Person       | Absent. This is the gap this project fills.                                                 |
+A fourth risk stands even with write access: `008_switch_to_jina_embedding.sql`
+shows the embedding model has already changed once, which would silently
+invalidate any person vectors we stored alongside.
 
-`singleton_key UNIQUE` already implements auto-replace, which relationship facts
-need: employers change, titles change, plans slip.
+**What we keep is the column design**, which is free and needs no permission.
+OpenBrain's `thoughts` table got the hard parts right, and `memories` borrows
+them directly:
+
+| Draft object | This system |
+| --- | --- |
+| Memory | `memories` — `confidence`, `trust_weight`, `verified_at`, `expires_at`, `singleton_key` |
+| Relationship | `memory_people` — one memory, several subjects |
+| Interaction | `interactions` — channel, participants, excerpt |
+| Person | `people` — the object neither system had |
+
+`singleton_key UNIQUE` implements auto-replace, which relationship facts need:
+employers change, titles change, plans slip.
 
 ## Decisions
 
@@ -83,9 +101,9 @@ need: employers change, titles change, plans slip.
 | Nudge routing     | Owner's DM; group when both are involved  | Keeps the shared room quiet and the daily cap effective      |
 | Transport         | Baileys linked device                     | Reads existing groups; no Official Business Account gate     |
 | Build target      | Standalone service                        | Full control; avoids coupling to OpenClaw's release cycle    |
-| Storage           | Relational tables plus `thoughts` vectors | Structured triggers and semantic recall in one transaction   |
-| Database          | OpenBrain Postgres on the OpenBrain host  | Shared with future consumers                                 |
-| Write path        | openbrain-mcp FastAPI :3000               | One write path for bot, Claude Code, and future IVR          |
+| Storage           | Relational tables, own schema             | Structured triggers now; semantic recall in Phase 2          |
+| Database          | The bot's own database on aorus4          | Colocated with the voice stack; no shared schema             |
+| Write path        | Direct Postgres                           | The guard and the write commit in one transaction            |
 | Extraction model  | Ollama local, cloud override in config    | The data describes people who never consented to a cloud API |
 | Resolution policy | Cautious, with a decisions log            | False merges cost far more than false splits                 |
 | Outbound          | Drafts only                               | An extraction bug must not reach a third party               |
@@ -121,13 +139,11 @@ exploratory. See Prerequisites.
     trigger/     scheduler tick
     compose/     draft generation
     approval/    reactions to outcomes
-         │  HTTP
+         │  postgres.js
          ▼
-  openbrain-mcp FastAPI :3000
-         │
-  Postgres 17 + pgvector
-    thoughts, thought_links      (existing)
-    people, interactions, triggers, resolution_log  (new)
+  Postgres on aorus4 — the bot's own database
+    people, memories, memory_people, interactions,
+    triggers, clarifications, resolution_log, write_ops
          ▲
          └── future consumer: IVR / voice-platform
 ```
@@ -188,7 +204,15 @@ clarifications (
 )
 
 -- additive, defaulted, safe for existing rows
-ALTER TABLE thoughts ADD COLUMN visibility TEXT DEFAULT 'shared';
+memories (
+  id, content, user_id, category, source,
+  confidence, trust_weight, verified_at, expires_at,
+  singleton_key UNIQUE,          -- auto-replace: employers and plans change
+  visibility,                    -- 'shared' | 'private'
+  status, metadata, created_at, updated_at
+)
+
+write_ops (op_id PRIMARY KEY, kind, result_id, created_at)
 ```
 
 Four choices carry weight:
@@ -204,10 +228,17 @@ memory about two people, and referral tracking hits that case immediately.
 may meet someone while the other owes the follow-up. Collapsing the two columns
 would erase who is on the hook.
 
-**`thoughts.visibility` defaults to `shared`, and DM capture overrides it to
-`private`.** The default protects every existing row and everything captured in
-the group, where both users are present anyway. The override protects the
-channel that only works if it is genuinely private.
+**`visibility` defaults to `shared` on both `people` and `memories`; DM capture
+overrides it to `private`.** The default matches group capture, where both users
+are present anyway. The override protects the channel that only works if it is
+genuinely private — and because this is our own schema, every read path is ours
+to filter. That was the decisive argument against writing into OpenBrain, whose
+`/export` would have returned private rows it never knew to exclude.
+
+**`write_ops` is an idempotency ledger, claimed in the same transaction as the
+write it guards.** Over HTTP the two could not be atomic: a crash between "insert
+row" and "record op_id" left the write done and unrecorded, so the queue's replay
+duplicated it. Direct Postgres closes that window.
 
 `people.embedding` answers the question SQL cannot: who among our contacts would
 care about this launch.
@@ -345,7 +376,12 @@ happens only after the author agrees, and the bot records who promoted what.
 environment. The Baileys credential directory holds a live WhatsApp session and
 requires mode 700.
 
-**Third-party data lands in a shared store.** People discussed in the group
+**The bot's data stays in the bot's database.** Nothing is written into
+OpenBrain, which we cannot modify and whose read paths would expose private rows
+through `/export`. Colocating on the same Postgres server keeps a future IVR
+able to join across databases without sharing a schema.
+
+**Third-party data lands in a durable store.** People discussed in the group
 acquire durable records they never consented to. Deletion by person must work
 from day one, and `expires_at` should carry a default for low-confidence
 extractions.
@@ -368,9 +404,10 @@ extractions.
    blast radius of a ban and restricts the linked device to the bot's group. A
    personal number risks the user's real WhatsApp account. OpenClaw's own
    documentation recommends a dedicated number. Settle this before QR pairing.
-2. **Confirm the OpenBrain deployment.** Its README describes Postgres 17 with
-   pgvector on a Mac Mini; the target host also runs a separate `postgres:16`
-   instance for the voice stack. Confirm which instance receives migration 009.
+2. **Create the bot's database on aorus4.** `CREATE DATABASE prmm` with a role
+   the bot owns, then apply `migrations/001_init.sql`. No pgvector needed:
+   Phase 1 resolves identity by string, so nothing writes an embedding. The
+   extension arrives with Phase 2's semantic person search.
 3. **Verify Ollama** serves `jina/jina-embeddings-v2-base-en` and a model
    capable of structured extraction on the target host.
 4. **Rotate the leaked MySQL root credential** found in plaintext in Claude Code
