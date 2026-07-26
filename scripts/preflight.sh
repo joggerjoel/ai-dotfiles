@@ -339,6 +339,9 @@ render_json() {
 # Disable failing MCP servers, recording why and when. Only class=mcp with
 # verdict=fail and containable=yes is eligible: UNKNOWN is never quarantined,
 # because "needs authentication" is an unfinished setup, not a fault.
+#
+# All human-readable output goes to stderr: `preflight.sh --json --quarantine`
+# must still emit nothing but the JSON document on stdout (see render_json).
 apply_quarantine() {
   local f c n v d cont applied=0 backup ts
   ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -350,28 +353,38 @@ apply_quarantine() {
 
     if [ "$applied" -eq 0 ]; then
       backup="${CLAUDE_JSON}.preflight-$(date '+%Y%m%d_%H%M%S').bak"
-      cp "$CLAUDE_JSON" "$backup"
-      printf '\nQUARANTINE\n  backed up %s\n' "$backup"
+      if ! cp "$CLAUDE_JSON" "$backup"; then
+        echo "preflight: could not back up $CLAUDE_JSON to $backup — aborting quarantine" >&2
+        return
+      fi
+      printf '\nQUARANTINE\n  backed up %s\n' "$backup" >&2
     fi
 
     local tmp
-    tmp="$(mktemp)"
+    # Same directory as $CLAUDE_JSON (not $TMPDIR) so the final `mv` is a true
+    # atomic rename on one filesystem, and the temp file inherits its perms.
+    tmp="$(mktemp "${CLAUDE_JSON}.XXXXXX")"
     # Preserve an existing quarantinedAt so re-running is idempotent.
-    jq --arg k "$n" --arg r "$d" --arg t "$ts" '
+    if ! jq --arg k "$n" --arg r "$d" --arg t "$ts" '
       .mcpServers[$k].disabled = true
       | .mcpServers[$k]._preflight.quarantinedAt =
           (.mcpServers[$k]._preflight.quarantinedAt // $t)
       | .mcpServers[$k]._preflight.reason = $r
-    ' "$CLAUDE_JSON" > "$tmp" && mv "$tmp" "$CLAUDE_JSON"
+    ' "$CLAUDE_JSON" > "$tmp"; then
+      echo "preflight: jq failed while quarantining $n — leaving it untouched" >&2
+      rm -f "$tmp"
+      continue
+    fi
+    mv "$tmp" "$CLAUDE_JSON"
 
-    printf '  → %-18s disabled: true\n' "$n"
+    printf '  → %-18s disabled: true\n' "$n" >&2
     applied=$((applied + 1))
   done
 
   if [ "$applied" -eq 0 ]; then
-    printf '\nQUARANTINE\n  nothing containable\n'
+    printf '\nQUARANTINE\n  nothing containable\n' >&2
   else
-    printf '  %d contained · re-enable with ./setup.sh add <name>\n' "$applied"
+    printf '  %d contained · re-enable with ./setup.sh add <name>\n' "$applied" >&2
   fi
 }
 

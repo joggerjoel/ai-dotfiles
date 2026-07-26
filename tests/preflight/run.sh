@@ -287,6 +287,25 @@ else
   report fail "quarantine leaves non-containable failures alone"
 fi
 
+# PASSING servers must never be touched. This is the guard the reviewer of
+# 4fe3ff4 broke by replacing `[ "$c" = "mcp" ] && [ "$v" = "fail" ] &&
+# [ "$cont" = "yes" ] || continue` with bare `[ "$c" = "mcp" ] || continue` —
+# the suite still reported 37/0 because the only servers exercised above are
+# either fail+containable or entirely absent from mcpServers. context7 and
+# github are both PASS and present in the regression fixture's claude.json,
+# so they catch exactly this regression.
+if jq -e '.mcpServers.context7 | has("disabled") | not' "$QDIR/claude.json" >/dev/null 2>&1; then
+  report pass "quarantine leaves a passing server (context7) untouched"
+else
+  report fail "quarantine leaves a passing server (context7) untouched" "$(cat "$QDIR/claude.json")"
+fi
+
+if jq -e '.mcpServers.github | has("disabled") | not' "$QDIR/claude.json" >/dev/null 2>&1; then
+  report pass "quarantine leaves a passing server (github) untouched"
+else
+  report fail "quarantine leaves a passing server (github) untouched" "$(cat "$QDIR/claude.json")"
+fi
+
 # Idempotent re-run: quarantining an already-quarantined server must preserve
 # the original quarantinedAt timestamp, not stamp a new one each time.
 first_ts=$(jq -r '.mcpServers.magic._preflight.quarantinedAt' "$QDIR/claude.json")
@@ -306,6 +325,30 @@ else
 fi
 
 rm -rf "$QDIR"
+
+# --- quarantine: unknown-verdict server present in mcpServers must survive --
+# ghost-server is configured (present in mcpServers) but classified `unknown`
+# (absent from `claude mcp list` output). Unlike agent-browser/stripe above,
+# this checks a server that IS in mcpServers with verdict=unknown, so a guard
+# regression that drops the `[ "$v" = "fail" ]` clause would catch it too.
+GDIR=$(mktemp -d)
+cp "$TESTS_DIR/fixtures/ghost/claude.json" "$GDIR/claude.json"
+
+PATH="$TESTS_DIR/stubs:$PATH" \
+PREFLIGHT_FIXTURE="$TESTS_DIR/fixtures/ghost" \
+PREFLIGHT_CLAUDE_JSON="$GDIR/claude.json" \
+PREFLIGHT_SETTINGS_JSON="$TESTS_DIR/fixtures/ghost/settings.json" \
+PREFLIGHT_ENV_FILE="$TESTS_DIR/fixtures/ghost/env" \
+PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/ghost/skills" \
+  bash "$REPO_DIR/scripts/preflight.sh" --quarantine >/dev/null 2>&1
+
+if jq -e '.mcpServers["ghost-server"] | has("disabled") | not' "$GDIR/claude.json" >/dev/null 2>&1; then
+  report pass "quarantine leaves an unknown-verdict server (ghost-server) untouched"
+else
+  report fail "quarantine leaves an unknown-verdict server (ghost-server) untouched" "$(cat "$GDIR/claude.json")"
+fi
+
+rm -rf "$GDIR"
 
 echo ""
 echo "  $PASS passed, $FAIL failed"
