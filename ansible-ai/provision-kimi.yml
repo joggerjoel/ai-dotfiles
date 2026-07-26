@@ -1,0 +1,95 @@
+---
+# Install the Kimi Code CLI (`kimi`) on every fleet host (ai_all = aorus fleet +
+# macstudio + this box).
+#
+# One installer covers macOS and Linux — it detects the target, fetches a
+# prebuilt binary, and VERIFIES IT AGAINST A SHA-256 from the release manifest,
+# aborting on mismatch. It needs `shasum` or `sha256sum` present and refuses to
+# run without one rather than skipping verification (good behaviour; do not
+# work around it). Installs to ~/.kimi-code/bin and appends a PATH line to the
+# host's shell rc.
+#
+# NOTE: the download is ~151 MB per host. Budget for that on a cold fleet run.
+# Alpine/musl is unsupported by the installer (it errors with a clear message);
+# the aorus fleet is Ubuntu, so this is a non-issue today.
+#
+# Upgrades are NOT handled here — `scripts/agents-update.sh` owns that (it runs
+# `kimi upgrade`), and is driven by both ./update.sh locally and update.yml on
+# the fleet. This playbook is first-install only.
+#
+# Idempotent: skips any host that already has `kimi`.
+# Offline hosts are reported unreachable and skipped (ignore_unreachable).
+#
+# Run from the MacBook Pro control node (the mesh prune means macstudio can no
+# longer reach the workers):
+#   ansible-playbook ansible-ai/provision-kimi.yml
+#   ansible-playbook ansible-ai/provision-kimi.yml --limit aorus_ai   # servers only
+- name: Install the Kimi Code CLI on the fleet
+  hosts: ai_all
+  gather_facts: true
+  ignore_unreachable: true
+  vars:
+    # Retry transient CDN/network errors so a blip doesn't hard-fail a host —
+    # matters more here than elsewhere given the 151 MB payload.
+    curl_retry: "--retry 5 --retry-delay 2 --retry-connrefused"
+    kimi_bin: "{{ ansible_env.HOME }}/.kimi-code/bin/kimi"
+  tasks:
+    - name: Check whether kimi is already installed
+      ansible.builtin.shell: |
+        export PATH="$HOME/.kimi-code/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        command -v kimi
+      register: kimi_check
+      changed_when: false
+      failed_when: false
+
+    # The installer verifies its own download against the manifest checksum, so
+    # we do not re-implement that here — we only assert the prerequisite exists,
+    # to fail with a clear message rather than mid-install.
+    - name: Ensure a SHA-256 tool is present (the installer requires one)
+      ansible.builtin.shell: command -v shasum || command -v sha256sum
+      register: sha_tool
+      changed_when: false
+      failed_when: false
+      when: kimi_check.rc | default(1) != 0
+
+    - name: Fail clearly when no SHA-256 tool is available
+      ansible.builtin.fail:
+        msg: >-
+          {{ inventory_hostname }}: neither shasum nor sha256sum found; the Kimi
+          installer refuses to run without checksum verification. Install
+          coreutils/perl first rather than bypassing the check.
+      when:
+        - kimi_check.rc | default(1) != 0
+        - sha_tool.rc | default(1) != 0
+        - ansible_system is defined
+
+    - name: Install kimi via the official installer (macOS and Linux)
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl {{ curl_retry }} --proto '=https' --tlsv1.2 -fsSL \
+          https://code.kimi.com/kimi-code/install.sh | bash
+      args:
+        executable: /bin/bash
+      when:
+        - kimi_check.rc | default(1) != 0
+        - sha_tool.rc | default(1) == 0
+        - ansible_system | default('') in ["Darwin", "Linux"]
+      changed_when: true
+      # 151 MB over a home connection can outrun the default; give it room.
+      async: 900
+      poll: 15
+
+    # Skipped on hosts with no gathered facts (offline/unreachable) so a down
+    # box recaps as a clean skip, never a false failure.
+    - name: Verify kimi is now available and report the version
+      ansible.builtin.shell: |
+        export PATH="$HOME/.kimi-code/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        kimi --version
+      register: kimi_ver
+      changed_when: false
+      failed_when: kimi_ver.rc | default(0) != 0
+      when: ansible_system is defined
+
+    - name: Report installed version
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: kimi {{ kimi_ver.stdout | default('(host offline — skipped)') | trim }}"
