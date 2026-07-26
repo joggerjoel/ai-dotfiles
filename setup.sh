@@ -75,10 +75,10 @@ mcp_json_for() {
     digitalocean)
       echo "{\"command\":\"npx\",\"args\":[\"@digitalocean/mcp\",\"--services\",\"apps,databases\"],\"env\":{\"DIGITALOCEAN_API_TOKEN\":\"${key_val}\"}}";;
     n8n)
-      local url="${extra_val:-https://n8n.example.com/mcp-server/http}"
+      local url="${extra_val:-https://REPLACE-ME.invalid/mcp-server/http}"
       echo "{\"type\":\"http\",\"url\":\"${url}\",\"headers\":{\"Authorization\":\"Bearer ${key_val}\"}}";;
     crawl4ai)
-      local url="${extra_val:-https://crawl.example.com/mcp/sse}"
+      local url="${extra_val:-https://REPLACE-ME.invalid/mcp/sse}"
       echo "{\"type\":\"sse\",\"url\":\"${url}\",\"headers\":{\"Authorization\":\"Bearer ${key_val}\"}}";;
     playwright)
       echo '{"command":"npx","args":["@playwright/mcp@latest"]}';;
@@ -944,6 +944,12 @@ cmd_setup() {
         if [ -n "$extra_vars" ]; then
           echo -ne "  ${BOLD}${name}${RESET} - ${extra_vars}: "
           read -r extra_val || extra_val=""
+
+          if [ -z "$extra_val" ]; then
+            # No URL provided - install disabled rather than enabled against
+            # the unreachable placeholder host
+            should_disable="true"
+          fi
         fi
       fi
 
@@ -1051,6 +1057,11 @@ cmd_add() {
     if [ -n "$extra_vars" ]; then
       echo -ne "  ${extra_vars}: "
       read -r extra_val || extra_val=""
+
+      if [ -z "$extra_val" ]; then
+        fail "${extra_vars} required for $name"
+        exit 1
+      fi
     fi
   fi
 

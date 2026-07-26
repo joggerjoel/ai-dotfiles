@@ -4,7 +4,7 @@ set -uo pipefail
 # ─────────────────────────────────────────────────────────────────
 # agents-update.sh — upgrade the sibling agent CLIs, when installed:
 #   codex (OpenAI), cursor-agent (Cursor), opencode, gemini (Google), pi (Earendil),
-#   grok (xAI),
+#   grok (xAI), kimi (Moonshot Kimi Code),
 #   cortex (Snowflake Cortex Code), headroom (context-optimization proxy).
 # Also reports (but never updates) the 9router gateway — a Docker
 # service on the fleet, not a local CLI; see the block at the bottom.
@@ -175,6 +175,17 @@ update_cli "pi" "pi" "\"%BIN%\" update self || $PI_INSTALL" "$PI_INSTALL"
 # many third-party grok-cli packages are NOT interchangeable.
 GROK_INSTALL="npm install -g @xai-official/grok@latest"
 update_cli "grok" "grok" "$GROK_INSTALL" "$GROK_INSTALL"
+
+# kimi (Kimi Code CLI, Moonshot) — installs to ~/.kimi-code/bin, which is off
+# PATH in the non-login shells Ansible and cron use, so resolve it by absolute
+# path first (update_cli falls back to `command -v`). It ships a native
+# `upgrade` subcommand; the official installer is the fallback and doubles as
+# the installer for a missing host. That installer pulls a ~151 MB binary and
+# verifies it against a SHA-256 from the release manifest.
+# NB: MoonshotAI/kimi-cli (the older Python CLI) is a DIFFERENT, wound-down
+# project — this is kimi-code, its successor.
+KIMI_INSTALL="curl $CURL_RETRY --proto '=https' --tlsv1.2 -fsSL https://code.kimi.com/kimi-code/install.sh | bash"
+update_cli "kimi" "$HOME/.kimi-code/bin/kimi" "\"%BIN%\" upgrade || $KIMI_INSTALL" "$KIMI_INSTALL"
 
 # just (command runner — the justfile launchpad). Same split as gemini:
 # brew-managed where brew manages it, otherwise the official installer,
