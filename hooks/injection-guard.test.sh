@@ -34,6 +34,22 @@ t "Bash: nested stdout, newline-prefixed" 2 \
   "$(jq -cn --arg p "$PAY" '{tool_name:"Bash",tool_input:{command:"cat n.md"},
      tool_response:{stdout:("header\n"+$p),stderr:"",interrupted:false}}')"
 
+echo "── self-reference suppression ─────────────────────────"
+# The guard's own source/tests/log contain the patterns by necessity. Reading them
+# must not fire; reading an unrelated file that discusses them still must.
+t "reading the guard's own source" 0 \
+  "$(jq -cn --arg p "$PAY" '{tool_name:"Read",tool_input:{file_path:"/home/u/ai-dotfiles/hooks/injection-guard.py"},
+     tool_response:{type:"text",file:{content:("BLOCK_PATTERNS = [\n"+$p)}}}')"
+t "running the guard's test suite" 0 \
+  "$(jq -cn --arg p "$PAY" '{tool_name:"Bash",tool_input:{command:"bash hooks/injection-guard.test.sh"},
+     tool_response:{stdout:("PASS\n"+$p)}}')"
+t "grepping the guard log" 0 \
+  "$(jq -cn --arg p "$PAY" '{tool_name:"Bash",tool_input:{command:"tail ~/.claude/hooks/.logs/injection-guard.jsonl"},
+     tool_response:{stdout:$p}}')"
+t "UNRELATED file discussing injection" 2 \
+  "$(jq -cn --arg p "$PAY" '{tool_name:"Read",tool_input:{file_path:"/home/u/notes/security.md"},
+     tool_response:{type:"text",file:{content:("On defence:\n"+$p)}}}')"
+
 echo "── genuine injection still caught ─────────────────────"
 t "cat of a malicious file" 2 \
   "$(jq -cn --arg p "$PAY" '{tool_name:"Bash",tool_input:{command:"cat notes.md"},tool_response:{stdout:$p}}')"
