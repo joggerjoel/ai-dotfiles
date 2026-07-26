@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -29,7 +30,14 @@ from pathlib import Path
 QUIET = "--quiet" in sys.argv
 CHECK = "--check" in sys.argv      # compare to baseline, non-zero on drift
 ACCEPT = "--accept" in sys.argv    # record current numbers as the new baseline
-BASELINE = Path(__file__).resolve().with_name("injection-guard.baseline.json")
+# Per-host, and deliberately OUTSIDE the repo. Each machine has its own transcript
+# history, so a committed baseline is a number from someone else's corpus — it made
+# every fleet host fail this check against a rate recorded on the laptop. Lives
+# beside the log, which is already per-host and already gitignored by location.
+BASELINE = Path(
+    os.environ.get("INJECTION_GUARD_BASELINE")
+    or Path.home() / ".claude" / "hooks" / ".logs" / "injection-guard.baseline.json"
+)
 
 # How far the hit rate may drift before a human has to look. Corpus grows as you
 # work, so small movement is normal; a big move means the change altered what the

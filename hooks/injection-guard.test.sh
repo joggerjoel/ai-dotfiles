@@ -115,12 +115,17 @@ echo "── backtest vs baseline (real traffic) ──────────�
 # (fleet hosts), because absent evidence must not read as a pass.
 BT="$(dirname "$0")/injection-guard.backtest.py"
 if [ -n "$(find "$HOME/.claude/projects" -name '*.jsonl' -print -quit 2>/dev/null)" ]; then
-  if out="$("$BT" --check --quiet 2>&1)"; then
+  out="$("$BT" --check --quiet 2>&1)"; rc=$?
+  if [ "$rc" -eq 0 ]; then
     printf '  PASS  %s\n' "$(printf '%s' "$out" | grep -E 'baseline .* now ' | sed 's/^ *//')"
     pass=$((pass+1))
+  elif printf '%s' "$out" | grep -q 'NO BASELINE'; then
+    # A host that has never recorded one is un-gated, not broken. Baselines are
+    # per-host because corpora differ; say so rather than failing every fleet box.
+    printf '  SKIP  no baseline on this host — record with: %s --accept\n' "$(basename "$BT")"
   else
     printf '  FAIL  backtest drift — run it directly for the hit list\n'
-    printf '%s\n' "$out" | grep -E 'baseline .* now |NO BASELINE|rate (FELL|ROSE)|--accept' | sed 's/^/        /'
+    printf '%s\n' "$out" | grep -E 'baseline .* now |rate (FELL|ROSE)|--accept' | sed 's/^/        /'
     fail=$((fail+1))
   fi
 else
