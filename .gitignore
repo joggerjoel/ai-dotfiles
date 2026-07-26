@@ -28,7 +28,7 @@ backups/
 backup/
 
 # Python bytecode from importing hooks (injection-guard backtest)
+__pycache__/
 
 # git worktrees created by EnterWorktree (scratch, never committed)
 .claude/worktrees/
-__pycache__/
