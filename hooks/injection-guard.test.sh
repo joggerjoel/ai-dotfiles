@@ -23,6 +23,17 @@ t "self-authored: payload in Bash command" 0 \
 t "self-authored: grepping the guard log" 0 \
   "$(jq -cn --arg p "$PAY" '{tool_name:"Bash",tool_input:{command:("grep \""+$p+"\" log.jsonl")},tool_response:{stdout:$p}}')"
 
+echo "── real payload shapes (regression: 2026-07-26) ───────"
+# Read nests content two levels down AND the payload arrives with real newlines.
+# The old json.dumps fallback escaped those to a literal \n, putting a word char
+# before the phrase and killing every \b anchor. Both must match.
+t "Read: nested file.content, newline-prefixed" 2 \
+  "$(jq -cn --arg p "$PAY" '{tool_name:"Read",tool_input:{file_path:"/tmp/n.md"},
+     tool_response:{type:"text",file:{filePath:"/tmp/n.md",content:("Notes.\n\n"+$p+"\n"),numLines:3}}}')"
+t "Bash: nested stdout, newline-prefixed" 2 \
+  "$(jq -cn --arg p "$PAY" '{tool_name:"Bash",tool_input:{command:"cat n.md"},
+     tool_response:{stdout:("header\n"+$p),stderr:"",interrupted:false}}')"
+
 echo "── genuine injection still caught ─────────────────────"
 t "cat of a malicious file" 2 \
   "$(jq -cn --arg p "$PAY" '{tool_name:"Bash",tool_input:{command:"cat notes.md"},tool_response:{stdout:$p}}')"
