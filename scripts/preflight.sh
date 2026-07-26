@@ -52,9 +52,30 @@ FINDINGS=()
 CHECKER_BROKEN=0
 CHECKER_REASON=""
 MCP_TIMED_OUT=0
+CONFIG_MALFORMED_CLAUDE=0
+CONFIG_MALFORMED_SETTINGS=0
 
 add_finding() {
   FINDINGS+=("$1|$2|$3|$4|$5")
+}
+
+# Every jq call against $CLAUDE_JSON / $SETTINGS_JSON elsewhere in this script
+# is `2>/dev/null`, on purpose: a *missing* file just means "nothing
+# configured" and must stay non-fatal. But that same tolerance means a file
+# that exists and is simply corrupt gets swallowed identically — whole
+# classes (mcp cross-reference, env, hooks) silently produce zero findings
+# and the run looks clean. Validate both files once, up front, and turn a
+# malformed-but-present file into an explicit `fail` finding naming the file
+# and what it takes down, instead of letting it evaporate.
+validate_configs() {
+  if [ -f "$CLAUDE_JSON" ] && ! jq -e . "$CLAUDE_JSON" >/dev/null 2>&1; then
+    CONFIG_MALFORMED_CLAUDE=1
+    add_finding config "$CLAUDE_JSON" fail "malformed JSON — mcp cross-reference and env probes cannot run" no
+  fi
+  if [ -f "$SETTINGS_JSON" ] && ! jq -e . "$SETTINGS_JSON" >/dev/null 2>&1; then
+    CONFIG_MALFORMED_SETTINGS=1
+    add_finding config "$SETTINGS_JSON" fail "malformed JSON — hooks probe cannot run" no
+  fi
 }
 
 # Count findings matching a verdict.
@@ -72,12 +93,10 @@ probe_mcp() {
   local out rc line name detail
   local seen_names=""
 
-  if ! command -v claude >/dev/null 2>&1; then
-    CHECKER_BROKEN=1
-    CHECKER_REASON="claude CLI not found on PATH"
-    return
-  fi
-
+  # No `command -v claude` guard here: check_preconditions() already verified
+  # `claude` is on PATH before main() ever calls probe_mcp, and exited 2 if
+  # not. A duplicate guard here could never fire — see main()'s single
+  # CHECKER_BROKEN check right after check_preconditions.
   out=$(timeout "$MCP_TIMEOUT" claude mcp list 2>&1)
   rc=$?
 
@@ -121,13 +140,24 @@ probe_mcp() {
   # recognize). That's still an observable gap, not a clean bill of health —
   # report it as `unknown` (never `fail`: we don't know it's broken, only
   # that we couldn't observe it) so it can't be auto-quarantined.
-  local cfg_key
+  local cfg_key quarantined_at reason
   while IFS= read -r cfg_key; do
     [ -n "$cfg_key" ] || continue
     case "$seen_names" in
       *"|$cfg_key|"*) continue ;;
     esac
-    add_finding mcp "$cfg_key" unknown "configured but absent from claude mcp list output" no
+    # This is preflight's own quarantine marker (see apply_quarantine):
+    # distinguish "I disabled this on purpose" from a genuine unexplained
+    # absence, so a server we quarantined ourselves doesn't come back next
+    # run looking like a fresh, unexplained gap. Verdict stays `unknown` —
+    # a quarantined server must never become containable again.
+    quarantined_at=$(jq -r --arg k "$cfg_key" '.mcpServers[$k]._preflight.quarantinedAt // empty' "$CLAUDE_JSON" 2>/dev/null)
+    if [ -n "$quarantined_at" ]; then
+      reason=$(jq -r --arg k "$cfg_key" '.mcpServers[$k]._preflight.reason // "no reason recorded"' "$CLAUDE_JSON" 2>/dev/null)
+      add_finding mcp "$cfg_key" unknown "quarantined by preflight on $quarantined_at: $reason" no
+    else
+      add_finding mcp "$cfg_key" unknown "configured but absent from claude mcp list output" no
+    fi
   done < <(jq -r '.mcpServers // {} | keys[]' "$CLAUDE_JSON" 2>/dev/null)
 }
 
@@ -288,6 +318,7 @@ render_human() {
 
   printf 'PREFLIGHT  %s\n' "$(date '+%Y-%m-%d %H:%M')"
 
+  render_class config "CONFIG FILES"
   render_class mcp   "MCP SERVERS"
   render_class cli   "MANDATED CLIS"
   render_class env   "ENV-VAR SERVICES"
@@ -344,7 +375,7 @@ render_json() {
 # All human-readable output goes to stderr: `preflight.sh --json --quarantine`
 # must still emit nothing but the JSON document on stdout (see render_json).
 apply_quarantine() {
-  local f c n v d cont applied=0 backup ts
+  local f c n v d cont applied=0 failed=0 backup_done=0 backup ts
   ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
   for f in ${FINDINGS+"${FINDINGS[@]}"}; do
@@ -352,13 +383,17 @@ apply_quarantine() {
     [ "$c" = "mcp" ] && [ "$v" = "fail" ] && [ "$cont" = "yes" ] || continue
     jq -e --arg k "$n" '.mcpServers | has($k)' "$CLAUDE_JSON" >/dev/null 2>&1 || continue
 
-    if [ "$applied" -eq 0 ]; then
+    # Backed up at most once per run, regardless of how many servers below
+    # fail to write: `applied` only counts successful writes, so gating the
+    # backup on it re-ran the cp/banner once per failing server.
+    if [ "$backup_done" -eq 0 ]; then
       backup="${CLAUDE_JSON}.preflight-$(date '+%Y%m%d_%H%M%S').bak"
       if ! cp "$CLAUDE_JSON" "$backup"; then
         echo "preflight: could not back up $CLAUDE_JSON to $backup — aborting quarantine" >&2
         return
       fi
       printf '\nQUARANTINE\n  backed up %s\n' "$backup" >&2
+      backup_done=1
     fi
 
     local tmp
@@ -374,18 +409,32 @@ apply_quarantine() {
     ' "$CLAUDE_JSON" > "$tmp"; then
       echo "preflight: jq failed while quarantining $n — leaving it untouched" >&2
       rm -f "$tmp"
+      failed=$((failed + 1))
       continue
     fi
-    mv "$tmp" "$CLAUDE_JSON"
+
+    # mv must be checked like the jq call above it: on failure, $CLAUDE_JSON
+    # is untouched (mv never started writing it — rename is atomic), so
+    # report the same "left it untouched" outcome rather than the success
+    # line, and don't count it as applied.
+    if ! mv "$tmp" "$CLAUDE_JSON"; then
+      echo "preflight: mv failed while quarantining $n — leaving it untouched" >&2
+      rm -f "$tmp"
+      failed=$((failed + 1))
+      continue
+    fi
 
     printf '  → %-18s disabled: true\n' "$n" >&2
     applied=$((applied + 1))
   done
 
-  if [ "$applied" -eq 0 ]; then
+  if [ "$applied" -eq 0 ] && [ "$failed" -eq 0 ]; then
     printf '\nQUARANTINE\n  nothing containable\n' >&2
+  elif [ "$applied" -eq 0 ]; then
+    printf '\nQUARANTINE\n  %d write(s) failed — nothing was contained\n' "$failed" >&2
   else
     printf '  %d contained · re-enable with ./setup.sh add <name>\n' "$applied" >&2
+    [ "$failed" -gt 0 ] && printf '  %d write(s) failed — see errors above\n' "$failed" >&2
   fi
 }
 
@@ -428,16 +477,13 @@ main() {
     exit 2
   fi
 
+  validate_configs
+
   probe_mcp
   probe_clis
   probe_env
   probe_hooks
   probe_skills
-
-  if [ "$CHECKER_BROKEN" -eq 1 ]; then
-    echo "preflight could not run: $CHECKER_REASON" >&2
-    exit 2
-  fi
 
   if [ "$MCP_TIMED_OUT" -eq 1 ]; then
     # stderr, not stdout: --json callers pipe stdout straight into `jq` and

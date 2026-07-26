@@ -161,6 +161,46 @@ else
   report fail "reports skill referencing a missing file" "$out"
 fi
 
+# --- probe_hooks: real coverage of an existing-and-executable hook vs a -----
+# --- missing one -------------------------------------------------------------
+# Every other fixture's settings.json is `{"hooks":{}}`, so a regression that
+# emptied probe_hooks entirely would still pass every other check in this
+# suite. This fixture wires one real, executing hook (hooks/exists.sh,
+# reachable via a literal "$HOME/hooks/exists.sh" command string that
+# probe_hooks expands using the *running* $HOME) and one hook pointing at a
+# path that's never created. $HOME is overridden only for this one
+# invocation, to the fixture directory itself — it never touches the real
+# $HOME, and no other PREFLIGHT_* default depends on it since all of them are
+# already set explicitly below.
+HOOKS_DIR="$TESTS_DIR/fixtures/hooks"
+out=$(HOME="$HOOKS_DIR" \
+      PATH="$TESTS_DIR/stubs:$PATH" \
+      PREFLIGHT_FIXTURE="$HOOKS_DIR" \
+      PREFLIGHT_CLAUDE_JSON="$HOOKS_DIR/claude.json" \
+      PREFLIGHT_SETTINGS_JSON="$HOOKS_DIR/settings.json" \
+      PREFLIGHT_ENV_FILE="$HOOKS_DIR/env" \
+      PREFLIGHT_SKILLS_DIR="$HOOKS_DIR/skills" \
+      bash "$REPO_DIR/scripts/preflight.sh" 2>&1); rc=$?
+hooks_section=$(sed -n '/HOOKS & SCRIPTS/,/^$/p' <<<"$out")
+
+if grep '✔' <<<"$hooks_section" | grep -q 'exists.sh'; then
+  report pass "probe_hooks reports an existing, executable hook as pass"
+else
+  report fail "probe_hooks reports an existing, executable hook as pass" "$out"
+fi
+
+if grep -qE '✘.*missing\.sh.*does not exist' <<<"$hooks_section"; then
+  report pass "probe_hooks reports a missing hook path as fail"
+else
+  report fail "probe_hooks reports a missing hook path as fail" "$out"
+fi
+
+if [ "$rc" -eq 1 ]; then
+  report pass "a missing hook path flips the run's exit code to 1"
+else
+  report fail "a missing hook path flips the run's exit code to 1" "got rc=$rc: $out"
+fi
+
 # --- mandated CLIs: jq is definitely installed, so it must pass --------------
 out=$(run_preflight healthy 2>&1)
 cli_pass_line=$(sed -n '/MANDATED CLIS/,/^$/p' <<<"$out" | grep '✔')
@@ -185,6 +225,50 @@ if [ "$rc" -eq 2 ]; then
   report pass "missing claude yields exit 2, not 1"
 else
   report fail "missing claude yields exit 2, not 1" "got rc=$rc: $out"
+fi
+
+# --- malformed config: a corrupt claude.json/settings.json must NOT report --
+# --- green -------------------------------------------------------------------
+# Before the fix, every jq call against these files was `2>/dev/null`, so a
+# file that exists but fails to parse was swallowed exactly like a missing
+# one: the mcp cross-reference and probe_env silently produced nothing and
+# probe_hooks's class vanished, all while the run still exited 0. This is
+# a checker-*ran* problem (exit 1), not a checker-*broken* problem (exit 2):
+# `claude mcp list` itself still worked fine (context7 still connects below),
+# only the config-derived probes were blind.
+out=$(run_preflight malformed 2>&1); rc=$?
+if [ "$rc" -ne 0 ]; then
+  report pass "malformed claude.json does not produce a green run"
+else
+  report fail "malformed claude.json does not produce a green run" "got rc=$rc: $out"
+fi
+
+if grep -q 'claude.json' <<<"$out" && grep -qi 'malformed' <<<"$out"; then
+  report pass "malformed claude.json is named explicitly in the report"
+else
+  report fail "malformed claude.json is named explicitly in the report" "$out"
+fi
+
+if grep -q 'settings.json' <<<"$out" && grep -qi 'malformed' <<<"$out"; then
+  report pass "malformed settings.json is named explicitly in the report"
+else
+  report fail "malformed settings.json is named explicitly in the report" "$out"
+fi
+
+# The live `claude mcp list` output is independent of claude.json's own
+# validity — context7 must still show up as a pass, proving this isn't a
+# checker-broken (exit 2) situation, just a blind spot the fix now reports.
+if grep -qE '✔.*\bcontext7\b' <<<"$out"; then
+  report pass "malformed config still reports the live mcp probe (context7 pass)"
+else
+  report fail "malformed config still reports the live mcp probe (context7 pass)" "$out"
+fi
+
+out_json=$(run_preflight malformed --json 2>/dev/null)
+if jq -e '[.assets[] | select(.class=="config" and .verdict=="fail")] | length == 2' <<<"$out_json" >/dev/null 2>&1; then
+  report pass "--json reports both malformed config files as class=config fail"
+else
+  report fail "--json reports both malformed config files as class=config fail" "$out_json"
 fi
 
 # --- summary line -----------------------------------------------------------
@@ -349,6 +433,119 @@ else
 fi
 
 rm -rf "$GDIR"
+
+# --- cross-reference recognizes preflight's own quarantine marker -----------
+# Before the fix, the cross-reference branch had no way to tell "I disabled
+# this on purpose" from "this vanished for some other reason" — a server
+# quarantined last run came back next run reporting the same generic
+# "configured but absent" line the marker exists to prevent. fixtures/
+# quarantined/claude.json has magic pre-quarantined (disabled, with a stored
+# _preflight.quarantinedAt/reason) and absent from mcp-list.txt, simulating a
+# real `claude mcp list` that doesn't list a disabled server.
+out=$(run_preflight quarantined 2>&1); rc=$?
+
+if grep -q 'quarantined by preflight' <<<"$out"; then
+  report pass "cross-reference recognizes preflight's own quarantine marker"
+else
+  report fail "cross-reference recognizes preflight's own quarantine marker" "$out"
+fi
+
+if grep -q '2026-07-20T10:00:00Z' <<<"$out"; then
+  report pass "quarantine marker reports the stored quarantinedAt date"
+else
+  report fail "quarantine marker reports the stored quarantinedAt date" "$out"
+fi
+
+if grep -q 'Not authenticated' <<<"$out"; then
+  report pass "quarantine marker reports the stored reason"
+else
+  report fail "quarantine marker reports the stored reason" "$out"
+fi
+
+if ! grep -q 'configured but absent' <<<"$out"; then
+  report pass "quarantine marker replaces the generic 'configured but absent' line"
+else
+  report fail "quarantine marker replaces the generic 'configured but absent' line" "$out"
+fi
+
+if [ "$rc" -eq 0 ]; then
+  report pass "a preflight-quarantined server does not fail the run"
+else
+  report fail "a preflight-quarantined server does not fail the run" "got rc=$rc: $out"
+fi
+
+out_json=$(run_preflight quarantined --json 2>/dev/null)
+if jq -e '[.assets[] | select(.name=="magic" and .verdict=="unknown" and .containable==false)] | length == 1' <<<"$out_json" >/dev/null 2>&1; then
+  report pass "quarantine marker keeps verdict unknown and non-containable"
+else
+  report fail "quarantine marker keeps verdict unknown and non-containable" "$out_json"
+fi
+
+# --- quarantine: a failing mv must not be reported as a success (item 1) ----
+# Reproduced live: with mv failing, preflight printed false "disabled: true"
+# success lines and a false "N contained" count, while claude.json stayed
+# unmodified and temp files were left beside it. Shadow only `mv` with a stub
+# that always fails; jq/cp/claude are untouched so the rest of quarantine
+# still runs normally up to the final rename.
+MVDIR=$(mktemp -d)
+cp "$TESTS_DIR/fixtures/regression/claude.json" "$MVDIR/claude.json"
+before_hash=$(shasum "$MVDIR/claude.json" | awk '{print $1}')
+
+out=$(PATH="$TESTS_DIR/stubs-failmv:$TESTS_DIR/stubs:$PATH" \
+PREFLIGHT_FIXTURE="$TESTS_DIR/fixtures/regression" \
+PREFLIGHT_CLAUDE_JSON="$MVDIR/claude.json" \
+PREFLIGHT_SETTINGS_JSON="$TESTS_DIR/fixtures/regression/settings.json" \
+PREFLIGHT_ENV_FILE="$TESTS_DIR/fixtures/regression/env" \
+PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/regression/skills" \
+  bash "$REPO_DIR/scripts/preflight.sh" --quarantine 2>&1)
+
+after_hash=$(shasum "$MVDIR/claude.json" | awk '{print $1}')
+if [ "$before_hash" = "$after_hash" ]; then
+  report pass "a failing mv leaves claude.json byte-for-byte unmodified"
+else
+  report fail "a failing mv leaves claude.json byte-for-byte unmodified" "$out"
+fi
+
+if ! grep -q 'disabled: true' <<<"$out"; then
+  report pass "a failing mv prints no false 'disabled: true' success line"
+else
+  report fail "a failing mv prints no false 'disabled: true' success line" "$out"
+fi
+
+mv_fail_count=$(grep -c 'mv failed while quarantining' <<<"$out")
+if [ "$mv_fail_count" -eq 3 ]; then
+  report pass "a failing mv is reported once per containable server (3)"
+else
+  report fail "a failing mv is reported once per containable server (3)" "count=$mv_fail_count; $out"
+fi
+
+if ! grep -q 'nothing containable' <<<"$out"; then
+  report pass "a failing mv does not falsely report 'nothing containable'"
+else
+  report fail "a failing mv does not falsely report 'nothing containable'" "$out"
+fi
+
+if grep -qi 'write(s) failed' <<<"$out"; then
+  report pass "closing summary reflects the write failures instead of lying"
+else
+  report fail "closing summary reflects the write failures instead of lying" "$out"
+fi
+
+banner_count=$(grep -c 'backed up' <<<"$out")
+if [ "$banner_count" -eq 1 ]; then
+  report pass "backup banner prints exactly once despite 3 failing writes"
+else
+  report fail "backup banner prints exactly once despite 3 failing writes" "count=$banner_count; $out"
+fi
+
+leftover=$(find "$MVDIR" -maxdepth 1 -name 'claude.json.??????' 2>/dev/null | wc -l | tr -d ' ')
+if [ "$leftover" -eq 0 ]; then
+  report pass "a failing mv does not leave temp files behind"
+else
+  report fail "a failing mv does not leave temp files behind" "leftover=$leftover in $MVDIR"
+fi
+
+rm -rf "$MVDIR"
 
 # --- tier 3 smoke -----------------------------------------------------------
 out=$(run_preflight regression --smoke 2>&1)
