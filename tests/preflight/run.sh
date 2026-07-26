@@ -381,6 +381,51 @@ else
   report fail "a smoke failure causes exit 1" "no-smoke rc=$rc_no_smoke smoke rc=$rc_smoke"
 fi
 
+# --- --json --smoke: the JSON-only-on-stdout contract under tier 3 ----------
+# regression's smoke dir covers only its two tier-2 passes (context7,
+# github); every other passing tier-1/2 asset (mandated CLIs, env services,
+# hooks, skills) has no matching smoke script and becomes `untested`. This is
+# the exact combination the c5048f5 review flagged: render_json ran before
+# run_smoke, so the document claimed "tier":3 while carrying zero tier-3
+# findings. stdout must still be exactly one JSON document, and that document
+# must actually carry the smoke results.
+out=$(run_preflight regression --json --smoke 2>/dev/null)
+if jq -e . <<<"$out" >/dev/null 2>&1; then
+  report pass "--json --smoke emits a single parseable JSON document"
+else
+  report fail "--json --smoke emits a single parseable JSON document" "$out"
+fi
+
+if jq -e '.summary.untested > 0' <<<"$out" >/dev/null 2>&1; then
+  report pass "--json --smoke summary reports untested > 0"
+else
+  report fail "--json --smoke summary reports untested > 0" "$out"
+fi
+
+if jq -e '[.assets[] | select(.class=="smoke")] | length > 0' <<<"$out" >/dev/null 2>&1; then
+  report pass "--json --smoke assets include smoke-class findings"
+else
+  report fail "--json --smoke assets include smoke-class findings" "$out"
+fi
+
+# --- --json --smoke: a failing smoke test still exits 1 with clean JSON ----
+# healthy's mcp-context7.sh smoke script deliberately fails, isolating the
+# ordering bug the same way the human-mode "a smoke failure causes exit 1"
+# check above does. The old code also printed human SMOKE/UNTESTED text
+# after the JSON document on the same stdout — assert that's gone too.
+out=$(run_preflight healthy --json --smoke 2>/dev/null); rc=$?
+if [ "$rc" -eq 1 ]; then
+  report pass "--json --smoke exits 1 on a failing smoke test"
+else
+  report fail "--json --smoke exits 1 on a failing smoke test" "got rc=$rc: $out"
+fi
+
+if jq -e . <<<"$out" >/dev/null 2>&1; then
+  report pass "--json --smoke stdout still parses as JSON when a smoke test fails"
+else
+  report fail "--json --smoke stdout still parses as JSON when a smoke test fails" "$out"
+fi
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

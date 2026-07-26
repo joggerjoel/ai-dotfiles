@@ -267,7 +267,7 @@ render_class() {
       pass)     passes+=("$n") ;;
       fail)     body+="$(printf '  ✘ %-18s %s' "$n" "$d")"$'\n' ;;
       unknown)  body+="$(printf '  ! %-18s %s' "$n" "$d")"$'\n' ;;
-      untested) body+="$(printf '  · %-18s %s' "$n" "$d")"$'\n' ;;
+      untested) body+="$(printf '  · %-18s untested — %s' "$n" "$d")"$'\n' ;;
     esac
   done
   [ "$total" -eq 0 ] && return
@@ -293,6 +293,7 @@ render_human() {
   render_class env   "ENV-VAR SERVICES"
   render_class hook  "HOOKS & SCRIPTS"
   render_class skill "REPO SKILLS"
+  render_class smoke "SMOKE"
 
   containable=0
   for f in ${FINDINGS+"${FINDINGS[@]}"}; do
@@ -388,40 +389,35 @@ apply_quarantine() {
   fi
 }
 
-# Tier 3. Runs only for assets that passed tier 2 — smoke-testing a server that
-# never connected buries the root cause under cascading noise.
+# Tier 3. Runs only for assets whose tier-2 verdict is pass — smoke-testing a
+# server that never connected buries the root cause under cascading noise.
+#
+# Findings only — no stdout output here. Both renderers must see identical
+# tier-3 results (render_json snapshots FINDINGS once; a document claiming
+# "tier":3 must actually carry smoke findings), and a --json run's stdout
+# must stay a single JSON document, so run_smoke cannot print human text of
+# its own. render_human's render_class call is what makes smoke results
+# visible in human mode; render_json's existing FINDINGS loop picks them up
+# automatically.
 run_smoke() {
   local f c n v script rc out
   [ -d "$SMOKE_DIR" ] || return
-
-  printf '\n%-40s\n' "SMOKE"
-  local ran=0 passed=0 failed=0 untested=()
 
   for f in ${FINDINGS+"${FINDINGS[@]}"}; do
     IFS='|' read -r c n v _ _ <<<"$f"
     [ "$v" = "pass" ] || continue
     script="$SMOKE_DIR/${c}-${n}.sh"
     if [ ! -x "$script" ]; then
-      untested+=("$n")
       add_finding smoke "$n" untested "no smoke test" no
       continue
     fi
     out=$(timeout 60 bash "$script" 2>&1); rc=$?
-    ran=$((ran + 1))
     if [ "$rc" -eq 0 ]; then
-      passed=$((passed + 1))
       add_finding smoke "$n" pass "smoke ok" no
     else
-      failed=$((failed + 1))
       add_finding smoke "$n" fail "${c}-${n}.sh exit $rc: $(head -1 <<<"$out")" no
-      printf '  ✘ %-18s exit %d: %s\n' "${c}-${n}" "$rc" "$(head -1 <<<"$out")"
     fi
   done
-
-  printf '  %d run · %d pass · %d fail\n' "$ran" "$passed" "$failed"
-  if [ ${#untested[@]} -gt 0 ]; then
-    printf '\nUNTESTED (%d)\n  %s\n' "${#untested[@]}" "${untested[*]}"
-  fi
 }
 
 main() {
@@ -449,14 +445,18 @@ main() {
     echo "MCP handshake timed out after ${MCP_TIMEOUT}s — all servers reported unknown" >&2
   fi
 
+  # Tier 3 must run — and its findings land in FINDINGS — before either
+  # renderer executes. run_smoke() only checked pass-verdicts that existed
+  # up to this point, so calling it here still runs smoke tests only for
+  # assets whose tier-2 verdict is pass.
+  if [ "$OPT_SMOKE" -eq 1 ]; then
+    run_smoke
+  fi
+
   if [ "$OPT_JSON" -eq 1 ]; then
     render_json
   else
     render_human
-  fi
-
-  if [ "$OPT_SMOKE" -eq 1 ]; then
-    run_smoke
   fi
 
   if [ "$OPT_QUARANTINE" -eq 1 ]; then
