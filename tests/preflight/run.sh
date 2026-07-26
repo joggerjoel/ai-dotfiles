@@ -68,6 +68,19 @@ for want in context7 github firecrawl-mcp; do
   fi
 done
 
+# probe_env must be gated on $CLAUDE_JSON: the healthy fixture's claude.json
+# only configures context7/github/firecrawl-mcp, so apify, digitalocean, n8n,
+# and crawl4ai — all needs_key=yes but never wired up — must produce no
+# finding at all (neither pass nor fail). An unconditional check would flag
+# all four as permanent failures regardless of whether they're configured.
+for unconfigured in apify digitalocean n8n crawl4ai; do
+  if ! grep -q "$unconfigured" <<<"$out"; then
+    report pass "healthy fixture emits no finding for unconfigured $unconfigured"
+  else
+    report fail "healthy fixture emits no finding for unconfigured $unconfigured" "$out"
+  fi
+done
+
 # --- regression corpus: the four real failures of 2026-07-26 ----------------
 out=$(run_preflight regression 2>&1); rc=$?
 if [ "$rc" -eq 1 ]; then

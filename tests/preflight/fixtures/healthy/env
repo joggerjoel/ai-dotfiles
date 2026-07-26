@@ -1,9 +1,2 @@
 FIRECRAWL_API_KEY=fc-test
 GITHUB_PERSONAL_ACCESS_TOKEN=ghp_test
-OPENROUTER_API_KEY=or-test
-APIFY_TOKEN=apify-test
-DIGITALOCEAN_API_TOKEN=do-test
-N8N_JWT=n8n-jwt-test
-N8N_URL=https://n8n.example.com
-CRAWL4AI_TOKEN=crawl4ai-test
-CRAWL4AI_URL=https://crawl.example.com
