@@ -1,0 +1,5 @@
+Checking MCP server health…
+
+context7: npx -y @upstash/context7-mcp - ✔ Connected
+github: npx -y @modelcontextprotocol/server-github - ✔ Connected
+firecrawl-mcp: npx -y firecrawl-mcp - ✔ Connected
