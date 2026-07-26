@@ -42,6 +42,7 @@ count_verdict() {
 # all servers in ~90s; per-server probing would cost ~90s each.
 probe_mcp() {
   local out rc line name detail
+  local seen_names=""
 
   if ! command -v claude >/dev/null 2>&1; then
     CHECKER_BROKEN=1
@@ -69,19 +70,37 @@ probe_mcp() {
       *"✔ Connected"*)
         name="${line%%: *}"
         add_finding mcp "$name" pass "connected" no
+        seen_names="$seen_names|$name|"
         ;;
       *"Needs authentication"*)
         name="${line%%: *}"
         add_finding mcp "$name" unknown "needs authentication" no
+        seen_names="$seen_names|$name|"
         ;;
       *"✘ Failed to connect"*)
         name="${line%%: *}"
         detail="${line#*✘ }"
         add_finding mcp "$name" fail "$detail" yes
+        seen_names="$seen_names|$name|"
         ;;
       *) continue ;;
     esac
   done <<<"$out"
+
+  # Cross-reference against configured servers: any key present in
+  # $CLAUDE_JSON that produced no finding above was silently absent from
+  # `claude mcp list` output (or emitted a status line none of the case arms
+  # recognize). That's still an observable gap, not a clean bill of health —
+  # report it as `unknown` (never `fail`: we don't know it's broken, only
+  # that we couldn't observe it) so it can't be auto-quarantined.
+  local cfg_key
+  while IFS= read -r cfg_key; do
+    [ -n "$cfg_key" ] || continue
+    case "$seen_names" in
+      *"|$cfg_key|"*) continue ;;
+    esac
+    add_finding mcp "$cfg_key" unknown "configured but absent from claude mcp list output" no
+  done < <(jq -r '.mcpServers // {} | keys[]' "$CLAUDE_JSON" 2>/dev/null)
 }
 
 main() {

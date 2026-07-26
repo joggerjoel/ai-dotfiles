@@ -105,6 +105,29 @@ else
   report fail "timeout is reported to the user" "$out"
 fi
 
+# --- ghost: a configured server absent from `claude mcp list` output --------
+# ghost-server is configured in claude.json but never appears in mcp-list.txt.
+# It must still be reported — as unknown, never silently dropped — and must
+# not fail the run (unknown is never a failure).
+out=$(run_preflight ghost 2>&1); rc=$?
+if [ "$rc" -eq 0 ]; then
+  report pass "ghost fixture exits 0"
+else
+  report fail "ghost fixture exits 0" "got rc=$rc, output: $out"
+fi
+
+if grep -q 'ghost-server' <<<"$out"; then
+  report pass "ghost fixture reports ghost-server"
+else
+  report fail "ghost fixture reports ghost-server" "$out"
+fi
+
+if grep -qE 'ghost-server.*\(unknown\)' <<<"$out"; then
+  report pass "ghost fixture classifies ghost-server unknown"
+else
+  report fail "ghost fixture classifies ghost-server unknown" "$out"
+fi
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
