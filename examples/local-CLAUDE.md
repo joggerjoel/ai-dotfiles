@@ -30,13 +30,17 @@ Current port forwards:
 
 ## Self-Hosted Services
 
-<!-- Your self-hosted service URLs and access details -->
+<!-- Your self-hosted service URLs and access details.
 
-| Service  | URL                       | Notes                |
-| -------- | ------------------------- | -------------------- |
-| crawl4ai | https://crawl.example.com | Self-hosted scraping |
+     Leave this commented out unless you actually self-host the service. An
+     uncustomized row tells Claude a service exists when it doesn't, and it
+     will try to use it. Uncomment and fill in real hostnames, or delete.
 
-<!-- Add more services as needed -->
+| Service  | URL                        | Notes                |
+| -------- | -------------------------- | -------------------- |
+| crawl4ai | https://REPLACE-ME.invalid | Self-hosted scraping |
+
+-->
 
 ## Project Templates
 

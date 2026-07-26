@@ -33,18 +33,22 @@
 
 Prefer fast, authenticated tools. Full details: `~/.claude/references/tool-priorities.md`
 
-| Task               | Use                                             | Not                         |
-| ------------------ | ----------------------------------------------- | --------------------------- |
-| Browser automation | `agent-browser` CLI                             | chrome-devtools, Playwright |
-| GitHub operations  | `gh` CLI                                        | WebFetch github.com         |
-| Library docs       | context7 MCP                                    | WebSearch                   |
-| Web scraping       | crawl4ai REST (URL/token from `~/.claude/.env`) | firecrawl, WebFetch         |
-| JS/TS packages     | `bun` / `bunx`                                  | npm / npx                   |
-| Python packages    | `uv` / `uvx`                                    | pip / pipx                  |
+| Task               | Use                                            | Not                               |
+| ------------------ | ---------------------------------------------- | --------------------------------- |
+| Browser automation | `agent-browser` CLI                            | chrome-devtools, claude-in-chrome |
+| GitHub operations  | `gh` CLI                                       | WebFetch github.com               |
+| Library docs       | context7 MCP                                   | WebSearch                         |
+| Web scraping       | firecrawl MCP; crawl4ai REST **if configured** | WebFetch                          |
+| JS/TS packages     | `bun` / `bunx`                                 | npm / npx                         |
+| Python packages    | `uv` / `uvx`                                   | pip / pipx                        |
 
 **Fallback** to npm/pip only when project explicitly uses them (check lockfiles) or compatibility issues arise.
 
 ## crawl4ai Quick Ref
+
+> **Only if self-hosted.** Requires `CRAWL4AI_URL` + `CRAWL4AI_TOKEN` in `~/.claude/.env`.
+> If those are unset, crawl4ai is not available on this machine — use firecrawl MCP
+> instead. Do not guess a hostname.
 
 Primary endpoint (use this, not `/md`):
 
