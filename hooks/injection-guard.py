@@ -80,9 +80,55 @@ MAX_SCAN = 200_000  # cap the scan on very large tool results
 # source, the test fixtures, and the log of past hits. Reading or grepping any of
 # them is a guaranteed self-trip, and a backtest over 7,194 historical tool
 # results found it was the single largest source of false positives (2026-07-26).
-# Matched against the tool's ARGUMENTS, so it suppresses "read the guard", never
-# "read a file that happens to discuss the guard".
-SELF_MARKER = "injection-guard"
+#
+# Resolved to concrete realpaths, NOT matched as a substring. A substring test
+# ("injection-guard" appears anywhere in the arguments) is a suppression oracle:
+# this repo is public, so an attacker reads the marker and names a poisoned file
+# /tmp/injection-guard-notes.md to switch the guard off for that read. Suppression
+# must be satisfiable only by the actual files, so an unresolvable or unknown path
+# falls through to detection.
+def _self_paths() -> set:
+    here = Path(__file__)
+    out = set()
+    # Include the DEFAULT log path as well as the active one: INJECTION_GUARD_LOG
+    # redirects writes during tests, but reading the real log must still be
+    # recognised as self-reference in every environment.
+    default_log = Path.home() / ".claude" / "hooks" / ".logs" / "injection-guard.jsonl"
+    for c in (here, here.resolve(),
+              here.with_name("injection-guard.test.sh"),
+              here.resolve().with_name("injection-guard.test.sh"),
+              LOG_PATH, default_log):
+        try:
+            out.add(str(Path(c).expanduser().resolve()))
+        except Exception:
+            pass
+    return out
+
+
+SELF_PATHS = _self_paths()
+
+
+def _resolves_to_self(p: str) -> bool:
+    try:
+        return str(Path(p).expanduser().resolve()) in SELF_PATHS
+    except Exception:
+        return False  # unresolvable → not ours → scan it
+
+
+def _is_self_reference(tool_input: object) -> bool:
+    """True only when the tool is acting on this hook's own concrete files."""
+    if not isinstance(tool_input, dict):
+        return False
+    for key in ("file_path", "path", "notebook_path"):
+        v = tool_input.get(key)
+        if isinstance(v, str) and _resolves_to_self(v):
+            return True
+    cmd = tool_input.get("command")
+    if isinstance(cmd, str):
+        for tok in re.split(r"[\s;|&()<>\"']+", cmd):
+            if tok and _resolves_to_self(tok):
+                return True
+    return False
 
 
 def _text_of(resp: object) -> str:
@@ -196,13 +242,13 @@ def main() -> int:
         m = pattern.search(text)
         if not m:
             continue
-        if pattern.search(input_text) or SELF_MARKER in input_text:
+        is_self = _is_self_reference(tool_input)
+        if pattern.search(input_text) or is_self:
             _log({
                 "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 "tool": tool,
                 "pattern": pattern.pattern,
-                "suppressed": "self_reference" if SELF_MARKER in input_text
-                              else "echo_of_tool_input",
+                "suppressed": "self_reference" if is_self else "echo_of_tool_input",
             })
             continue
         start = max(0, m.start() - 80)

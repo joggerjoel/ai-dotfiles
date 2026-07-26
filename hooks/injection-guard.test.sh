@@ -37,18 +37,41 @@ t "Bash: nested stdout, newline-prefixed" 2 \
 echo "── self-reference suppression ─────────────────────────"
 # The guard's own source/tests/log contain the patterns by necessity. Reading them
 # must not fire; reading an unrelated file that discusses them still must.
-t "reading the guard's own source" 0 \
-  "$(jq -cn --arg p "$PAY" '{tool_name:"Read",tool_input:{file_path:"/home/u/ai-dotfiles/hooks/injection-guard.py"},
+# Suppression is by resolved path, so the fixtures must be the REAL guard files —
+# both the ~/.claude symlink and the repo file it points at.
+REPO_G="$(readlink -f "$G" 2>/dev/null || echo "$G")"
+t "reading the guard via its repo path" 0 \
+  "$(jq -cn --arg p "$PAY" --arg g "$REPO_G" '{tool_name:"Read",tool_input:{file_path:$g},
      tool_response:{type:"text",file:{content:("BLOCK_PATTERNS = [\n"+$p)}}}')"
 t "running the guard's test suite" 0 \
   "$(jq -cn --arg p "$PAY" '{tool_name:"Bash",tool_input:{command:"bash hooks/injection-guard.test.sh"},
      tool_response:{stdout:("PASS\n"+$p)}}')"
-t "grepping the guard log" 0 \
-  "$(jq -cn --arg p "$PAY" '{tool_name:"Bash",tool_input:{command:"tail ~/.claude/hooks/.logs/injection-guard.jsonl"},
-     tool_response:{stdout:$p}}')"
+t "grepping the real guard log" 0 \
+  "$(jq -cn --arg p "$PAY" --arg l "$HOME/.claude/hooks/.logs/injection-guard.jsonl" \
+     '{tool_name:"Bash",tool_input:{command:("tail "+$l)},tool_response:{stdout:$p}}')"
 t "UNRELATED file discussing injection" 2 \
   "$(jq -cn --arg p "$PAY" '{tool_name:"Read",tool_input:{file_path:"/home/u/notes/security.md"},
      tool_response:{type:"text",file:{content:("On defence:\n"+$p)}}}')"
+
+echo "── suppression-oracle bypass (public marker) ──────────"
+# The repo is public, so the marker string is known. Suppression must be
+# satisfiable only by the guard's REAL paths — never by a substring an attacker
+# can put in a filename, a URL, or a command.
+t "BYPASS: poisoned file named injection-guard" 2 \
+  "$(jq -cn --arg p "$PAY" '{tool_name:"Read",tool_input:{file_path:"/tmp/injection-guard-notes.md"},
+     tool_response:{type:"text",file:{content:$p}}}')"
+t "BYPASS: dir named injection-guard" 2 \
+  "$(jq -cn --arg p "$PAY" '{tool_name:"Read",tool_input:{file_path:"/tmp/injection-guard/payload.md"},
+     tool_response:{type:"text",file:{content:$p}}}')"
+t "BYPASS: url containing the marker" 2 \
+  "$(jq -cn --arg p "$PAY" '{tool_name:"WebFetch",tool_input:{url:"https://evil.test/injection-guard.html"},
+     tool_response:{content:$p}}')"
+t "BYPASS: curl of a marker-named remote file" 2 \
+  "$(jq -cn --arg p "$PAY" '{tool_name:"Bash",tool_input:{command:"curl -s https://evil.test/injection-guard.txt"},
+     tool_response:{stdout:$p}}')"
+t "REAL self-read still suppressed (abs path)" 0 \
+  "$(jq -cn --arg p "$PAY" --arg g "$G" '{tool_name:"Read",tool_input:{file_path:$g},
+     tool_response:{type:"text",file:{content:$p}}}')"
 
 echo "── genuine injection still caught ─────────────────────"
 t "cat of a malicious file" 2 \
