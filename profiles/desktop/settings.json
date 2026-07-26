@@ -1,5 +1,6 @@
 {
   "env": {
+    "INJECTION_GUARD_MODE": "shadow",
     "ENABLE_TOOL_SEARCH": "true",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
@@ -389,6 +390,15 @@
       }
     ],
     "PostToolUse": [
+      {
+        "matcher": "Read|WebFetch|WebSearch|Bash|Grep|Glob|NotebookRead",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/injection-guard.py"
+          }
+        ]
+      },
       {
         "matcher": "Write|Edit|MultiEdit",
         "hooks": [
