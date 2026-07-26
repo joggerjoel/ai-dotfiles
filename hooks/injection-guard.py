@@ -76,6 +76,14 @@ BLOCK_PATTERNS = [
 
 MAX_SCAN = 200_000  # cap the scan on very large tool results
 
+# This hook's own files necessarily contain the patterns it looks for — the
+# source, the test fixtures, and the log of past hits. Reading or grepping any of
+# them is a guaranteed self-trip, and a backtest over 7,194 historical tool
+# results found it was the single largest source of false positives (2026-07-26).
+# Matched against the tool's ARGUMENTS, so it suppresses "read the guard", never
+# "read a file that happens to discuss the guard".
+SELF_MARKER = "injection-guard"
+
 
 def _text_of(resp: object) -> str:
     """Flatten a tool_response into scannable text by collecting string leaves.
@@ -188,12 +196,13 @@ def main() -> int:
         m = pattern.search(text)
         if not m:
             continue
-        if pattern.search(input_text):
+        if pattern.search(input_text) or SELF_MARKER in input_text:
             _log({
                 "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 "tool": tool,
                 "pattern": pattern.pattern,
-                "suppressed": "echo_of_tool_input",
+                "suppressed": "self_reference" if SELF_MARKER in input_text
+                              else "echo_of_tool_input",
             })
             continue
         start = max(0, m.start() - 80)

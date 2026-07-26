@@ -1,6 +1,6 @@
 {
   "env": {
-    "INJECTION_GUARD_MODE": "shadow",
+    "INJECTION_GUARD_MODE": "enforce",
     "ENABLE_TOOL_SEARCH": "true"
   },
   "permissions": {
