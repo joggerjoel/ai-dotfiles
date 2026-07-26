@@ -247,6 +247,66 @@ else
   report fail "unknown option yields exit 2, not 1" "got rc=$rc: $out"
 fi
 
+# --- quarantine -------------------------------------------------------------
+# Work on a copy so the fixture stays pristine.
+QDIR=$(mktemp -d)
+cp "$TESTS_DIR/fixtures/regression/claude.json" "$QDIR/claude.json"
+
+PATH="$TESTS_DIR/stubs:$PATH" \
+PREFLIGHT_FIXTURE="$TESTS_DIR/fixtures/regression" \
+PREFLIGHT_CLAUDE_JSON="$QDIR/claude.json" \
+PREFLIGHT_SETTINGS_JSON="$TESTS_DIR/fixtures/regression/settings.json" \
+PREFLIGHT_ENV_FILE="$TESTS_DIR/fixtures/regression/env" \
+PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/regression/skills" \
+  bash "$REPO_DIR/scripts/preflight.sh" --quarantine >/dev/null 2>&1
+
+if jq -e '.mcpServers.magic.disabled == true' "$QDIR/claude.json" >/dev/null 2>&1; then
+  report pass "quarantine disables a failing server"
+else
+  report fail "quarantine disables a failing server" "$(cat "$QDIR/claude.json")"
+fi
+
+if jq -e '.mcpServers.magic._preflight.reason | length > 0' "$QDIR/claude.json" >/dev/null 2>&1; then
+  report pass "quarantine records provenance"
+else
+  report fail "quarantine records provenance" "$(cat "$QDIR/claude.json")"
+fi
+
+# UNKNOWN must never be quarantined — stripe is plugin-supplied and absent from
+# claude.json, so assert nothing was invented for it.
+if ! jq -e '.mcpServers | has("plugin:stripe:stripe")' "$QDIR/claude.json" >/dev/null 2>&1; then
+  report pass "quarantine never touches unknown assets"
+else
+  report fail "quarantine never touches unknown assets" "$(cat "$QDIR/claude.json")"
+fi
+
+# Non-containable failures must be left alone.
+if ! jq -e '.mcpServers | has("agent-browser")' "$QDIR/claude.json" >/dev/null 2>&1; then
+  report pass "quarantine leaves non-containable failures alone"
+else
+  report fail "quarantine leaves non-containable failures alone"
+fi
+
+# Idempotent re-run: quarantining an already-quarantined server must preserve
+# the original quarantinedAt timestamp, not stamp a new one each time.
+first_ts=$(jq -r '.mcpServers.magic._preflight.quarantinedAt' "$QDIR/claude.json")
+sleep 1
+PATH="$TESTS_DIR/stubs:$PATH" \
+PREFLIGHT_FIXTURE="$TESTS_DIR/fixtures/regression" \
+PREFLIGHT_CLAUDE_JSON="$QDIR/claude.json" \
+PREFLIGHT_SETTINGS_JSON="$TESTS_DIR/fixtures/regression/settings.json" \
+PREFLIGHT_ENV_FILE="$TESTS_DIR/fixtures/regression/env" \
+PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/regression/skills" \
+  bash "$REPO_DIR/scripts/preflight.sh" --quarantine >/dev/null 2>&1
+second_ts=$(jq -r '.mcpServers.magic._preflight.quarantinedAt' "$QDIR/claude.json")
+if [ "$first_ts" = "$second_ts" ]; then
+  report pass "quarantine is idempotent: quarantinedAt unchanged on re-run"
+else
+  report fail "quarantine is idempotent: quarantinedAt unchanged on re-run" "first=$first_ts second=$second_ts"
+fi
+
+rm -rf "$QDIR"
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

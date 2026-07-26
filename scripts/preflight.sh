@@ -336,6 +336,45 @@ render_json() {
   } | jq .
 }
 
+# Disable failing MCP servers, recording why and when. Only class=mcp with
+# verdict=fail and containable=yes is eligible: UNKNOWN is never quarantined,
+# because "needs authentication" is an unfinished setup, not a fault.
+apply_quarantine() {
+  local f c n v d cont applied=0 backup ts
+  ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+  for f in ${FINDINGS+"${FINDINGS[@]}"}; do
+    IFS='|' read -r c n v d cont <<<"$f"
+    [ "$c" = "mcp" ] && [ "$v" = "fail" ] && [ "$cont" = "yes" ] || continue
+    jq -e --arg k "$n" '.mcpServers | has($k)' "$CLAUDE_JSON" >/dev/null 2>&1 || continue
+
+    if [ "$applied" -eq 0 ]; then
+      backup="${CLAUDE_JSON}.preflight-$(date '+%Y%m%d_%H%M%S').bak"
+      cp "$CLAUDE_JSON" "$backup"
+      printf '\nQUARANTINE\n  backed up %s\n' "$backup"
+    fi
+
+    local tmp
+    tmp="$(mktemp)"
+    # Preserve an existing quarantinedAt so re-running is idempotent.
+    jq --arg k "$n" --arg r "$d" --arg t "$ts" '
+      .mcpServers[$k].disabled = true
+      | .mcpServers[$k]._preflight.quarantinedAt =
+          (.mcpServers[$k]._preflight.quarantinedAt // $t)
+      | .mcpServers[$k]._preflight.reason = $r
+    ' "$CLAUDE_JSON" > "$tmp" && mv "$tmp" "$CLAUDE_JSON"
+
+    printf '  → %-18s disabled: true\n' "$n"
+    applied=$((applied + 1))
+  done
+
+  if [ "$applied" -eq 0 ]; then
+    printf '\nQUARANTINE\n  nothing containable\n'
+  else
+    printf '  %d contained · re-enable with ./setup.sh add <name>\n' "$applied"
+  fi
+}
+
 main() {
   parse_args "$@"
   check_preconditions
@@ -365,6 +404,10 @@ main() {
     render_json
   else
     render_human
+  fi
+
+  if [ "$OPT_QUARANTINE" -eq 1 ]; then
+    apply_quarantine
   fi
 
   [ "$(count_verdict fail)" -gt 0 ] && exit 1
