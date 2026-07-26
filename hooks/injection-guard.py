@@ -78,16 +78,21 @@ MAX_SCAN = 200_000  # cap the scan on very large tool results
 
 
 def _text_of(resp: object) -> str:
-    """Flatten a tool_response into scannable text. Shapes vary by tool."""
+    """Flatten a tool_response into scannable text by collecting string leaves.
+
+    Shapes vary by tool and nest arbitrarily — Read returns
+    {"type":"text","file":{"content":...}}, Bash returns {"stdout":...}. Walking
+    for leaves handles both without a key allow-list that has to be kept in sync.
+
+    Do NOT use json.dumps here. It escapes newlines to a literal backslash-n,
+    which puts a word character immediately before any pattern that follows a
+    line break and silently defeats every \\b anchor. That made Read content
+    unmatchable while Bash still worked (2026-07-26).
+    """
     if isinstance(resp, str):
         return resp
     if isinstance(resp, dict):
-        parts = []
-        for key in ("content", "output", "stdout", "text", "result", "stderr"):
-            v = resp.get(key)
-            if isinstance(v, str):
-                parts.append(v)
-        return "\n".join(parts) if parts else json.dumps(resp)[:MAX_SCAN]
+        return "\n".join(_text_of(v) for v in resp.values())
     if isinstance(resp, list):
         return "\n".join(_text_of(x) for x in resp)
     return ""
