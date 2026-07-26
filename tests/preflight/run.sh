@@ -350,6 +350,37 @@ fi
 
 rm -rf "$GDIR"
 
+# --- tier 3 smoke -----------------------------------------------------------
+out=$(run_preflight regression --smoke 2>&1)
+if grep -q 'mcp-github' <<<"$out"; then
+  report pass "smoke reports the failing test"
+else
+  report fail "smoke reports the failing test" "$out"
+fi
+
+if grep -qi 'untested' <<<"$out"; then
+  report pass "smoke reports untested assets by name"
+else
+  report fail "smoke reports untested assets by name" "$out"
+fi
+
+# A smoke failure is a fail like any other — it must flip the run's exit code
+# to 1. Requirement 5 (run_smoke must append its findings BEFORE the final
+# `count_verdict fail` in main()) is easy to break by reordering main(), and
+# the regression-fixture assertions above can't catch that: regression
+# already exits 1 on its own (magic/n8n-mcp/crawl4ai), with or without smoke.
+# The healthy fixture exits 0 with no smoke tests involved, so wiring a
+# failing smoke script (fixtures/healthy/smoke/mcp-context7.sh) onto it
+# isolates the ordering bug — this only passes if run_smoke's fail finding
+# is counted before main() computes the exit code.
+run_preflight healthy >/dev/null 2>&1; rc_no_smoke=$?
+run_preflight healthy --smoke >/dev/null 2>&1; rc_smoke=$?
+if [ "$rc_no_smoke" -eq 0 ] && [ "$rc_smoke" -eq 1 ]; then
+  report pass "a smoke failure causes exit 1"
+else
+  report fail "a smoke failure causes exit 1" "no-smoke rc=$rc_no_smoke smoke rc=$rc_smoke"
+fi
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

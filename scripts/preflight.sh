@@ -388,6 +388,42 @@ apply_quarantine() {
   fi
 }
 
+# Tier 3. Runs only for assets that passed tier 2 — smoke-testing a server that
+# never connected buries the root cause under cascading noise.
+run_smoke() {
+  local f c n v script rc out
+  [ -d "$SMOKE_DIR" ] || return
+
+  printf '\n%-40s\n' "SMOKE"
+  local ran=0 passed=0 failed=0 untested=()
+
+  for f in ${FINDINGS+"${FINDINGS[@]}"}; do
+    IFS='|' read -r c n v _ _ <<<"$f"
+    [ "$v" = "pass" ] || continue
+    script="$SMOKE_DIR/${c}-${n}.sh"
+    if [ ! -x "$script" ]; then
+      untested+=("$n")
+      add_finding smoke "$n" untested "no smoke test" no
+      continue
+    fi
+    out=$(timeout 60 bash "$script" 2>&1); rc=$?
+    ran=$((ran + 1))
+    if [ "$rc" -eq 0 ]; then
+      passed=$((passed + 1))
+      add_finding smoke "$n" pass "smoke ok" no
+    else
+      failed=$((failed + 1))
+      add_finding smoke "$n" fail "${c}-${n}.sh exit $rc: $(head -1 <<<"$out")" no
+      printf '  ✘ %-18s exit %d: %s\n' "${c}-${n}" "$rc" "$(head -1 <<<"$out")"
+    fi
+  done
+
+  printf '  %d run · %d pass · %d fail\n' "$ran" "$passed" "$failed"
+  if [ ${#untested[@]} -gt 0 ]; then
+    printf '\nUNTESTED (%d)\n  %s\n' "${#untested[@]}" "${untested[*]}"
+  fi
+}
+
 main() {
   parse_args "$@"
   check_preconditions
@@ -417,6 +453,10 @@ main() {
     render_json
   else
     render_human
+  fi
+
+  if [ "$OPT_SMOKE" -eq 1 ]; then
+    run_smoke
   fi
 
   if [ "$OPT_QUARANTINE" -eq 1 ]; then
