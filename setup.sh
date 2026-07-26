@@ -610,15 +610,18 @@ link_bin_tools() {
   done
 }
 
-# Claude Code hooks (hooks/*.sh -> ~/.claude/hooks/<name>). The shared
+# Claude Code hooks (hooks/*.{sh,py} -> ~/.claude/hooks/<name>). The shared
 # profile settings.json references these by $HOME path, so a machine that
 # skips this step gets a "No such file or directory" PreToolUse error on
 # every Bash call. Symlinked so a repo pull updates the live hooks.
+# Both extensions are linked: the glob was .sh-only until injection-guard.py
+# arrived, which meant a registered .py hook silently never got installed.
 link_claude_hooks() {
   [ -d "$DOTFILES_DIR/hooks" ] || return 0
   local f
-  for f in "$DOTFILES_DIR"/hooks/*.sh; do
+  for f in "$DOTFILES_DIR"/hooks/*.sh "$DOTFILES_DIR"/hooks/*.py; do
     [ -f "$f" ] || continue
+    case "$(basename "$f")" in *.test.sh|*.test.py) continue ;; esac  # tests stay in the repo
     link_file "$f" "$CLAUDE_DIR/hooks/$(basename "$f")"
   done
 }

@@ -1,5 +1,6 @@
 {
   "env": {
+    "INJECTION_GUARD_MODE": "shadow",
     "ENABLE_TOOL_SEARCH": "true"
   },
   "permissions": {
@@ -100,6 +101,15 @@
   "model": "opus",
   "hooks": {
     "PostToolUse": [
+      {
+        "matcher": "Read|WebFetch|WebSearch|Bash|Grep|Glob|NotebookRead",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/injection-guard.py"
+          }
+        ]
+      },
       {
         "matcher": "Write|Edit|MultiEdit",
         "hooks": [
