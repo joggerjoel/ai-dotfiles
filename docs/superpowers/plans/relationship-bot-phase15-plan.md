@@ -191,7 +191,13 @@ In `src/resolve/score.ts`, add to the interface:
 
 ```ts
 export interface KnownPerson {
-  id: number;
+  /**
+   * Null when this candidate came from `person_contacts` and has no `people`
+   * row yet. Deliberately nullable rather than a `0` sentinel: `scoreCandidate`
+   * copies this into `ScoredMatch.personId`, so a sentinel would flow into
+   * `captureMemory({ personId: 0 })` and violate the foreign key.
+   */
+  id: number | null;
   canonicalName: string;
   aliases: string[];
   company: string | null;
@@ -296,7 +302,7 @@ Replace `findPeople` in `src/store/pg-repository.ts`:
     `;
 
     return rows.map((row) => ({
-      id: row.id === null ? 0 : toId(row.id),
+      id: row.id === null ? null : toId(row.id),
       canonicalName: row.canonical_name,
       aliases: row.aliases ?? [],
       company: row.company,
@@ -326,14 +332,76 @@ interface PersonRow {
 Run: `PRMM_DATABASE_URL=<voice url> pnpm vitest run tests/pg-integration.test.ts`
 Expected: PASS — 2 tests
 
-- [ ] **Step 6: Carry the link through creation**
+- [ ] **Step 6: Materialise a matched contact, and carry the link**
 
-A candidate matched from `person_contacts` has `id === 0` and no `people` row. `upsertPerson` must store the link. In `src/store/repository.ts`, add to `UpsertPersonInput`:
+A candidate matched from `person_contacts` has `id === null` and no `people` row,
+so nothing can reference it yet. Both the `match` and `create` branches must end
+with a real `people` row.
+
+In `src/store/repository.ts`, add to `UpsertPersonInput`:
 
 ```ts
 /** Set when this person was matched from the contact book. */
 personContactId: string | null;
 ```
+
+In `src/resolve/score.ts`, `ScoredMatch` carries the contact link so the pipeline
+can materialise a matched contact without re-querying:
+
+```ts
+export interface ScoredMatch {
+  personId: number | null;
+  personContactId: string | null;
+  score: number;
+  reasons: string[];
+}
+```
+
+and `scoreCandidate` populates both from the candidate it scored:
+
+```ts
+    return {
+      personId: person.id,
+      personContactId: person.personContactId,
+      score: Math.min(score, 1),
+      reasons,
+    };
+```
+
+`resolveIdentity` widens to match — `{ action: "match"; personId: number | null;
+personContactId: string | null; score: number }` — passing both through from the
+winning `ScoredMatch`.
+
+In `src/pipeline.ts`, the `match` branch materialises when there is no row yet:
+
+```ts
+    if (decision.action === "match") {
+      let personId = decision.personId;
+
+      if (personId === null) {
+        // Matched a contact that has no `people` row. Create one carrying the
+        // link, so memories have something real to reference.
+        personId = await deps.repo.upsertPerson({
+          userId,
+          canonicalName: candidate.name,
+          aliases: candidate.aliases,
+          company: candidate.company,
+          firstMetContext: candidate.context || null,
+          visibility,
+          personContactId: decision.personContactId,
+          opId,
+        });
+        if (personId === null) return park();
+      }
+
+      nameToId.set(key, personId);
+      // ... existing logResolution call, with chosenPersonId: personId
+      continue;
+    }
+```
+
+The `create` branch passes `personContactId: null` — nothing matched, so there is
+no contact to link.
 
 In `pg-repository.ts`, both branches of the upsert gain the column:
 
@@ -956,7 +1024,31 @@ if (route.kind === "question") {
 }
 ```
 
-`answerQuestion` arrives in Task 6. Until then this will not compile — implement Task 6 before running the bot.
+Task 6 supplies the real `answerQuestion`. So that Task 5 ends green and
+independently reviewable — the plan's own contract — ship a stub now:
+
+`src/query/answer.ts`:
+
+```ts
+/**
+ * Placeholder until Task 6. Returning the capability list is the same honest
+ * refusal the finished version gives an unrecognised question, so the bot
+ * behaves sensibly in the window between these two tasks.
+ */
+export async function answerQuestion(
+  _text: string,
+  _userId: number,
+  _deps: unknown,
+): Promise<string> {
+  return (
+    "I can't answer questions yet. Soon I'll be able to tell you where you " +
+    "met someone, when you last spoke, what I know about them, or who you " +
+    "know at a company."
+  );
+}
+```
+
+Task 6 replaces this file wholesale.
 
 - [ ] **Step 7: Commit**
 
@@ -1163,7 +1255,7 @@ Expected: FAIL — module not found.
 
 - [ ] **Step 7: Write the answer module**
 
-`src/query/answer.ts`:
+Replace the Task 5 stub in `src/query/answer.ts` entirely:
 
 ```ts
 import { DEFAULT_BANDS, resolveIdentity } from "../resolve/resolver.js";
@@ -1640,6 +1732,7 @@ git commit -m "feat: announce private memories about the other participant"
 - [ ] `pnpm test` green, nothing skipped
 - [ ] `prmm` schema live in `voice`; `prmm-db` container removed
 - [ ] `findPeople` returns >1,000 candidates from the contact book
+- [ ] Matching a contact with no `people` row creates one linked by `person_contact_id`, never a row with a placeholder id
 - [ ] A capture of a known contact links `person_contact_id` instead of duplicating
 - [ ] A message naming Jo produces a person row for Jo
 - [ ] A bare unnamed number produces no person row (`pnpm eval` 6/6, 0 invented)
