@@ -26,3 +26,6 @@ Thumbs.db
 # Backups
 backups/
 backup/
+
+# Python bytecode from importing hooks (injection-guard backtest)
+__pycache__/
