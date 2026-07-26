@@ -28,24 +28,9 @@ else
     sed_inplace() { sed -i "$@"; }
 fi
 
-# ── MCP Integration definitions ──────────────────────────────────
-# Format: name|description|needs_key|key_var|disabled_by_default|extra_vars|desktop_only
-INTEGRATIONS=(
-  "context7|Documentation lookup|no||||no"
-  "serena|Semantic code assistant|no||||no"
-  "morphllm-fast-apply|Fast code application|no||||no"
-  "chrome-devtools|Browser DevTools (desktop only)|no||yes||yes"
-  "firecrawl|Web scraping (large-scale)|yes|FIRECRAWL_API_KEY|||no"
-  "github|GitHub repo/issue/PR management|yes|GITHUB_PERSONAL_ACCESS_TOKEN|yes||no"
-  "openrouter|OpenRouter AI models|yes|OPENROUTER_API_KEY|yes||no"
-  "apify|Web scraping actors|yes|APIFY_TOKEN|yes||no"
-  "digitalocean|DigitalOcean infrastructure|yes|DIGITALOCEAN_API_TOKEN|yes||no"
-  "n8n|Workflow automation|yes|N8N_JWT|yes|N8N_URL|no"
-  "crawl4ai|Self-hosted web scraping (SSE)|yes|CRAWL4AI_TOKEN|yes|CRAWL4AI_URL|no"
-  "playwright|Browser automation & testing|no||yes||yes"
-  "browser-tools|Advanced browser tools|no||yes||yes"
-  "magic|UI component generation|no||yes||yes"
-)
+# ── Asset registry ───────────────────────────────────────────────
+# shellcheck source=lib/integrations.sh
+source "$DOTFILES_DIR/lib/integrations.sh"
 
 # Postgres MCP package for self-hosted ("internal") Supabase. The old reference
 # server @modelcontextprotocol/server-postgres is deprecated; this one is
@@ -91,18 +76,6 @@ mcp_json_for() {
       # (Cloud Supabase uses the plugin's hosted MCP instead — see configure_supabase.)
       echo "{\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"${SUPABASE_PG_MCP_PKG}\"],\"env\":{\"POSTGRES_CONNECTION_STRING\":\"${key_val}\"}}";;
     *) echo '{}' ;;
-  esac
-}
-
-# Map integration names to .claude.json MCP key names
-mcp_key_for() {
-  case "$1" in
-    browser-tools) echo "browser-tools-mcp" ;;
-    firecrawl) echo "firecrawl-mcp" ;;
-    openrouter) echo "openrouterai" ;;
-    digitalocean) echo "digitalocean-mcp" ;;
-    n8n) echo "n8n-mcp" ;;
-    *) echo "$1" ;;
   esac
 }
 

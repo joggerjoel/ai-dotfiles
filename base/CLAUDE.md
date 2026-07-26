@@ -106,6 +106,19 @@ Before committing: no duplication, simplest solution, no speculative features, s
 Before editing any config: `cp <file> ~/.claude/.backups/<folder>/<filename>.$(date +%Y%m%d_%H%M%S)`
 Then log: `echo "$(date '+%Y-%m-%d %H:%M') | <file> | <reason>" >> ~/.claude/.backups/CHANGELOG.md`
 
+## Asset Verification
+
+| Command                       | What it does                                          |
+| ----------------------------- | ----------------------------------------------------- |
+| `just preflight`              | Verify every configured asset works (read-only, ~90s) |
+| `just preflight --quarantine` | Disable failing MCP servers, backing up first         |
+| `just audit`                  | Preflight plus tier-3 smoke tests                     |
+| `just test`                   | Run the preflight test suite                          |
+
+Status reflects behaviour, not configuration: an asset is only `✔` if a live
+probe succeeded. `!` means the asset needs something from you (usually
+authentication) and is never auto-disabled.
+
 ## Documentation Organization
 
 Use `inventory/` (facts) + `guides/` (instructions) pattern for project docs with 3+ files.

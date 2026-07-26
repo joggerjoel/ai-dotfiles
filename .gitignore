@@ -32,3 +32,6 @@ __pycache__/
 
 # git worktrees created by EnterWorktree (scratch, never committed)
 .claude/worktrees/
+
+# subagent-driven-development scratch ledger
+.superpowers/

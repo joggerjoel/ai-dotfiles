@@ -645,7 +645,7 @@ Four probes that need no network and no subprocess beyond `command -v`.
 
 **Interfaces:**
 
-- Consumes: `add_finding`, `ENV_FILE`, `SETTINGS_JSON`, `SKILLS_DIR`, `MANDATED_CLIS`, `INTEGRATIONS`
+- Consumes: `add_finding`, `ENV_FILE`, `SETTINGS_JSON`, `SKILLS_DIR`, `MANDATED_CLIS`, `INTEGRATIONS`, `CLAUDE_JSON`
 - Produces: `probe_clis()`, `probe_env()`, `probe_hooks()`, `probe_skills()`
 
 - [ ] **Step 1: Write the failing tests**
@@ -751,12 +751,26 @@ env_var_set() {
   [ -n "$val" ]
 }
 
-# Env-var services declared by INTEGRATIONS (key_var and extra_vars).
+# Is the given $CLAUDE_JSON mcpServers key present? A missing or malformed
+# $CLAUDE_JSON simply means "not configured" — jq's failure is swallowed the
+# same way probe_mcp already swallows it, so a broken file can never abort
+# the run.
+integration_configured() {
+  jq -e --arg k "$1" '(.mcpServers // {}) | has($k)' "$CLAUDE_JSON" >/dev/null 2>&1
+}
+
+# Env-var services declared by INTEGRATIONS (key_var and extra_vars). Only
+# integrations actually configured in $CLAUDE_JSON are checked: an
+# integration that was deliberately never wired up (or removed) has nothing
+# to report on, and flagging it forever produces a checker nobody trusts.
 probe_env() {
-  local entry name needs_key key_var extra_vars missing
+  local entry name needs_key key_var extra_vars missing key
   for entry in "${INTEGRATIONS[@]}"; do
     IFS='|' read -r name _ needs_key key_var _ extra_vars _ <<<"$entry"
     [ "$needs_key" = "yes" ] || continue
+
+    key="$(mcp_key_for "$name")"
+    integration_configured "$key" || continue
 
     missing=""
     if [ -n "$key_var" ] && ! env_var_set "$key_var"; then

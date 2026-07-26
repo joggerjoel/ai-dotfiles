@@ -1,0 +1,5 @@
+#!/bin/bash
+# Stub `mv` that always fails. Shadows the real `mv` (only) on PATH so tests
+# can prove preflight.sh checks mv's exit status in apply_quarantine instead
+# of assuming it succeeded (final-review item 1).
+exit 1
