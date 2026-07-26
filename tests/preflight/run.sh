@@ -128,6 +128,29 @@ else
   report fail "ghost fixture classifies ghost-server unknown" "$out"
 fi
 
+# --- env-var services -------------------------------------------------------
+out=$(run_preflight regression 2>&1)
+if grep -q 'CRAWL4AI_URL' <<<"$out"; then
+  report pass "reports unset CRAWL4AI_URL"
+else
+  report fail "reports unset CRAWL4AI_URL" "$out"
+fi
+
+# --- repo skills ------------------------------------------------------------
+if grep -q 'references/rubric.md' <<<"$out"; then
+  report pass "reports skill referencing a missing file"
+else
+  report fail "reports skill referencing a missing file" "$out"
+fi
+
+# --- mandated CLIs: jq is definitely installed, so it must pass --------------
+out=$(run_preflight healthy 2>&1)
+if grep -qE '✔ cli jq' <<<"$out"; then
+  report pass "reports jq as a passing CLI"
+else
+  report fail "reports jq as a passing CLI" "$out"
+fi
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
