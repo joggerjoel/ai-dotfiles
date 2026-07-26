@@ -8,6 +8,21 @@ REPO_DIR="$(cd "$TESTS_DIR/../.." && pwd)"
 PASS=0
 FAIL=0
 
+# Every test-owned mktemp -d below is registered here instead of trailing a
+# competing `trap ... EXIT` of its own (a second bare `trap ... EXIT` would
+# just replace the first, silently un-registering earlier cleanups). One
+# list, one trap, removed on normal exit AND on interrupt so a Ctrl-C mid-run
+# can't leak a temp dir.
+CLEANUP_DIRS=()
+add_cleanup_dir() { CLEANUP_DIRS+=("$1"); }
+cleanup_dirs() {
+  local d
+  for d in ${CLEANUP_DIRS+"${CLEANUP_DIRS[@]}"}; do
+    rm -rf "$d"
+  done
+}
+trap cleanup_dirs EXIT INT
+
 report() {
   if [ "$1" = "pass" ]; then
     PASS=$((PASS + 1)); echo "  ok   $2"
@@ -334,6 +349,7 @@ fi
 # --- quarantine -------------------------------------------------------------
 # Work on a copy so the fixture stays pristine.
 QDIR=$(mktemp -d)
+add_cleanup_dir "$QDIR"
 cp "$TESTS_DIR/fixtures/regression/claude.json" "$QDIR/claude.json"
 
 PATH="$TESTS_DIR/stubs:$PATH" \
@@ -408,14 +424,13 @@ else
   report fail "quarantine is idempotent: quarantinedAt unchanged on re-run" "first=$first_ts second=$second_ts"
 fi
 
-rm -rf "$QDIR"
-
 # --- quarantine: unknown-verdict server present in mcpServers must survive --
 # ghost-server is configured (present in mcpServers) but classified `unknown`
 # (absent from `claude mcp list` output). Unlike agent-browser/stripe above,
 # this checks a server that IS in mcpServers with verdict=unknown, so a guard
 # regression that drops the `[ "$v" = "fail" ]` clause would catch it too.
 GDIR=$(mktemp -d)
+add_cleanup_dir "$GDIR"
 cp "$TESTS_DIR/fixtures/ghost/claude.json" "$GDIR/claude.json"
 
 PATH="$TESTS_DIR/stubs:$PATH" \
@@ -431,8 +446,6 @@ if jq -e '.mcpServers["ghost-server"] | has("disabled") | not' "$GDIR/claude.jso
 else
   report fail "quarantine leaves an unknown-verdict server (ghost-server) untouched" "$(cat "$GDIR/claude.json")"
 fi
-
-rm -rf "$GDIR"
 
 # --- cross-reference recognizes preflight's own quarantine marker -----------
 # Before the fix, the cross-reference branch had no way to tell "I disabled
@@ -488,6 +501,7 @@ fi
 # that always fails; jq/cp/claude are untouched so the rest of quarantine
 # still runs normally up to the final rename.
 MVDIR=$(mktemp -d)
+add_cleanup_dir "$MVDIR"
 cp "$TESTS_DIR/fixtures/regression/claude.json" "$MVDIR/claude.json"
 before_hash=$(shasum "$MVDIR/claude.json" | awk '{print $1}')
 
@@ -545,7 +559,63 @@ else
   report fail "a failing mv does not leave temp files behind" "leftover=$leftover in $MVDIR"
 fi
 
-rm -rf "$MVDIR"
+# --- M4: apply_quarantine's containable guard is real, not decorative ------
+# A reviewer showed that deleting *just* `[ "$cont" = "yes" ]` from the guard
+# still leaves the suite green, because no fixture emits an mcp/fail finding
+# with containable=no — the only emitter (probe_mcp's "Failed to connect"
+# branch) always passes yes. Prove the guard by constructing that finding
+# directly: source preflight.sh (never executed — the BASH_SOURCE guard added
+# for this fix keeps `main` from running) and inject it into FINDINGS by
+# hand, naming a server that DOES exist in a temp copy of a real claude.json.
+#
+# Sourced inside a `bash -c` subshell, not this script's own shell: sourcing
+# preflight.sh pulls its globals (CLAUDE_JSON, FINDINGS, every function) into
+# whatever shell runs `source`, and none of that belongs leaking into this
+# test runner's own namespace.
+#
+# $0 is deliberately set to a value distinct from the real script path: the
+# guard compares `${BASH_SOURCE[0]}` (always the sourced file's real path)
+# against `$0` (unchanged by `source`) to tell "executed directly" from
+# "pulled in by something else".
+M4DIR=$(mktemp -d)
+add_cleanup_dir "$M4DIR"
+cp "$TESTS_DIR/fixtures/regression/claude.json" "$M4DIR/claude.json"
+
+PREFLIGHT_CLAUDE_JSON="$M4DIR/claude.json" \
+PREFLIGHT_SETTINGS_JSON="$TESTS_DIR/fixtures/regression/settings.json" \
+PREFLIGHT_ENV_FILE="$TESTS_DIR/fixtures/regression/env" \
+PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/regression/skills" \
+  bash -c '
+    source "$1"
+    FINDINGS+=("mcp|magic|fail|synthetic non-containable finding|no")
+    apply_quarantine
+  ' preflight-sourced-not-executed "$REPO_DIR/scripts/preflight.sh" >/dev/null 2>&1
+
+if jq -e '.mcpServers.magic | has("disabled") | not' "$M4DIR/claude.json" >/dev/null 2>&1; then
+  report pass "M4: containable=no guard leaves an mcp/fail finding untouched"
+else
+  report fail "M4: containable=no guard leaves an mcp/fail finding untouched" "$(cat "$M4DIR/claude.json")"
+fi
+
+# --- M7: a detail containing a literal '|' round-trips intact ---------------
+# add_finding stores detail LAST (class|name|verdict|containable|detail) so a
+# pipe embedded in a real failure detail can't shift containable out of
+# position. fixtures/pipe-detail's mcp-list.txt gives `widget` a "Failed to
+# connect" detail that itself contains " | " partway through.
+out_json=$(run_preflight pipe-detail --json 2>/dev/null)
+
+expected_detail='Failed to connect — token invalid | contact admin for reset — code 42'
+if [ "$(jq -r '.assets[] | select(.name=="widget") | .detail' <<<"$out_json")" = "$expected_detail" ]; then
+  report pass "a detail containing '|' survives intact in --json"
+else
+  report fail "a detail containing '|' survives intact in --json" "$out_json"
+fi
+
+if jq -e '[.assets[] | select(.name=="widget" and .verdict=="fail" and .containable==true)] | length == 1' <<<"$out_json" >/dev/null 2>&1; then
+  report pass "a detail containing '|' does not corrupt containable"
+else
+  report fail "a detail containing '|' does not corrupt containable" "$out_json"
+fi
 
 # --- tier 3 smoke -----------------------------------------------------------
 out=$(run_preflight regression --smoke 2>&1)

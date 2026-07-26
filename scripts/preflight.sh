@@ -5,7 +5,7 @@
 # continue and report rather than abort on the first broken asset.
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DOTFILES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=lib/integrations.sh
 source "$DOTFILES_DIR/lib/integrations.sh"
@@ -46,7 +46,11 @@ USAGE
   done
 }
 
-# class|name|verdict|detail|containable
+# On-disk field order: class|name|verdict|containable|detail. Detail is
+# stored LAST — not in the add_finding(class, name, verdict, detail,
+# containable) call order — because `read` assigns the remainder of the
+# line to its final variable, so a detail containing literal `|` survives
+# intact instead of shifting containable out of position.
 FINDINGS=()
 
 CHECKER_BROKEN=0
@@ -56,7 +60,9 @@ CONFIG_MALFORMED_CLAUDE=0
 CONFIG_MALFORMED_SETTINGS=0
 
 add_finding() {
-  FINDINGS+=("$1|$2|$3|$4|$5")
+  # Public signature stays (class, name, verdict, detail, containable) — no
+  # call site moves. Only the stored order changes: detail ($4) goes last.
+  FINDINGS+=("$1|$2|$3|$5|$4")
 }
 
 # Every jq call against $CLAUDE_JSON / $SETTINGS_JSON elsewhere in this script
@@ -290,7 +296,7 @@ check_preconditions() {
 render_class() {
   local class="$1" label="$2" f c n v d passes=() total=0 body=""
   for f in ${FINDINGS+"${FINDINGS[@]}"}; do
-    IFS='|' read -r c n v d _ <<<"$f"
+    IFS='|' read -r c n v _ d <<<"$f"
     [ "$c" = "$class" ] || continue
     total=$((total + 1))
     case "$v" in
@@ -328,7 +334,7 @@ render_human() {
 
   containable=0
   for f in ${FINDINGS+"${FINDINGS[@]}"}; do
-    IFS='|' read -r _ _ v _ c <<<"$f"
+    IFS='|' read -r _ _ v c _ <<<"$f"
     [ "$v" = "fail" ] && [ "$c" = "yes" ] && containable=$((containable + 1))
   done
 
@@ -354,7 +360,7 @@ render_json() {
     printf '"assets":['
     local first=1
     for f in ${FINDINGS+"${FINDINGS[@]}"}; do
-      IFS='|' read -r c n v d cont <<<"$f"
+      IFS='|' read -r c n v cont d <<<"$f"
       [ "$first" -eq 0 ] && printf ','
       first=0
       printf '{"class":%s,"name":%s,"verdict":%s,"detail":%s,"containable":%s}' \
@@ -379,7 +385,7 @@ apply_quarantine() {
   ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
   for f in ${FINDINGS+"${FINDINGS[@]}"}; do
-    IFS='|' read -r c n v d cont <<<"$f"
+    IFS='|' read -r c n v cont d <<<"$f"
     [ "$c" = "mcp" ] && [ "$v" = "fail" ] && [ "$cont" = "yes" ] || continue
     jq -e --arg k "$n" '.mcpServers | has($k)' "$CLAUDE_JSON" >/dev/null 2>&1 || continue
 
@@ -387,9 +393,22 @@ apply_quarantine() {
     # fail to write: `applied` only counts successful writes, so gating the
     # backup on it re-ran the cp/banner once per failing server.
     if [ "$backup_done" -eq 0 ]; then
-      backup="${CLAUDE_JSON}.preflight-$(date '+%Y%m%d_%H%M%S').bak"
+      # mktemp (not a bare date-stamped name) so two runs in the same second
+      # never collide and silently clobber the first backup. Same directory
+      # as $CLAUDE_JSON. No ".bak" suffix on the template: BSD mktemp (macOS)
+      # only randomizes a trailing run of X's — anything after them (e.g.
+      # ".XXXXXX.bak") is taken literally and NOT substituted, unlike GNU
+      # mktemp. Keeping the X's as the last characters is what's portable.
+      # (Also deliberately not `mv`-based: apply_quarantine's own `mv` stub
+      # test below shadows `mv` to always fail, and that must only affect the
+      # per-server rename, not backup creation.)
+      backup="$(mktemp "${CLAUDE_JSON}.preflight-$(date '+%Y%m%d_%H%M%S').XXXXXX")" || {
+        echo "preflight: could not create a backup path for $CLAUDE_JSON — aborting quarantine" >&2
+        return
+      }
       if ! cp "$CLAUDE_JSON" "$backup"; then
         echo "preflight: could not back up $CLAUDE_JSON to $backup — aborting quarantine" >&2
+        rm -f "$backup"
         return
       fi
       printf '\nQUARANTINE\n  backed up %s\n' "$backup" >&2
@@ -513,4 +532,6 @@ main() {
   exit 0
 }
 
-main "$@"
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi

@@ -1,0 +1,3 @@
+Checking MCP server health…
+
+widget: npx -y widget-mcp - ✘ Failed to connect — token invalid | contact admin for reset — code 42
