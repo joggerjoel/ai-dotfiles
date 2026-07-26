@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "context7": { "command": "npx", "args": ["-y", "@upstash/context7-mcp"] },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"]
+    },
+    "magic": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@21st-dev/magic"]
+    },
+    "n8n-mcp": {
+      "type": "http",
+      "url": "https://n8n.example.com/mcp-server/http"
+    },
+    "crawl4ai": { "type": "sse", "url": "https://crawl.example.com/mcp/sse" }
+  }
+}

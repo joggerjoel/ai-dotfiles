@@ -21,6 +21,10 @@ MCP_TIMEOUT="${PREFLIGHT_MCP_TIMEOUT:-180}"
 # class|name|verdict|detail|containable
 FINDINGS=()
 
+CHECKER_BROKEN=0
+CHECKER_REASON=""
+MCP_TIMED_OUT=0
+
 add_finding() {
   FINDINGS+=("$1|$2|$3|$4|$5")
 }
@@ -34,7 +38,74 @@ count_verdict() {
   echo "$n"
 }
 
+# Probe every MCP server with a single `claude mcp list`. One invocation covers
+# all servers in ~90s; per-server probing would cost ~90s each.
+probe_mcp() {
+  local out rc line name detail
+
+  if ! command -v claude >/dev/null 2>&1; then
+    CHECKER_BROKEN=1
+    CHECKER_REASON="claude CLI not found on PATH"
+    return
+  fi
+
+  out=$(timeout "$MCP_TIMEOUT" claude mcp list 2>&1)
+  rc=$?
+
+  # 124 is `timeout` killing the child. Every server becomes UNKNOWN — never
+  # FAIL. Auto-quarantining a whole toolchain on a network blip is the worst
+  # outcome this script can produce.
+  if [ "$rc" -eq 124 ]; then
+    MCP_TIMED_OUT=1
+    local key
+    while IFS= read -r key; do
+      [ -n "$key" ] && add_finding mcp "$key" unknown "handshake timed out after ${MCP_TIMEOUT}s" no
+    done < <(jq -r '.mcpServers // {} | keys[]' "$CLAUDE_JSON" 2>/dev/null)
+    return
+  fi
+
+  while IFS= read -r line; do
+    case "$line" in
+      *"✔ Connected"*)
+        name="${line%%: *}"
+        add_finding mcp "$name" pass "connected" no
+        ;;
+      *"Needs authentication"*)
+        name="${line%%: *}"
+        add_finding mcp "$name" unknown "needs authentication" no
+        ;;
+      *"✘ Failed to connect"*)
+        name="${line%%: *}"
+        detail="${line#*✘ }"
+        add_finding mcp "$name" fail "$detail" yes
+        ;;
+      *) continue ;;
+    esac
+  done <<<"$out"
+}
+
 main() {
+  probe_mcp
+
+  if [ "$CHECKER_BROKEN" -eq 1 ]; then
+    echo "preflight could not run: $CHECKER_REASON" >&2
+    exit 2
+  fi
+
+  if [ "$MCP_TIMED_OUT" -eq 1 ]; then
+    echo "MCP handshake timed out after ${MCP_TIMEOUT}s — all servers reported unknown"
+  fi
+
+  local f class name verdict detail
+  for f in ${FINDINGS+"${FINDINGS[@]}"}; do
+    IFS='|' read -r class name verdict detail _ <<<"$f"
+    case "$verdict" in
+      pass)    echo "  ✔ $class $name" ;;
+      fail)    echo "  ✘ $class $name — $detail" ;;
+      unknown) echo "  ! $class $name — $detail (unknown)" ;;
+    esac
+  done
+
   local fails
   fails=$(count_verdict fail)
   if [ "$fails" -gt 0 ]; then

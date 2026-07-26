@@ -1,0 +1,6 @@
+{
+  "mcpServers": {
+    "context7": { "command": "npx" },
+    "github": { "command": "npx" }
+  }
+}

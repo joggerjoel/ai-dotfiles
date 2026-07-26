@@ -48,6 +48,63 @@ else
   report fail "healthy fixture reports no failures" "$out"
 fi
 
+# The healthy fixture's mcp-list.txt has exactly 3 servers (context7, github,
+# firecrawl-mcp), all connected. Assert on the exact count and identity of
+# passing MCP findings, not merely the absence of a "FAIL" string — a
+# regression that makes probe_mcp silently emit nothing would still pass
+# the weaker check above.
+mcp_pass_count=$(grep -c '✔ mcp ' <<<"$out")
+if [ "$mcp_pass_count" -eq 3 ]; then
+  report pass "healthy fixture produces exactly 3 passing MCP findings"
+else
+  report fail "healthy fixture produces exactly 3 passing MCP findings" "got $mcp_pass_count, output: $out"
+fi
+
+for want in context7 github firecrawl-mcp; do
+  if grep -q "✔ mcp $want\$" <<<"$out"; then
+    report pass "healthy fixture reports $want as a passing MCP finding"
+  else
+    report fail "healthy fixture reports $want as a passing MCP finding" "$out"
+  fi
+done
+
+# --- regression corpus: the four real failures of 2026-07-26 ----------------
+out=$(run_preflight regression 2>&1); rc=$?
+if [ "$rc" -eq 1 ]; then
+  report pass "regression fixture exits 1"
+else
+  report fail "regression fixture exits 1" "got rc=$rc"
+fi
+
+for broken in magic n8n-mcp crawl4ai; do
+  if grep -q "$broken" <<<"$out"; then
+    report pass "regression reports $broken"
+  else
+    report fail "regression reports $broken" "$out"
+  fi
+done
+
+# "Needs authentication" is UNKNOWN, never FAIL — stripe must not be a failure.
+if grep -qE 'stripe.*(unknown|needs authentication)' <<<"$out"; then
+  report pass "stripe classified unknown, not fail"
+else
+  report fail "stripe classified unknown, not fail" "$out"
+fi
+
+# --- timeout: every server becomes UNKNOWN, never FAIL ----------------------
+out=$(run_preflight timeout 2>&1); rc=$?
+if [ "$rc" -eq 0 ]; then
+  report pass "timeout yields no failures"
+else
+  report fail "timeout yields no failures" "got rc=$rc, output: $out"
+fi
+
+if grep -qi 'timed out' <<<"$out"; then
+  report pass "timeout is reported to the user"
+else
+  report fail "timeout is reported to the user" "$out"
+fi
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

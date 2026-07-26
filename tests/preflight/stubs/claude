@@ -1,6 +1,10 @@
 #!/bin/bash
 # Stub for the `claude` CLI. Serves recorded output from $PREFLIGHT_FIXTURE.
 if [ "${1:-}" = "mcp" ] && [ "${2:-}" = "list" ]; then
+  # exit 124 is what `timeout` returns when it kills the child
+  if [ "$(basename "$PREFLIGHT_FIXTURE")" = "timeout" ]; then
+    exit 124
+  fi
   cat "$PREFLIGHT_FIXTURE/mcp-list.txt"
   exit 0
 fi

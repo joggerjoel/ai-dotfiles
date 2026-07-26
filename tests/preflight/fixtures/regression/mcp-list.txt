@@ -1,0 +1,8 @@
+Checking MCP server health…
+
+context7: npx -y @upstash/context7-mcp - ✔ Connected
+github: npx -y @modelcontextprotocol/server-github - ✔ Connected
+plugin:stripe:stripe: https://mcp.stripe.com (HTTP) - ! Needs authentication
+magic: npx -y @21st-dev/magic - ✘ Failed to connect — -32001: Not authenticated - your API key is missing or was reset.
+n8n-mcp: https://n8n.example.com/mcp-server/http (HTTP) - ✘ Failed to connect — ENOTFOUND: getaddrinfo ENOTFOUND n8n.example.com
+crawl4ai: https://crawl.example.com/mcp/sse (SSE) - ✘ Failed to connect — SSE error: getaddrinfo ENOTFOUND crawl.example.com
