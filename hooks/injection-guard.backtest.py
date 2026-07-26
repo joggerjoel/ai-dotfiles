@@ -96,10 +96,10 @@ for f in transcripts:
 
             elif blk.get("type") == "tool_result":
                 name, argtext, inp = calls.get(blk.get("tool_use_id"), ("", "", {}))
-                if name not in ig.WATCHED:
+                if not ig._is_watched(name):
                     skipped += 1
                     continue
-                text = ig._text_of(blk.get("content"))[:ig.MAX_SCAN]
+                text, _gap = ig._scan_windows(ig._text_of(blk.get("content")))
                 if not text.strip():
                     continue
                 scanned += 1
@@ -114,8 +114,9 @@ for f in transcripts:
                         "pattern": pat.pattern,
                         "excerpt": text[max(0, m.start() - 90):m.end() + 90].replace("\n", " "),
                     }
-                    # Production suppression, called not copied.
-                    if pat.search(argtext) or ig._is_self_reference(inp):
+                    # Production suppression, called not copied. Echo suppression
+                    # was removed as a second oracle — only path anchoring remains.
+                    if ig._is_self_reference(inp):
                         echoes.append(row)
                     else:
                         hits.append(row)

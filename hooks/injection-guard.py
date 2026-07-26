@@ -14,7 +14,8 @@ incoming content at all. `tool_response` exists only on PostToolUse.
 
 Behaviour: never blocks a tool (it has already run). Everything exits 0 except an
 enforced hit, which exits 2 to surface the stderr note to the model before it acts
-on the content. Any internal error exits 0 — this hook must never break the loop.
+on the content. Any internal error exits 0 — this hook must never break the loop —
+but the error is logged, so a crash is never mistaken for a clean scan.
 
 Modes, via INJECTION_GUARD_MODE:
   shadow  (default) record hits to the log, say nothing. Run this until
@@ -26,8 +27,8 @@ so it starts in shadow and you promote it on evidence. See --report.
 
 Derived from Order Samurai's bin/prompt_injection_guard.py (Apache 2.0,
 github.com/Gemkai/Order-Samurai). Changed here: moved PreToolUse -> PostToolUse
-and switched the scan target from tool_input to tool_response; added word
-boundaries; dropped patterns that collide with ordinary technical prose
+and switched the scan target from tool_input to tool_response; dropped patterns
+that collide with ordinary technical prose
 (see DROPPED below); removed the LM Studio semantic stage and the
 sys.path import from ~/.claude/scripts; no dependency on the upstream repo.
 
@@ -50,8 +51,26 @@ LOG_PATH = Path(
     or Path.home() / ".claude" / "hooks" / ".logs" / "injection-guard.jsonl"
 )
 
-# Tools whose output can carry content this machine did not author.
-WATCHED = {"Read", "WebFetch", "WebSearch", "Bash", "Grep", "Glob", "NotebookRead"}
+# Coverage is a DENY-list, not an allow-list. An allow-list silently fails open for
+# every tool added later: this machine prefers firecrawl MCP over WebFetch for
+# scraping, so the allow-list watched the deprecated path and left the recommended
+# one unguarded, along with Agent (subagent results) and every mcp__* fetcher.
+# Anything not listed here is scanned, so a new MCP server is covered on arrival.
+#
+# Only exempt tools whose output cannot carry foreign content: it is either text
+# this machine just authored, or pure control-plane structure.
+IGNORED_TOOLS = {
+    # Writes — the content is ours, going out
+    "Write", "Edit", "MultiEdit", "NotebookEdit",
+    # Control plane / bookkeeping — no external content
+    "TodoWrite", "AskUserQuestion", "ExitPlanMode", "EnterPlanMode",
+    "TaskCreate", "TaskUpdate", "TaskStop", "ToolSearch", "Skill",
+    "SendUserFile", "Artifact", "KillShell", "ScheduleWakeup",
+}
+
+
+def _is_watched(tool: str) -> bool:
+    return bool(tool) and tool not in IGNORED_TOOLS
 
 # DROPPED from upstream's block list — each matched ordinary technical writing:
 #   "jailbreak"        — appears in any security document
@@ -61,20 +80,27 @@ WATCHED = {"Read", "WebFetch", "WebSearch", "Bash", "Grep", "Glob", "NotebookRea
 #   "anti-slop bypass" — upstream project jargon
 # What remains is imperative and directed at an agent, which ordinary prose is not.
 BLOCK_PATTERNS = [
-    re.compile(r"\bignore (?:all )?(?:the )?(?:previous|prior|above|preceding) instructions\b", re.I),
-    re.compile(r"\bdisregard (?:all )?(?:the )?(?:previous|prior|above) instructions\b", re.I),
-    re.compile(r"\bignore your (?:previous |prior )?instructions\b", re.I),
-    re.compile(r"\b(?:system )?prompt override\b", re.I),
-    re.compile(r"\boverride (?:the )?system prompt\b", re.I),
-    re.compile(r"\bbypass all constraints\b", re.I),
-    re.compile(r"\bdo anything now\b", re.I),
-    re.compile(r"\bdan mode\b", re.I),
-    re.compile(r"\byou must ignore\b", re.I),
-    re.compile(r"\b(?:bypass|disable) (?:all )?safety\b", re.I),
-    re.compile(r"\bnew instructions:\s", re.I),
+    re.compile(r"ignore (?:all )?(?:the )?(?:previous|prior|above|preceding) instructions\b", re.I),
+    re.compile(r"disregard (?:all )?(?:the )?(?:previous|prior|above) instructions\b", re.I),
+    re.compile(r"ignore your (?:previous |prior )?instructions\b", re.I),
+    re.compile(r"(?:system )?prompt override\b", re.I),
+    re.compile(r"override (?:the )?system prompt\b", re.I),
+    re.compile(r"bypass all constraints\b", re.I),
+    re.compile(r"do anything now\b", re.I),
+    re.compile(r"dan mode\b", re.I),
+    re.compile(r"you must ignore\b", re.I),
+    re.compile(r"(?:bypass|disable) (?:all )?safety\b", re.I),
+    re.compile(r"new instructions:\s", re.I),
 ]
 
-MAX_SCAN = 200_000  # cap the scan on very large tool results
+# Memory guard only — NOT a scan window. Truncating to the head meant a payload
+# past the cap was simply invisible: pad with filler, inject after, done. Measured
+# at 20MB in 0.11s, so scanning the whole thing is affordable; past the cap we scan
+# head AND tail (append is the cheap attack) and log that a gap existed, because a
+# blind spot nobody can see is worse than a smaller one everybody can.
+MAX_SCAN = 10_000_000
+MAX_DEPTH = 40  # _text_of recursion bound; deeper nesting raised RecursionError,
+                # which the outer handler swallowed into a silent exit 0.
 
 # This hook's own files necessarily contain the patterns it looks for — the
 # source, the test fixtures, and the log of past hits. Reading or grepping any of
@@ -143,13 +169,27 @@ def _text_of(resp: object) -> str:
     line break and silently defeats every \\b anchor. That made Read content
     unmatchable while Bash still worked (2026-07-26).
     """
-    if isinstance(resp, str):
-        return resp
-    if isinstance(resp, dict):
-        return "\n".join(_text_of(v) for v in resp.values())
-    if isinstance(resp, list):
-        return "\n".join(_text_of(x) for x in resp)
+    return _walk(resp, 0)
+
+
+def _walk(node: object, depth: int) -> str:
+    if depth > MAX_DEPTH:
+        return ""
+    if isinstance(node, str):
+        return node
+    if isinstance(node, dict):
+        return "\n".join(_walk(v, depth + 1) for v in node.values())
+    if isinstance(node, list):
+        return "\n".join(_walk(x, depth + 1) for x in node)
     return ""
+
+
+def _scan_windows(text: str) -> tuple[str, bool]:
+    """Text to scan, plus whether anything was skipped. Head+tail past the cap."""
+    if len(text) <= MAX_SCAN:
+        return text, False
+    half = MAX_SCAN // 2
+    return text[:half] + "\n" + text[-half:], True
 
 
 def _log(entry: dict) -> None:
@@ -176,12 +216,21 @@ def report() -> int:
         print("log is empty")
         return 0
 
-    hits = [r for r in rows if not r.get("suppressed")]
+    errors = [r for r in rows if r.get("error")]
+    gapped = [r for r in rows if r.get("gapped")]
+    hits = [r for r in rows if not r.get("suppressed") and not r.get("error")]
     echoes = [r for r in rows if r.get("suppressed")]
     print(f"injection-guard log: {LOG_PATH}")
     print(f"  window       {rows[0].get('ts', '?')} → {rows[-1].get('ts', '?')}")
     print(f"  hits         {len(hits)}   (would warn in enforce mode)")
-    print(f"  echoes       {len(echoes)}  (self-authored, suppressed)")
+    print(f"  suppressed   {len(echoes)}  (self-reference)")
+    if errors:
+        print(f"  ERRORS       {len(errors)}  ← the guard crashed; these were NOT scans")
+        for r in errors[-3:]:
+            print(f"      {r.get('error')}")
+    if gapped:
+        print(f"  gapped       {len(gapped)}  ← response exceeded {MAX_SCAN:,} chars; "
+              f"a middle span went unscanned")
 
     for title, group in (("hits", hits), ("echoes", echoes)):
         if not group:
@@ -218,37 +267,32 @@ def main() -> int:
         return 0
 
     tool = payload.get("tool_name") or payload.get("toolName") or ""
-    if tool not in WATCHED:
+    if not _is_watched(tool):
         return 0
 
-    text = _text_of(payload.get("tool_response") or payload.get("toolResponse") or "")[:MAX_SCAN]
+    full = _text_of(payload.get("tool_response") or payload.get("toolResponse") or "")
+    text, gapped = _scan_windows(full)
     if not text.strip():
         return 0
 
-    # Echo suppression. If the pattern also appears in the tool's own ARGUMENTS,
-    # the match is this machine's text coming back (`echo "ignore previous
-    # instructions"`, grepping this hook's log, running its tests) rather than
-    # content arriving from elsewhere. Real injection lives in the response and
-    # not in the command that fetched it — `cat evil.txt` does not contain the
-    # payload, so genuine hits still warn. Without this the guard fires on any
-    # work about prompt injection, including its own verification run.
+    # Suppression is path-anchored ONLY. The previous "pattern also appears in the
+    # tool's arguments" rule was a second oracle of the same shape as the SELF_MARKER
+    # one: arguments are frequently built from content the agent just read, so
+    # injected text that steers the agent into naming the phrase in its own command
+    # switched off the scan of the reply. Removing it costs some false positives on
+    # deliberate phrase-searching, which the backtest measures.
     tool_input = payload.get("tool_input") or payload.get("toolInput") or {}
-    if isinstance(tool_input, dict):
-        input_text = " ".join(str(v) for v in tool_input.values())
-    else:
-        input_text = str(tool_input)
 
     for pattern in BLOCK_PATTERNS:
         m = pattern.search(text)
         if not m:
             continue
-        is_self = _is_self_reference(tool_input)
-        if pattern.search(input_text) or is_self:
+        if _is_self_reference(tool_input):
             _log({
                 "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 "tool": tool,
                 "pattern": pattern.pattern,
-                "suppressed": "self_reference" if is_self else "echo_of_tool_input",
+                "suppressed": "self_reference",
             })
             continue
         start = max(0, m.start() - 80)
@@ -260,6 +304,7 @@ def main() -> int:
             "excerpt": excerpt[:300],
             "cwd": payload.get("cwd", ""),
             "mode": mode,
+            "gapped": gapped,  # response exceeded MAX_SCAN; a middle span went unscanned
         })
         # Shadow: the hit is on the record, but the session is not interrupted.
         if mode != "enforce":
@@ -279,5 +324,16 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except Exception:
-        sys.exit(0)  # a broken guard must never break the tool loop
+    except Exception as exc:
+        # Never break the tool loop — but "never break" must not mean "never
+        # report". A bare swallow turned RecursionError on deeply-nested output
+        # into a silent pass, indistinguishable from a clean scan. Record it so
+        # --report can surface crashes instead of counting them as safety.
+        try:
+            _log({
+                "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "error": f"{type(exc).__name__}: {exc}"[:300],
+            })
+        except Exception:
+            pass
+        sys.exit(0)
