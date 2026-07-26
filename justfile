@@ -152,3 +152,15 @@ lint:
     set -euo pipefail
     command -v shellcheck >/dev/null || { echo "shellcheck not installed (brew install shellcheck)"; exit 1; }
     shellcheck -S warning {{dotfiles}}/scripts/*.sh {{dotfiles}}/*.sh
+
+# [local] verify every configured asset actually works (read-only)
+preflight *ARGS:
+    {{dotfiles}}/scripts/preflight.sh {{ARGS}}
+
+# [local] preflight plus tier-3 smoke tests
+audit:
+    {{dotfiles}}/scripts/preflight.sh --smoke
+
+# [local] run the preflight test suite
+test:
+    {{dotfiles}}/tests/preflight/run.sh

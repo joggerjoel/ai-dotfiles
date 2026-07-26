@@ -259,3 +259,15 @@ if [ "$RUN_FLEET" = "yes" ]; then
     warn "Fleet update finished with failures — offline hosts are skipped; check the recap above."
   fi
 fi
+
+# ── Verify the upgraded environment ──────────────────────────────
+# update.sh upgrades CLIs and re-vendors skills — the operations most likely
+# to break an asset — so verify immediately afterwards. Read-only, and never
+# fails the update: an upgrade is not broken because an unrelated MCP server
+# is down, and conflating the two teaches you to ignore the exit code.
+header "Verifying assets"
+if [ -x "$DOTFILES_DIR/scripts/preflight.sh" ]; then
+  "$DOTFILES_DIR/scripts/preflight.sh" || true
+else
+  skip "scripts/preflight.sh not present — skipping verification"
+fi
