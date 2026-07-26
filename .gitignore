@@ -29,3 +29,4 @@ backup/
 
 # git worktrees created by EnterWorktree (scratch, never committed)
 .claude/worktrees/
+__pycache__/

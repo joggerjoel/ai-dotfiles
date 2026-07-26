@@ -621,7 +621,9 @@ link_claude_hooks() {
   local f
   for f in "$DOTFILES_DIR"/hooks/*.sh "$DOTFILES_DIR"/hooks/*.py; do
     [ -f "$f" ] || continue
-    case "$(basename "$f")" in *.test.sh|*.test.py) continue ;; esac  # tests stay in the repo
+    # A real hook is <name>.<ext>. Anything with a dotted stem (foo.test.sh,
+    # foo.backtest.py) is a repo-side helper and must not be linked as a hook.
+    case "$(basename "$f")" in *.*.*) continue ;; esac
     link_file "$f" "$CLAUDE_DIR/hooks/$(basename "$f")"
   done
 }
