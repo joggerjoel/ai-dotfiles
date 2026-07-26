@@ -938,31 +938,9 @@ check_preconditions() {
   fi
 }
 
-# Print all findings for one class, collapsing passes onto a single line.
-render_class() {
-  local class="$1" label="$2" f c n v d passes=() total=0
-  for f in ${FINDINGS+"${FINDINGS[@]}"}; do
-    IFS='|' read -r c n v d _ <<<"$f"
-    [ "$c" = "$class" ] || continue
-    total=$((total + 1))
-    case "$v" in
-      pass)     passes+=("$n") ;;
-      fail)     printf '  ✘ %-18s %s\n' "$n" "$d" ;;
-      unknown)  printf '  ! %-18s %s\n' "$n" "$d" ;;
-      untested) printf '  · %-18s %s\n' "$n" "$d" ;;
-    esac
-  done
-  [ "$total" -eq 0 ] && return
-  if [ ${#passes[@]} -gt 0 ]; then
-    printf '  ✔ %s\n' "${passes[*]}"
-  fi
-  printf '%s\n' "$label ($total)" >&2  # header printed by caller; see below
-}
-```
-
-Replace `render_class` usage with a simpler, header-first form — use this instead of the above `printf ... >&2` line. The final `render_class` is:
-
-```bash
+# Print all findings for one class. Passes collapse onto a single line, so a
+# clean report stays skimmable. Body is buffered so the header can print first
+# with the correct total.
 render_class() {
   local class="$1" label="$2" f c n v d passes=() total=0 body=""
   for f in ${FINDINGS+"${FINDINGS[@]}"}; do
