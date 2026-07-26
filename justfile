@@ -146,6 +146,14 @@ update:
 setup:
     {{dotfiles}}/setup.sh
 
+# [local] injection-guard: unit tests + backtest against real transcripts
+guard-verify:
+    @bash {{dotfiles}}/hooks/injection-guard.test.sh
+
+# [local] injection-guard: full hit list from the transcript corpus
+guard-report:
+    @{{dotfiles}}/hooks/injection-guard.backtest.py
+
 # [local] lint every shell script in scripts/
 lint:
     #!/usr/bin/env bash

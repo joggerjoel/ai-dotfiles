@@ -27,6 +27,14 @@ from collections import defaultdict
 from pathlib import Path
 
 QUIET = "--quiet" in sys.argv
+CHECK = "--check" in sys.argv      # compare to baseline, non-zero on drift
+ACCEPT = "--accept" in sys.argv    # record current numbers as the new baseline
+BASELINE = Path(__file__).resolve().with_name("injection-guard.baseline.json")
+
+# How far the hit rate may drift before a human has to look. Corpus grows as you
+# work, so small movement is normal; a big move means the change altered what the
+# guard sees. Downward is the dangerous direction — that is detection being lost.
+TOLERANCE = 0.15  # relative
 
 # Importing the guard would otherwise drop a __pycache__ beside it — in the repo
 # and, when run against the symlink, inside ~/.claude/hooks.
@@ -112,6 +120,39 @@ print(f"  skipped (unwatched tool)           : {skipped:,}")
 print(f"  HITS   (would warn in enforce)     : {len(hits)}")
 print(f"  suppressed (echo / self-reference) : {len(echoes)}")
 print(f"  hit rate                           : {rate:.4f}%")
+
+if ACCEPT:
+    BASELINE.write_text(json.dumps(
+        {"rate": round(rate, 4), "hits": len(hits), "scanned": scanned}, indent=2) + "\n")
+    print(f"\n  baseline recorded: {rate:.4f}% ({len(hits)}/{scanned:,}) -> {BASELINE.name}")
+    sys.exit(0)
+
+if CHECK:
+    if not BASELINE.exists():
+        print(f"\n  NO BASELINE. Review the hits above, then record them:")
+        print(f"    {Path(__file__).name} --accept")
+        sys.exit(1)
+    base = json.loads(BASELINE.read_text())
+    prev = base.get("rate", 0.0)
+    drift = abs(rate - prev) / prev if prev else (1.0 if rate else 0.0)
+    # Compare at the baseline's stored precision, or an unchanged rate reads as a fall.
+    r4 = round(rate, 4)
+    arrow = "→" if r4 == prev else ("↓" if r4 < prev else "↑")
+    print(f"\n  baseline {prev:.4f}%  {arrow}  now {rate:.4f}%   "
+          f"(drift {drift * 100:.1f}%, tolerance {TOLERANCE * 100:.0f}%)")
+    if drift <= TOLERANCE:
+        print("  within tolerance.")
+        sys.exit(0)
+    print("\n  ── DRIFT EXCEEDS TOLERANCE ─────────────────────────────")
+    if rate < prev:
+        print("  The rate FELL. That usually means detection was lost, not that")
+        print("  false positives were fixed. Confirm the guard still catches a")
+        print("  real payload before accepting this.")
+    else:
+        print("  The rate ROSE. Check the hits above are genuinely foreign")
+        print("  content and not a pattern that now over-matches.")
+    print(f"\n  If the new number is correct:  {Path(__file__).name} --accept")
+    sys.exit(1)
 
 if not hits:
     print("\n  No hits across the corpus.")

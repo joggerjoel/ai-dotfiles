@@ -107,6 +107,26 @@ echo "── --report ───────────────────�
 if "$G" --report >/dev/null 2>&1; then printf '  PASS  %-46s\n' "--report runs clean"; pass=$((pass+1))
 else printf '  FAIL  %-46s\n' "--report runs clean"; fail=$((fail+1)); fi
 
+echo "── backtest vs baseline (real traffic) ────────────────"
+# Fixtures inherit the author's assumptions; every scope bug in this hook was a
+# wrong assumption about real payloads and passed the unit tests. The backtest is
+# the only check that measures against real traffic, so it runs here rather than
+# relying on anyone remembering to. ~3s. Skipped where there is no corpus
+# (fleet hosts), because absent evidence must not read as a pass.
+BT="$(dirname "$0")/injection-guard.backtest.py"
+if [ -n "$(find "$HOME/.claude/projects" -name '*.jsonl' -print -quit 2>/dev/null)" ]; then
+  if out="$("$BT" --check --quiet 2>&1)"; then
+    printf '  PASS  %s\n' "$(printf '%s' "$out" | grep -E 'baseline .* now ' | sed 's/^ *//')"
+    pass=$((pass+1))
+  else
+    printf '  FAIL  backtest drift — run it directly for the hit list\n'
+    printf '%s\n' "$out" | grep -E 'baseline .* now |NO BASELINE|rate (FELL|ROSE)|--accept' | sed 's/^/        /'
+    fail=$((fail+1))
+  fi
+else
+  printf '  SKIP  no transcript corpus on this host\n'
+fi
+
 echo
 echo "  $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
