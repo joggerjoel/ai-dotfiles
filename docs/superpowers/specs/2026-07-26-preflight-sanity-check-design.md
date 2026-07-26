@@ -259,13 +259,23 @@ deterministically and can reproduce states that are hard to create on demand: a
 
 The four failures found on 2026-07-26 are the acceptance test.
 
-| Fixture                     | Expected                                     |
-| --------------------------- | -------------------------------------------- |
-| `n8n` → `example.com`       | FAIL, containable                            |
-| `crawl4ai`, env vars unset  | FAIL, containable                            |
-| `agent-browser` off `PATH`  | FAIL, not containable                        |
-| `magic` auth failure        | FAIL, containable                            |
-| `--quarantine` on the above | disables exactly 3, reports 1 as needing you |
+| Fixture                     | Expected                                            |
+| --------------------------- | --------------------------------------------------- |
+| `n8n` → `example.com`       | `mcp` FAIL, containable                             |
+| `crawl4ai` unreachable host | `mcp` FAIL, containable                             |
+| `magic` auth failure        | `mcp` FAIL, containable                             |
+| `crawl4ai` env vars unset   | `env` FAIL, **not** containable                     |
+| `agent-browser` off `PATH`  | `cli` FAIL, not containable — see note              |
+| `--quarantine` on the above | disables exactly 3 (all `mcp`); 4 failures need you |
+
+Containment is MCP-only, so an `env` finding is never containable even when its
+paired `mcp` finding is — unsetting `CRAWL4AI_URL` is not something the checker
+can disable, whereas the server it breaks is.
+
+The `agent-browser` case is **not** reproduced by the fixture: `probe_clis`
+resolves against the real `PATH`, so once the binary is installed the row passes
+on any machine that has it. It is recorded here as one of the four original
+failures, not as a fixture-backed assertion.
 
 ### Negative control
 

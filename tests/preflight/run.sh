@@ -251,11 +251,13 @@ fi
 # a checker-*ran* problem (exit 1), not a checker-*broken* problem (exit 2):
 # `claude mcp list` itself still worked fine (context7 still connects below),
 # only the config-derived probes were blind.
+# Assert exit 1 exactly, not merely non-zero: `-ne 0` would also accept exit 2,
+# which is the very distinction this block's comment claims to be testing.
 out=$(run_preflight malformed 2>&1); rc=$?
-if [ "$rc" -ne 0 ]; then
-  report pass "malformed claude.json does not produce a green run"
+if [ "$rc" -eq 1 ]; then
+  report pass "malformed claude.json exits 1 (ran, found a fault), not 2 (broken)"
 else
-  report fail "malformed claude.json does not produce a green run" "got rc=$rc: $out"
+  report fail "malformed claude.json exits 1 (ran, found a fault), not 2 (broken)" "got rc=$rc: $out"
 fi
 
 if grep -q 'claude.json' <<<"$out" && grep -qi 'malformed' <<<"$out"; then
