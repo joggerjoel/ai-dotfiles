@@ -27,6 +27,15 @@
   gather_facts: true
   ignore_unreachable: true
   tasks:
+    # ignore_unreachable keeps the play going for OTHER hosts when one is
+    # unreachable, but it does NOT skip remaining tasks on the unreachable
+    # host itself — gather_facts silently leaves ansible_facts empty there,
+    # and the very next task's {{ ansible_env.HOME }} template blows up with
+    # "'ansible_env' is undefined" instead of a clean unreachable recap.
+    - name: Stop here if we couldn't gather facts (host unreachable)
+      ansible.builtin.meta: end_host
+      when: (ansible_facts | default({})) | length == 0
+
     - name: Is the claude binary present?
       ansible.builtin.stat:
         path: "{{ claude_bin }}"
