@@ -19,7 +19,7 @@ set -euo pipefail
 #   ./deploy.sh -m "msg" --limit aorus7
 # ─────────────────────────────────────────────────────────────────
 
-BOLD='\033[1m'; DIM='\033[2m'; GREEN='\033[32m'; YELLOW='\033[33m'; RED='\033[31m'; RESET='\033[0m'
+BOLD='\033[1m'; DIM='\033[2m'; GREEN='\033[32m'; RED='\033[31m'; RESET='\033[0m'
 ok()   { echo -e "  ${GREEN}✓${RESET} $1"; }
 skip() { echo -e "  ${DIM}○ $1${RESET}"; }
 fail() { echo -e "  ${RED}✗${RESET} $1"; }

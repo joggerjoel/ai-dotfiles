@@ -24,7 +24,8 @@ fi
 
 cleanup_subagents() {
     local killed=0
-    local now=$(date +%s)
+    local now
+    now=$(date +%s)
     local pids=()
     local ages=()
 

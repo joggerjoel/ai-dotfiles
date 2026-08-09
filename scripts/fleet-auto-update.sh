@@ -53,7 +53,7 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
     echo "no inventory.local.yml — this machine isn't the control node, aborting"
     exit 1
   fi
-  cd "$REPO/ansible-ai"
+  cd "$REPO/ansible-ai" || exit 1
   ansible-playbook update.yml
   echo "[$(date '+%F %T')] fleet update finished (rc=$?)"
 } >>"$LOG" 2>&1

@@ -78,7 +78,7 @@ do_refresh() {
     if ! mkdir "$LOCK" 2>/dev/null; then exit 0; fi
     trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
-    local out="" line
+    local out=""
 
     # 1. Claude Code (npm) --------------------------------------------
     local cc_have cc_want

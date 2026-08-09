@@ -53,14 +53,16 @@ SCRIPT_PATH="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")"
 # Load/unload a LaunchAgent into the console user's GUI domain (works over SSH
 # when a desktop session is active), falling back to legacy load for older macOS.
 _launchd_load() {
-  local plist="$1" label="$2" domain="gui/$(id -u)"
+  local plist="$1" label="$2" domain
+  domain="gui/$(id -u)"
   launchctl bootout "$domain/$label" >/dev/null 2>&1 || true
   if launchctl bootstrap "$domain" "$plist" >/dev/null 2>&1; then ok "loaded $label ($domain)"
   elif launchctl load -w "$plist" >/dev/null 2>&1; then ok "loaded $label (legacy load -w)"
   else warn "plist written but immediate load failed — it will load at next login: $plist"; fi
 }
 _launchd_unload() {
-  local plist="$1" label="$2" domain="gui/$(id -u)"
+  local plist="$1" label="$2" domain
+  domain="gui/$(id -u)"
   launchctl bootout "$domain/$label" >/dev/null 2>&1 || launchctl unload -w "$plist" >/dev/null 2>&1 || true
   if [ -f "$plist" ]; then rm -f "$plist" && ok "removed $plist"; else skip "no plist at $plist"; fi
 }

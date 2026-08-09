@@ -223,7 +223,8 @@ UV="$(resolve_tool uv)"
 # path isn't enough. Expose uv's dir; without uv, force the pip
 # backend (pipx accepts it even for uv-built venvs).
 if [ -n "$UV" ]; then
-  export PATH="$(dirname "$UV"):$PATH"
+  PATH="$(dirname "$UV"):$PATH"
+  export PATH
 else
   export PIPX_DEFAULT_BACKEND=pip
 fi
