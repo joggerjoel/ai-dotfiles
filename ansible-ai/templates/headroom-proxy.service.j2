@@ -5,7 +5,7 @@ Description=Headroom context-optimization proxy (127.0.0.1:{{ headroom_port }})
 After=network-online.target
 
 [Service]
-ExecStart={{ ansible_env.HOME }}/.local/bin/headroom proxy --port {{ headroom_port }}
+ExecStart={{ ansible_facts.env.HOME }}/.local/bin/headroom proxy --port {{ headroom_port }}
 Restart=on-failure
 RestartSec=5
 

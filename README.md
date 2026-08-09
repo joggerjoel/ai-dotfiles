@@ -216,7 +216,7 @@ Your `~/.claude/CLAUDE.md` is assembled from `base/` + `profiles/<profile>/` + g
 > asks whether you use Remote Control: **y** installs `settings.json` as a copy with those three
 > vars stripped; **n** (default) keeps the privacy opt-out and skips `/rc`. Flip later via
 > `.local/.remote-control` + `./setup.sh update`. Full walkthrough:
-> **[docs/rc-issues.md](docs/rc-issues.md)**.
+> **[references/remote-control.md](references/remote-control.md)**.
 
 ## Lineage & credit
 

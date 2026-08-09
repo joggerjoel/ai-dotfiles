@@ -17,12 +17,12 @@ aorus_ai:
       -o ConnectTimeout=15
       -o StrictHostKeyChecking=accept-new
     # Consumed by the playbooks:
-    claude_bin: "{{ ansible_env.HOME }}/.local/bin/claude"
-    projects_dir: "{{ ansible_env.HOME }}/Documents/Projects"
+    claude_bin: "{{ ansible_facts.env.HOME }}/.local/bin/claude"
+    projects_dir: "{{ ansible_facts.env.HOME }}/Documents/Projects"
     # ai-dotfiles (config layer) — vps profile, unattended:
     install_dotfiles: true
     dotfiles_repo: "https://github.com/joggerjoel/ai-dotfiles.git"
-    dotfiles_dir: "{{ ansible_env.HOME }}/ai-dotfiles"
+    dotfiles_dir: "{{ ansible_facts.env.HOME }}/ai-dotfiles"
     dotfiles_github_user: "youruser"
     dotfiles_hide_ai: "y"
 
@@ -68,12 +68,12 @@ local_ai:
     localhost:
       ansible_connection: local
   vars:
-    claude_bin: "{{ ansible_env.HOME }}/.local/bin/claude"
+    claude_bin: "{{ ansible_facts.env.HOME }}/.local/bin/claude"
     # Set to YOUR local checkout of this repo — it's often somewhere like
     # ~/Developer/Git/ai-dotfiles, not the fleet's ~/ai-dotfiles. If this is
     # wrong, update.yml silently reports "dotfiles: not installed" for
     # localhost on every run.
-    dotfiles_dir: "{{ ansible_env.HOME }}/ai-dotfiles"
+    dotfiles_dir: "{{ ansible_facts.env.HOME }}/ai-dotfiles"
 
 # ── The everyday update target: fleet + control node ─────────────
 ai_all:

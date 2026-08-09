@@ -30,7 +30,7 @@
         executable: /bin/bash
       when:
         - just_check.rc | default(1) != 0
-        - ansible_system | default('') == "Darwin"
+        - ansible_facts.system | default('') == "Darwin"
       changed_when: true
 
     - name: Install just via official installer (Linux -> ~/.local/bin)
@@ -43,7 +43,7 @@
         executable: /bin/bash
       when:
         - just_check.rc | default(1) != 0
-        - ansible_system | default('') == "Linux"
+        - ansible_facts.system | default('') == "Linux"
       changed_when: true
 
     # Skipped on hosts with no gathered facts (offline/unreachable) so a down
@@ -55,7 +55,7 @@
       register: just_ver
       changed_when: false
       failed_when: just_ver.rc | default(0) != 0
-      when: ansible_system is defined
+      when: ansible_facts.system is defined
 
     - name: Report installed version
       ansible.builtin.debug:

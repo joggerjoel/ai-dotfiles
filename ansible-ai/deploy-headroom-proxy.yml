@@ -24,14 +24,14 @@
   tasks:
     - name: Check the headroom CLI is installed
       ansible.builtin.stat:
-        path: "{{ ansible_env.HOME }}/.local/bin/headroom"
+        path: "{{ ansible_facts.env.HOME }}/.local/bin/headroom"
       register: headroom_cli
 
     # No CLI yet (or not Linux — user units are systemd-only): nothing to
     # supervise. provision/update installs the CLI; next run picks it up.
     - name: End host without CLI or systemd
       ansible.builtin.meta: end_host
-      when: not headroom_cli.stat.exists or ansible_system != 'Linux'
+      when: not headroom_cli.stat.exists or ansible_facts.system != 'Linux'
 
     # Without lingering the user manager (and the proxy with it) dies when
     # the last SSH session closes.
@@ -43,14 +43,14 @@
 
     - name: Ensure user unit dir exists
       ansible.builtin.file:
-        path: "{{ ansible_env.HOME }}/.config/systemd/user"
+        path: "{{ ansible_facts.env.HOME }}/.config/systemd/user"
         state: directory
         mode: "0755"
 
     - name: Install the headroom-proxy unit
       ansible.builtin.template:
         src: templates/headroom-proxy.service.j2
-        dest: "{{ ansible_env.HOME }}/.config/systemd/user/headroom-proxy.service"
+        dest: "{{ ansible_facts.env.HOME }}/.config/systemd/user/headroom-proxy.service"
         mode: "0644"
 
     # Adopt an ad-hoc proxy: anything on the pattern that isn't the unit's

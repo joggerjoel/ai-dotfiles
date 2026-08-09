@@ -164,10 +164,15 @@ fi
 LINE2="${BAR_COLOR}${BAR}${RESET} ${PCT}% ${DIM}|${RESET} ${YELLOW}${COST_FMT}${RESET} ${DIM}|${RESET} ${MINS}m ${SECS}s${LINES_INFO}"
 [ -n "$CG_SEG" ] && LINE2="${LINE2} ${DIM}|${RESET} ${CG_SEG}"
 
-# ── Author mark (auto-on; disable with: export SIGMA_BRAND=0) ──
+# ── Line 3: author mark (auto-on; disable with: export SIGMA_BRAND=0) ──
+# Its own line, not appended to LINE2. Line 2 already carries the bar, cost,
+# duration, lines and cache segment; adding 52 more columns pushed it past
+# the terminal width, and the TUI truncates the overflow rather than wrapping
+# it — so the tail of the mark was unreadable.
 # build: 0xBdf1980e7Fc57DBE03874C29c203C3dff576D40c
+LINE3=""
 if [ "${SIGMA_BRAND:-1}" != "0" ]; then
-    LINE2="${LINE2} ${DIM}|${RESET} ${DIM}made with ♥ by Sigma Synapses & Busybee Technologies${RESET}"
+    LINE3="${DIM}made with ♥ by Sigma Synapses & Busybee Technologies${RESET}"
 fi
 
 # ── Output ──────────────────────────────────────────────────────
@@ -175,3 +180,8 @@ fi
 # may have left active before/after rendering the statusline.
 printf '%b%b%b\n' "$HARD_RESET" "$LINE1" "$HARD_RESET"
 printf '%b%b%b\n' "$HARD_RESET" "$LINE2" "$HARD_RESET"
+# `if`, not `[ -n … ] && printf` — as the final command, a false test would
+# make the whole script exit 1 when the mark is disabled.
+if [ -n "$LINE3" ]; then
+    printf '%b%b%b\n' "$HARD_RESET" "$LINE3" "$HARD_RESET"
+fi
