@@ -7,7 +7,8 @@ pass=0; fail=0
 
 # Isolate the log: test fixtures must never land in the production log the
 # shadow period is gathering evidence into.
-export INJECTION_GUARD_LOG="$(mktemp -t injguard-test)"
+INJECTION_GUARD_LOG="$(mktemp -t injguard-test)"
+export INJECTION_GUARD_LOG
 trap 'rm -f "$INJECTION_GUARD_LOG"' EXIT
 
 t() { # name expected json  — runs in enforce mode unless MODE is preset

@@ -154,12 +154,20 @@ guard-verify:
 guard-report:
     @{{dotfiles}}/hooks/injection-guard.backtest.py
 
-# [local] lint every shell script in scripts/
+# [local] cache-guard: unit tests (hooks/cache-guard.test.sh)
+cache-test:
+    @bash {{dotfiles}}/hooks/cache-guard.test.sh
+
+# [local] per-session cache/token report via ccusage (on demand — never in the statusline)
+cache-report *ARGS:
+    bunx ccusage@latest claude session --breakdown {{ARGS}}
+
+# [local] lint every shell script in scripts/, hooks/ and the repo root
 lint:
     #!/usr/bin/env bash
     set -euo pipefail
     command -v shellcheck >/dev/null || { echo "shellcheck not installed (brew install shellcheck)"; exit 1; }
-    shellcheck -S warning {{dotfiles}}/scripts/*.sh {{dotfiles}}/*.sh
+    shellcheck -S warning {{dotfiles}}/scripts/*.sh {{dotfiles}}/*.sh {{dotfiles}}/hooks/*.sh
 
 # [local] verify every configured asset actually works (read-only)
 preflight *ARGS:

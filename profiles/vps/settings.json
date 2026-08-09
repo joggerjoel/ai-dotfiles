@@ -132,6 +132,14 @@
             "command": "~/.claude/scripts/code-simplifier-gate.sh"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/cache-guard.sh"
+          }
+        ]
       }
     ],
     "SubagentStop": [
@@ -155,6 +163,44 @@
           {
             "type": "command",
             "command": "[ -x \"$HOME/.claude/scripts/check-updates.sh\" ] && \"$HOME/.claude/scripts/check-updates.sh\" || true"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/cache-guard.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/cache-guard.sh"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/cache-guard.sh"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/cache-guard.sh"
           }
         ]
       }
