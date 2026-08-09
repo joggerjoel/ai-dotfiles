@@ -244,6 +244,79 @@ ensure_herdr() {
     || warn "herdr install failed — brew install herdr (non-fatal)"
 }
 
+# Charm's apt repo — glow is absent from Ubuntu's archives, so it needs the
+# vendor repo. Mirrors the keyring + sources.list dance ensure_gh does for the
+# GitHub CLI, and like that one it needs root or sudo.
+add_charm_apt_repo() {
+  [ -f /etc/apt/keyrings/charm.gpg ] && return 0
+  [ "$(id -u)" -eq 0 ] || [ -n "$SUDO" ] || return 1
+  $SUDO mkdir -p -m 755 /etc/apt/keyrings || return 1
+  curl -fsSL https://repo.charm.sh/apt/gpg.key \
+    | $SUDO gpg --dearmor -o /etc/apt/keyrings/charm.gpg || return 1
+  echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" \
+    | $SUDO tee /etc/apt/sources.list.d/charm.list >/dev/null || return 1
+  $SUDO apt-get update -y >/dev/null 2>&1 || true
+}
+
+# Content renderers for the herdr-file-viewer plugin. The viewer pipes file
+# content to bat / delta / glow on stdin and silently degrades that pane to
+# plain text when one is absent — so the plugin "works" while losing syntax
+# highlighting, colorized diffs and rendered markdown.
+#
+# Cross-platform, and the per-OS naming is the whole trap:
+#   package      brew binary   apt binary
+#   bat          bat           batcat   <- Debian renamed it (bacula-console clash)
+#   git-delta    delta         delta
+#   glow         glow          glow     <- not in Ubuntu; needs Charm's apt repo
+# The viewer's default syntax command invokes `bat`, so on apt we expose a shim
+# in ~/.local/bin rather than rewrite the plugin's own config.
+ensure_herdr_renderers() {
+  local pair missing=""
+  case "$PKG_MANAGER" in
+    brew)
+      for pair in bat:bat git-delta:delta glow:glow; do
+        command -v "${pair#*:}" &>/dev/null || missing="$missing ${pair%%:*}"
+      done
+      if [ -n "$missing" ]; then
+        warn "herdr renderers missing —${missing} (viewer panes fall back to plain text)"
+        # shellcheck disable=SC2086
+        brew install $missing >/dev/null 2>&1 \
+          && ok "herdr renderers installed —${missing}" \
+          || warn "renderer install failed — brew install${missing} (non-fatal)"
+      else
+        ok "herdr renderers present (bat, delta, glow)"
+      fi
+      ;;
+    apt)
+      command -v batcat &>/dev/null || command -v bat &>/dev/null || missing="$missing bat"
+      command -v delta &>/dev/null || missing="$missing git-delta"
+      if ! command -v glow &>/dev/null; then
+        add_charm_apt_repo && missing="$missing glow" \
+          || warn "glow skipped — Charm apt repo needs root (non-fatal)"
+      fi
+      if [ -n "$missing" ]; then
+        warn "herdr renderers missing —${missing} (viewer panes fall back to plain text)"
+        apt_update_once
+        # shellcheck disable=SC2086
+        $SUDO apt-get install -y $missing >/dev/null 2>&1 \
+          && ok "herdr renderers installed —${missing}" \
+          || warn "renderer install failed — apt-get install${missing} (non-fatal)"
+      else
+        ok "herdr renderers present (bat/batcat, delta, glow)"
+      fi
+      # Debian's binary is batcat; the viewer calls `bat`. Shim it, no sudo needed.
+      if command -v batcat &>/dev/null && ! command -v bat &>/dev/null; then
+        mkdir -p "$HOME/.local/bin"
+        ln -sf "$(command -v batcat)" "$HOME/.local/bin/bat" \
+          && ok "linked batcat → ~/.local/bin/bat (viewer invokes it as 'bat')"
+      fi
+      ;;
+    *)
+      skip "herdr renderers skipped (no supported package manager)"
+      ;;
+  esac
+}
+
 ensure_just() {
   command -v just &>/dev/null && { ok "just present"; return 0; }
   if [ "$PKG_MANAGER" = "brew" ]; then
@@ -327,6 +400,7 @@ ensure_dependencies() {
   ensure_uv      # Python package manager (serena runs via uvx)
   ensure_claude  # Claude Code itself
   ensure_herdr   # firstmate session backend (macOS/brew only — no-ops on Linux)
+  ensure_herdr_renderers  # bat/delta/glow — herdr-file-viewer content panes
   ensure_just    # fleet command runner (cross-platform: brew or install.sh)
   ensure_serena_dashboard_off  # suppress serena's browser dashboard popup
 }

@@ -212,6 +212,46 @@ if [ "$RUN_AGENTS" = "yes" ] && command -v brew &>/dev/null && command -v herdr 
   fi
 fi
 
+# ── 3c. herdr-file-viewer content renderers (bat / delta / glow) ──
+# Cross-platform, unlike herdr above: these are useful on any host and the
+# fleet's Linux boxes can carry them too. INSTALLS what's missing rather than
+# only upgrading, so an existing checkout picks them up without a full
+# setup.sh re-run. Per-OS naming differs — Debian ships bat's binary as
+# `batcat` (bacula-console clash) and has no glow at all; setup.sh owns the
+# Charm-repo + shim work, so here a missing glow on apt is just reported.
+if [ "$RUN_AGENTS" = "yes" ]; then
+  hr_missing=""
+  if command -v brew &>/dev/null; then
+    header "herdr-file-viewer renderers"
+    for hr_pair in bat:bat git-delta:delta glow:glow; do
+      command -v "${hr_pair#*:}" &>/dev/null || hr_missing="$hr_missing ${hr_pair%%:*}"
+    done
+    if [ -n "$hr_missing" ]; then
+      # shellcheck disable=SC2086
+      brew install $hr_missing >/dev/null 2>&1 \
+        && ok "renderers installed —${hr_missing}" \
+        || warn "renderer install failed — brew install${hr_missing} (non-fatal)"
+    else
+      brew upgrade bat git-delta glow >/dev/null 2>&1 || true
+      ok "renderers current (bat, delta, glow)"
+    fi
+  elif command -v apt-get &>/dev/null; then
+    header "herdr-file-viewer renderers"
+    command -v batcat &>/dev/null || command -v bat &>/dev/null || hr_missing="$hr_missing bat"
+    command -v delta &>/dev/null || hr_missing="$hr_missing git-delta"
+    command -v glow &>/dev/null || warn "glow absent — run setup.sh to add Charm's apt repo"
+    if [ -n "$hr_missing" ]; then
+      $SUDO apt-get update -y >/dev/null 2>&1 || true
+      # shellcheck disable=SC2086
+      $SUDO apt-get install -y $hr_missing >/dev/null 2>&1 \
+        && ok "renderers installed —${hr_missing}" \
+        || warn "renderer install failed — apt-get install${hr_missing} (non-fatal)"
+    else
+      ok "renderers current (bat/batcat, delta)"
+    fi
+  fi
+fi
+
 # ── 4. 9router skills (vendored from decolua/9router) ────────────
 # Re-vendors the skill set from upstream and deploys it to
 # ~/.claude/skills. Writes into the repo's skills/ dir, so changes
