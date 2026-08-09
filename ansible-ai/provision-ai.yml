@@ -39,7 +39,7 @@
         state: present
       failed_when: false # a pkg-mgr hiccup shouldn't abort; the gate below decides
       register: prereqs
-      when: ansible_os_family == "Debian"
+      when: ansible_facts.os_family == "Debian"
 
     - name: Check the hard prerequisites are present
       ansible.builtin.shell: "command -v curl >/dev/null && command -v git >/dev/null"
@@ -78,7 +78,7 @@
         curl {{ curl_retry }} -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.5/install.sh | bash
       args:
         executable: /bin/bash
-        creates: "{{ ansible_env.HOME }}/.nvm/nvm.sh"
+        creates: "{{ ansible_facts.env.HOME }}/.nvm/nvm.sh"
       when: node_check.rc != 0
 
     - name: Install Node.js LTS via nvm (when no Node.js runtime present)
@@ -104,7 +104,7 @@
       ansible.builtin.package:
         name: tmux
         state: present
-      when: tmux_check.rc != 0 and ansible_os_family == "Debian"
+      when: tmux_check.rc != 0 and ansible_facts.os_family == "Debian"
 
     - name: Ensure ~/Documents/Projects exists
       ansible.builtin.file:
@@ -134,7 +134,7 @@
         curl {{ curl_retry }} -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh
       args:
         executable: /bin/bash
-        creates: "{{ ansible_env.HOME }}/.local/bin/codex"
+        creates: "{{ ansible_facts.env.HOME }}/.local/bin/codex"
 
     - name: Install Cursor CLI (official installer -> ~/.local/bin/cursor-agent)
       ansible.builtin.shell: |
@@ -142,7 +142,7 @@
         curl {{ curl_retry }} -fsSL https://cursor.com/install | bash
       args:
         executable: /bin/bash
-        creates: "{{ ansible_env.HOME }}/.local/bin/cursor-agent"
+        creates: "{{ ansible_facts.env.HOME }}/.local/bin/cursor-agent"
 
     - name: Install Cortex Code CLI (Snowflake installer -> ~/.local/bin/cortex)
       ansible.builtin.shell: |
@@ -150,7 +150,7 @@
         curl {{ curl_retry }} -fsSL https://ai.snowflake.com/static/cc-scripts/install.sh | NON_INTERACTIVE=1 SKIP_PATH_PROMPT=1 sh
       args:
         executable: /bin/bash
-        creates: "{{ ansible_env.HOME }}/.local/bin/cortex"
+        creates: "{{ ansible_facts.env.HOME }}/.local/bin/cortex"
 
     - name: Is opencode present? (installer dir varies)
       ansible.builtin.shell: |
@@ -269,7 +269,7 @@
         fi
       args:
         executable: /bin/bash
-        creates: "{{ ansible_env.HOME }}/.local/bin/headroom"
+        creates: "{{ ansible_facts.env.HOME }}/.local/bin/headroom"
 
     # ── Stage B: ai-dotfiles config (vps profile) ────────────────
     # (git/jq/curl already ensured in Stage 0)
@@ -287,7 +287,7 @@
 
     - name: Has ai-dotfiles already been set up on this host?
       ansible.builtin.stat:
-        path: "{{ ansible_env.HOME }}/.claude/settings.json"
+        path: "{{ ansible_facts.env.HOME }}/.claude/settings.json"
       register: dotfiles_done
       when: install_dotfiles | bool
 
@@ -337,7 +337,7 @@
       ansible.builtin.debug:
         msg: >-
           {{ inventory_hostname }} ->
-          tmux: {{ 'present' if tmux_check.rc == 0 else ('installed' if ansible_os_family == 'Debian' else 'MISSING (non-Debian — install manually)') }} |
+          tmux: {{ 'present' if tmux_check.rc == 0 else ('installed' if ansible_facts.os_family == 'Debian' else 'MISSING (non-Debian — install manually)') }} |
           claude: {{ claude_ver.stdout | default('MISSING', true) }} |
           {{ sibling_clis.stdout | default('codex=? cursor=?', true) }} |
           dotfiles: {{ 'configured' if (install_dotfiles | bool) else 'skipped' }}

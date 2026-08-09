@@ -27,6 +27,24 @@
   gather_facts: true
   ignore_unreachable: true
   tasks:
+    # ignore_unreachable keeps one absent host from killing the run, but it also
+    # marches unreachable hosts into the tasks below — where claude_bin templates
+    # ansible_env.HOME, which never got gathered. That surfaced as
+    # "'ansible_env' is undefined" and a recap reading `unreachable=0 failed=1`,
+    # i.e. a dead host indistinguishable from a broken task. End the play for
+    # those hosts here so the recap reports them as unreachable, which is true.
+    # ignore_unreachable books an absent host as `ignored=1`, never as
+    # `unreachable=1` — so the recap alone cannot tell you a host was skipped.
+    # Say it out loud before ending the play, or it reads as a clean run.
+    - name: Say plainly that a host was unreachable
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} UNREACHABLE — skipped entirely, nothing was updated here"
+      when: ansible_facts == {}
+
+    - name: Stop cleanly on hosts we could not reach
+      ansible.builtin.meta: end_host
+      when: ansible_facts == {}
+
     - name: Is the claude binary present?
       ansible.builtin.stat:
         path: "{{ claude_bin }}"

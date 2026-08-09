@@ -32,7 +32,7 @@
     # Retry transient CDN/network errors so a blip doesn't hard-fail a host —
     # matters more here than elsewhere given the 151 MB payload.
     curl_retry: "--retry 5 --retry-delay 2 --retry-connrefused"
-    kimi_bin: "{{ ansible_env.HOME }}/.kimi-code/bin/kimi"
+    kimi_bin: "{{ ansible_facts.env.HOME }}/.kimi-code/bin/kimi"
   tasks:
     - name: Check whether kimi is already installed
       ansible.builtin.shell: |
@@ -61,7 +61,7 @@
       when:
         - kimi_check.rc | default(1) != 0
         - sha_tool.rc | default(1) != 0
-        - ansible_system is defined
+        - ansible_facts.system is defined
 
     - name: Install kimi via the official installer (macOS and Linux)
       ansible.builtin.shell: |
@@ -73,7 +73,7 @@
       when:
         - kimi_check.rc | default(1) != 0
         - sha_tool.rc | default(1) == 0
-        - ansible_system | default('') in ["Darwin", "Linux"]
+        - ansible_facts.system | default('') in ["Darwin", "Linux"]
       changed_when: true
       # 151 MB over a home connection can outrun the default; give it room.
       async: 900
@@ -88,7 +88,7 @@
       register: kimi_ver
       changed_when: false
       failed_when: kimi_ver.rc | default(0) != 0
-      when: ansible_system is defined
+      when: ansible_facts.system is defined
 
     - name: Report installed version
       ansible.builtin.debug:
