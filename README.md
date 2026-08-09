@@ -57,6 +57,10 @@ machine roles, and how a typed command flows through it — see
 - **Three model tiers, routed by the work** — frontier (subscription), bulk (9router: 458 models
   across 57 providers), and local (ollama).
 - **Guardrails baked in** — dangerous commands blocked, risky actions confirmed, telemetry opt-out.
+- **Prompt-cache awareness** — the `cache-guard` hook shows live cache reads/writes and a
+  warm / expiring / cold state in the status line, sends one desktop warning before an idle
+  session's cache lapses, and can (opt-in) block a huge prompt into a cold session
+  (`./setup.sh cache` to configure). It observes Anthropic's cache; it can't extend it.
 - **A multi-machine fleet** — node / HUD / workers, driven by ansible, pull-based and reproducible.
 - **Optional crew orchestration** — talk to one agent (`firstmate`) that runs the rest.
 

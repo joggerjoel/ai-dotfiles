@@ -95,6 +95,18 @@ if command -v headroom > /dev/null 2>&1 || [ -x "$HOME/.local/bin/headroom" ]; t
     esac
 fi
 
+# ── Cache-guard segment (logic lives in the hook, not here) ────
+# Delegates to cache-guard.sh: hooks receive no token telemetry, so the
+# statusline is the sensor — the segment call records cache read/write and
+# context tokens to per-session state AND returns the colored display
+# ("Cache R184k/W0 · warm 42m"). No network and no bunx/ccusage here: this
+# script renders constantly and must stay fast. Empty when disabled.
+CG_SEG=""
+CG_HOOK="$HOME/.claude/hooks/cache-guard.sh"
+if [ -x "$CG_HOOK" ]; then
+    CG_SEG=$(printf '%s' "$input" | "$CG_HOOK" segment 2>/dev/null || true)
+fi
+
 # ── Line 1: [Session] Model | Dir | Git | Style ────────────────
 if [ -n "$SESSION_NAME" ]; then
     LABEL="${SESSION_NAME}"
@@ -150,6 +162,7 @@ if [ "$LINES_ADDED" -gt 0 ] || [ "$LINES_REMOVED" -gt 0 ]; then
 fi
 
 LINE2="${BAR_COLOR}${BAR}${RESET} ${PCT}% ${DIM}|${RESET} ${YELLOW}${COST_FMT}${RESET} ${DIM}|${RESET} ${MINS}m ${SECS}s${LINES_INFO}"
+[ -n "$CG_SEG" ] && LINE2="${LINE2} ${DIM}|${RESET} ${CG_SEG}"
 
 # ── Author mark (auto-on; disable with: export SIGMA_BRAND=0) ──
 # build: 0xBdf1980e7Fc57DBE03874C29c203C3dff576D40c

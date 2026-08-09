@@ -379,7 +379,8 @@ link_file() {
     rm "$dst"
   elif [ -f "$dst" ]; then
     # Backup existing file
-    local backup_dir="$CLAUDE_DIR/.backups/setup-$(date +%Y%m%d_%H%M%S)"
+    local backup_dir
+    backup_dir="$CLAUDE_DIR/.backups/setup-$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$backup_dir"
     cp "$dst" "$backup_dir/$(basename "$dst")"
     warn "Backed up existing $(basename "$dst") to $backup_dir/"
@@ -412,7 +413,8 @@ install_settings() {
   if [ -L "$dst" ]; then
     rm "$dst"
   elif [ -f "$dst" ]; then
-    local backup_dir="$CLAUDE_DIR/.backups/setup-$(date +%Y%m%d_%H%M%S)"
+    local backup_dir
+    backup_dir="$CLAUDE_DIR/.backups/setup-$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$backup_dir"
     cp "$dst" "$backup_dir/settings.json"
     warn "Backed up existing settings.json to $backup_dir/"
@@ -536,7 +538,8 @@ POLICY
   chmod 0644 "$output"
   mkdir -p "$CLAUDE_DIR"
   if [ -f "$final" ] && ! cmp -s "$output" "$final"; then
-    local backup_dir="$CLAUDE_DIR/.backups/setup-$(date +%Y%m%d_%H%M%S)"
+    local backup_dir
+    backup_dir="$CLAUDE_DIR/.backups/setup-$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$backup_dir"
     cp "$final" "$backup_dir/CLAUDE.md"
     warn "Backed up existing CLAUDE.md to $backup_dir/"
@@ -1273,12 +1276,73 @@ cmd_env() {
   fi
 }
 
+# ── cache-guard policy (.local/.cache-policy, gitignored) ─────────
+# Declares this machine's prompt-cache TTL for hooks/cache-guard.sh. A setup
+# choice, never detection: auth is not inferred from env vars or secrets.
+# Non-destructive — rewrites only the keys it owns and preserves the rest
+# (mode/profile survive each other's updates). Never sets
+# ENABLE_PROMPT_CACHING_1H: that raises write costs and stays a user call.
+cmd_cache() {
+  local arg="${1:-}" ttl="${2:-}" pf="$DOTFILES_DIR/.local/.cache-policy"
+  local cur_profile="" cur_mode="" cur_ttl="" cur_margin=""
+  if [ -f "$pf" ]; then
+    cur_profile=$(sed -n 's/^profile=//p' "$pf" | head -n1)
+    cur_mode=$(sed -n 's/^mode=//p' "$pf" | head -n1)
+    cur_ttl=$(sed -n 's/^ttl_seconds=//p' "$pf" | head -n1)
+    cur_margin=$(sed -n 's/^warning_margin_seconds=//p' "$pf" | head -n1)
+  fi
+
+  case "$arg" in
+    subscription) cur_profile=subscription; cur_ttl=3600; cur_margin=600 ;;
+    api)          cur_profile=api;          cur_ttl=300;  cur_margin=60 ;;
+    custom)
+      case "$ttl" in '' | *[!0-9]*)
+        fail "Usage: ./setup.sh cache custom <ttl_seconds>"; exit 1 ;;
+      esac
+      cur_profile=custom; cur_ttl="$ttl"
+      cur_margin=$((ttl / 6)); [ "$cur_margin" -gt 600 ] && cur_margin=600
+      [ "$cur_margin" -lt 30 ] && cur_margin=30
+      ;;
+    off)          cur_profile=off ;;
+    warn | protect | observe) cur_mode="$arg" ;;
+    '')
+      header "cache-guard policy"
+      if [ -f "$pf" ]; then
+        sed 's/^/    /' "$pf"
+      else
+        skip "No policy yet — defaults apply (subscription: 1h TTL, warn mode)"
+      fi
+      echo ""
+      echo "  Usage: ./setup.sh cache subscription|api|off      TTL profile"
+      echo "         ./setup.sh cache custom <ttl_seconds>      explicit TTL"
+      echo "         ./setup.sh cache observe|warn|protect      prompt-time mode"
+      return 0
+      ;;
+    *) fail "Unknown cache option: $arg (subscription|api|custom <s>|off|observe|warn|protect)"; exit 1 ;;
+  esac
+
+  mkdir -p "$DOTFILES_DIR/.local"
+  {
+    echo "profile=${cur_profile:-subscription}"
+    echo "mode=${cur_mode:-warn}"
+    [ -n "$cur_ttl" ] && echo "ttl_seconds=$cur_ttl"
+    [ -n "$cur_margin" ] && echo "warning_margin_seconds=$cur_margin"
+    # Carry through any hand-tuned keys this command does not manage.
+    # (|| true: grep exits 1 on no match, which would trip set -e.)
+    { [ -f "$pf" ] && grep -E '^(protect_threshold_tokens|warn_threshold_tokens|notify)=' "$pf"; } || true
+  } > "$pf.new"
+  mv "$pf.new" "$pf"
+  ok "cache-guard policy written to .local/.cache-policy"
+  sed 's/^/    /' "$pf"
+}
+
 # ── Main ──────────────────────────────────────────────────────────
 case "${1:-}" in
   add)      cmd_add "${2:-}" ;;
   list)     cmd_list ;;
   update)   cmd_update "${2:-}" ;;
   env)      cmd_env "${2:-}" "${3:-}" ;;
+  cache)    cmd_cache "${2:-}" "${3:-}" ;;
   supabase) configure_supabase "${2:-}" ;;
   # Opt-in: stand up THIS machine as a firstmate node (herdr + source toolchain
   # + firstmate clone). Never part of `setup.sh` or `setup.sh update`.
@@ -1294,6 +1358,8 @@ case "${1:-}" in
     echo "  ./setup.sh add <name>   Add/enable a single MCP integration"
     echo "  ./setup.sh list         Show all integrations and their status"
     echo "  ./setup.sh env KEY [v]  Add an API key to ~/.claude/.env"
+    echo "  ./setup.sh cache [p]    cache-guard policy (subscription|api|custom <s>|off,"
+    echo "                          or mode: observe|warn|protect; no arg shows current)"
     echo "  ./setup.sh supabase [m] Configure Supabase MCP (m = cloud|internal, or prompt)"
     echo "  ./setup.sh update       Pull latest and reassemble config"
     echo "                          (--no-pull: reassemble without touching git)"

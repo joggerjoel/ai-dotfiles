@@ -197,6 +197,7 @@ The "get started" on-ramp fires from three places so a new user can't miss it:
 ./setup.sh add <name>            # Add/enable a single MCP integration
 ./setup.sh list                  # Show all integrations and their status
 ./setup.sh env KEY [value]       # Add an API key to ~/.claude/.env
+./setup.sh cache [profile|mode]  # Prompt-cache guard policy (see below)
 ./setup.sh update                # Pull latest and reassemble config
 
 ./scripts/bootstrap-plugins.sh             # Core + prompt for optional groups
@@ -206,6 +207,43 @@ claude plugin list                         # What's installed
 claude plugin install <plugin>@<market>    # Add one
 claude plugin uninstall <plugin>           # Remove one
 ```
+
+### The prompt-cache guard (`cache-guard`)
+
+Claude Code keeps your conversation in Anthropic's server-side prompt cache: **subscriptions
+get a 1-hour cache TTL automatically; API keys default to 5 minutes** (1-hour writes cost 2×
+base input, 5-minute writes 1.25×, reads ~0.1×). Come back to a big session after the TTL
+lapses and your next prompt silently re-writes the whole context at full input cost — for
+subscription users that burns rate limit, for API users real money.
+
+`hooks/cache-guard.sh` makes that visible in three layers:
+
+1. **Observe** — the status line grows a `Cache R184k/W0 · warm 42m` segment
+   (green warm / yellow expiring / red cold, dim before the first API call).
+2. **Warn** — one desktop notification before an idle large session's cache expires
+   (macOS `osascript` / Linux `notify-send`; headless VPS machines just keep the
+   status-line state).
+3. **Protect** (opt-in) — `./setup.sh cache protect` blocks a prompt into a cold session
+   holding 100k+ context tokens before any model processing, so you can `/clear` instead
+   of paying the rebuild.
+
+Declare your TTL once — it's a setup choice, never sniffed from your credentials:
+
+```bash
+./setup.sh cache subscription   # 1-hour TTL (the default assumption)
+./setup.sh cache api            # 5-minute TTL
+./setup.sh cache custom 1800    # explicit TTL in seconds
+./setup.sh cache off            # disable entirely
+./setup.sh cache protect        # opt into prompt blocking (warn is the default mode)
+```
+
+The policy lives in gitignored `.local/.cache-policy`. `just cache-test` runs the hook's
+test suite; `just cache-report` pulls a per-session cache/token report via `ccusage` (on
+demand — never from the status line). Practical habits the guard nudges you toward:
+`/compact` **before** a planned break (a cold `/compact` still re-reads the old history),
+`/clear` **after** a long one, and remember that switching model or effort level rebuilds
+the cache regardless. The guard observes; it cannot extend Anthropic's TTL or alter cache
+keys, and it never auto-pings to keep a cache warm (that would be silent API traffic).
 
 ### Extending it
 
