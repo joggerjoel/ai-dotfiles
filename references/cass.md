@@ -25,8 +25,29 @@ which `--verify` checks — so no source build and no Rust toolchain on the
 fleet. `--from-source` would be the fallback, and it is worth avoiding across
 six machines.
 
-`update.sh` upgrades only where cass is already present. A host that never ran
+`update.sh` upgrades only where cass already **runs**. A host that never ran
 `setup.sh` does not silently gain a tool mid-update.
+
+## The prebuilt Linux binary needs glibc >= 2.39
+
+The `cass-linux-amd64` asset is built against glibc 2.39, i.e. Ubuntu 24.04.
+On 22.04 it downloads, verifies, extracts and installs without complaint, then
+dies on every invocation:
+
+```
+cass: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.39' not found
+```
+
+This is the nastiest shape of failure available: the installer reports success,
+`command -v cass` is true, and the tool is completely unusable. Both scripts
+therefore gate on `cass --version` succeeding rather than on the binary
+existing, and remove a present-but-dead binary instead of leaving it to be
+"upgraded" on every future run.
+
+Upstream publishes no musl build, so a 22.04 host needs either a source build
+(`install.sh --from-source`, which wants a full Rust toolchain) or an OS
+upgrade. Neither is worth doing implicitly, so `ensure_cass` reports the host
+as unsupported and moves on.
 
 ## The archive is per-machine
 

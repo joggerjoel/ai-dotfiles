@@ -374,8 +374,20 @@ ensure_herdr_renderers() {
 # derivative works available to OpenAI/Anthropic, and this repo is public —
 # so the file lands on the host and never in git. See references/cass.md.
 ensure_cass() {
-  if command -v cass &>/dev/null; then
+  # Judge cass by whether it RUNS, not by whether it is on PATH. The prebuilt
+  # linux-amd64 asset is built against glibc 2.39 (Ubuntu 24.04); on 22.04 it
+  # installs cleanly and then dies with "GLIBC_2.39 not found" on every call.
+  # `command -v` is true for that corpse, so a presence check would report
+  # success forever and update.sh would keep upgrading a binary that cannot
+  # start. Remove it instead and say why.
+  if cass --version &>/dev/null; then
     ok "cass present ($(cass --version 2>/dev/null | head -1))"
+  elif command -v cass &>/dev/null; then
+    warn "cass is installed but will not run here — removing"
+    cass --version 2>&1 | head -1 | sed 's/^/    /'
+    rm -f "$HOME/.local/bin/cass"
+    warn "cass unavailable on this host (prebuilt binary needs glibc >= 2.39)"
+    return 0
   elif [ "$PKG_MANAGER" = "brew" ]; then
     warn "cass missing — installing via brew tap..."
     brew tap dicklesworthstone/tap >/dev/null 2>&1 || true
@@ -391,7 +403,14 @@ ensure_cass() {
       || warn "cass install failed — see github.com/Dicklesworthstone/coding_agent_session_search (non-fatal)"
   fi
 
-  command -v cass &>/dev/null || return 0
+  # Same test after installing: a fresh install can still be unrunnable.
+  if ! cass --version &>/dev/null; then
+    if command -v cass &>/dev/null; then
+      warn "cass installed but will not run — removing (glibc too old?)"
+      rm -f "$HOME/.local/bin/cass"
+    fi
+    return 0
+  fi
   fetch_cass_skill
 }
 

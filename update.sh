@@ -359,7 +359,10 @@ fi
 # cass is MIT with a rider forbidding making it or derivative works available
 # to OpenAI/Anthropic and this repo is public, so the file belongs on the host
 # and not in git. See references/cass.md.
-if [ "$RUN_AGENTS" = "yes" ] && command -v cass &>/dev/null; then
+# Gated on cass actually running, not merely existing: the prebuilt asset needs
+# glibc >= 2.39, and on older hosts a present-but-dead binary would otherwise be
+# "upgraded" on every run, forever.
+if [ "$RUN_AGENTS" = "yes" ] && cass --version &>/dev/null; then
   header "cass (session search)"
   cs_before="$(cass --version 2>/dev/null | head -1)"
   if [ "$DRY_RUN" = "yes" ]; then
