@@ -88,13 +88,13 @@ For each bug record: page, file path with line numbers, screenshot reference, wh
 
 Common recurring patterns to look for:
 
-| Pattern | Symptom | Fix |
-|---|---|---|
-| `flex justify-between` with no wrap on card/page headers | Right action group bleeds off card | `flex-col gap-3 sm:flex-row sm:items-center sm:justify-between` + `flex-wrap` on action group + `min-w-0` on title block |
-| `truncate` on stat-card labels | "Active Age…" | `line-clamp-2`; cards stay aligned via grid `items-stretch` |
-| `overflow-x-auto` tab bar with no fade | Mid-word clipping looks broken | Layer fade gradients on either edge when scrollable + `aria-roledescription` |
-| Redundant filter UI on mobile | Desktop tabs visible alongside mobile chip rows | Wrap the desktop variant in `hidden sm:block` |
-| Long auto-generated IDs in card titles | `"Widget 1778243…"` ellipsized | Display ID as separate metadata, not concatenated into name |
+| Pattern                                                  | Symptom                                         | Fix                                                                                                                      |
+| -------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `flex justify-between` with no wrap on card/page headers | Right action group bleeds off card              | `flex-col gap-3 sm:flex-row sm:items-center sm:justify-between` + `flex-wrap` on action group + `min-w-0` on title block |
+| `truncate` on stat-card labels                           | "Active Age…"                                   | `line-clamp-2`; cards stay aligned via grid `items-stretch`                                                              |
+| `overflow-x-auto` tab bar with no fade                   | Mid-word clipping looks broken                  | Layer fade gradients on either edge when scrollable + `aria-roledescription`                                             |
+| Redundant filter UI on mobile                            | Desktop tabs visible alongside mobile chip rows | Wrap the desktop variant in `hidden sm:block`                                                                            |
+| Long auto-generated IDs in card titles                   | `"Widget 1778243…"` ellipsized                  | Display ID as separate metadata, not concatenated into name                                                              |
 
 ### Phase 4 — Fix + verify
 
@@ -111,7 +111,7 @@ Copy `before/` + `after/` screenshots into the app's public dir (e.g. `apps/<app
 3. Links to file paths + explanations
 4. Lives behind the same auth gate as the rest of the app
 
-Template: [references/viewer-template.html](references/viewer-template.html). Customize the per-bug sections; image paths must be absolute (`/_dev/audits/<slug>/img/...`) so they resolve correctly whether the user hits `/_dev/audits/<slug>` or `/dev/audits/<slug>` (via rewrite).
+Build the page from the structure above. Image paths must be absolute (`/_dev/audits/<slug>/img/...`) so they resolve correctly whether the user hits `/_dev/audits/<slug>` or `/dev/audits/<slug>` (via rewrite).
 
 Add a Next.js rewrite for a clean URL:
 
@@ -170,8 +170,6 @@ apps/<app>/tests/e2e/responsive/                # E2E coverage (committed)
 ## References
 
 - [references/probe.js](references/probe.js) — the in-page audit probe
-- [references/viewer-template.html](references/viewer-template.html) — cloud viewer HTML template
-- [references/playwright-probe-spec.ts](references/playwright-probe-spec.ts) — Playwright probe-spec template
 - [references/gitignore-pattern.md](references/gitignore-pattern.md) — what to gitignore vs commit
 
 ## Anti-patterns
