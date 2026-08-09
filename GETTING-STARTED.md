@@ -169,7 +169,7 @@ This is a portable Claude Code config. Your effective `~/.claude/CLAUDE.md` is *
 | **Profile** | `profiles/<profile>/CLAUDE.md`  | Desktop: browser tool priorities. VPS: headless constraints                                          |
 | **Local**   | `.local/CLAUDE.md` (gitignored) | Your infrastructure, SSH hosts, self-hosted service URLs                                             |
 
-`CLAUDE.md` is **copied, not symlinked** — run `./setup.sh update` after editing any source layer to reassemble. `statusline.sh` and `scripts/*.sh` are symlinked, so edits to those reflect immediately. `settings.json` is symlinked **only when Remote Control is off**; with Remote Control enabled (see `docs/rc-issues.md`) it's installed as a stripped copy, so edit `profiles/<profile>/settings.json` and run `./setup.sh update` to apply.
+`CLAUDE.md` is **copied, not symlinked** — run `./setup.sh update` after editing any source layer to reassemble. `statusline.sh` and `scripts/*.sh` are symlinked, so edits to those reflect immediately. `settings.json` is symlinked **only when Remote Control is off**; with Remote Control enabled (see [`references/remote-control.md`](references/remote-control.md)) it's installed as a stripped copy, so edit `profiles/<profile>/settings.json` and run `./setup.sh update` to apply.
 
 ### Profiles
 
