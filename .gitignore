@@ -38,3 +38,6 @@ __pycache__/
 
 # docs accumulate personal/project context over time - keep the whole tree untracked
 docs/
+
+# per-host injection-guard baseline (never shared — see 6e37940)
+hooks/injection-guard.baseline.json

@@ -191,7 +191,10 @@ update_cli "kimi" "$HOME/.kimi-code/bin/kimi" "\"%BIN%\" upgrade || $KIMI_INSTAL
 # brew-managed where brew manages it, otherwise the official installer,
 # which always fetches the latest prebuilt binary into ~/.local/bin — so
 # install and upgrade are the same command on the Linux fleet.
-JUST_INSTALL="curl $CURL_RETRY --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to \"\$HOME/.local/bin\""
+# --force is required precisely BECAUSE install and upgrade are the same
+# command here: without it the installer aborts with "already exists" on
+# every host that has just, so upgrades never land on the Linux fleet.
+JUST_INSTALL="curl $CURL_RETRY --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --force --to \"\$HOME/.local/bin\""
 JUST_UPGRADE="$JUST_INSTALL"
 if command -v brew >/dev/null 2>&1; then
   JUST_INSTALL="brew install just"

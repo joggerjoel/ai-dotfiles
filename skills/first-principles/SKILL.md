@@ -1,5 +1,5 @@
 ---
-name: "First Principles Analysis"
+name: first-principles
 description: "Deconstruct problems to fundamental truths and rebuild solutions from scratch. Use when conventional solutions feel wrong, costs seem fixed, you hear 'that's how it's done,' or need breakthrough rather than incremental improvement."
 ---
 

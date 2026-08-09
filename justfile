@@ -180,3 +180,65 @@ audit:
 # [local] run the preflight test suite
 test:
     {{dotfiles}}/tests/preflight/run.sh
+
+# ── fix (targeted repairs; each is idempotent and safe to re-run) ────
+# Every recipe here exists because a failure mode recurred. They report
+# "already clean" rather than erroring when there is nothing to do, so
+# they are safe to chain into a maintenance pass.
+
+# [fix] untrack the per-host injection-guard baseline (must never be committed)
+fix-baseline:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{dotfiles}}
+    BASELINE=hooks/injection-guard.baseline.json
+    if ! grep -qxF "$BASELINE" .gitignore; then
+      printf '\n# per-host injection-guard baseline (never shared — see 6e37940)\n%s\n' "$BASELINE" >> .gitignore
+      echo "  + .gitignore now ignores $BASELINE"
+    else
+      echo "  ✓ .gitignore already ignores $BASELINE"
+    fi
+    if git ls-files --error-unmatch "$BASELINE" >/dev/null 2>&1; then
+      git rm --cached -q "$BASELINE"
+      echo "  + untracked $BASELINE (still on disk)"
+      echo "  → commit + push, then 'just fleet-update' to clear it fleet-wide"
+    else
+      echo "  ✓ $BASELINE is not tracked"
+    fi
+
+# [fix] force-reinstall just on the Linux fleet (installer refuses to overwrite)
+# aorus_ai only — on the Mac control node just is brew-managed, and dropping a
+# newer binary into ~/.local/bin would shadow brew's copy and split the versions.
+fix-just: _control
+    cd {{dotfiles}}/ansible-ai && ansible aorus_ai -m shell -a \
+      "curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --force --to \$HOME/.local/bin && \$HOME/.local/bin/just --version" \
+      2>/dev/null | grep -E 'CHANGED|SUCCESS|UNREACHABLE|FAILED|^just '
+
+# [fix] report skills with a frontmatter name mismatch or a dead reference
+fix-skills:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{dotfiles}}/skills
+    problems=0
+    for d in */; do
+      s="${d%/}"; f="$s/SKILL.md"
+      [ -f "$f" ] || continue
+      name=$(awk -F': *' '/^name:/{gsub(/"/,"",$2); print $2; exit}' "$f")
+      if [ "$name" != "$s" ]; then
+        echo "  ✘ $s: frontmatter name '$name' != directory"
+        problems=$((problems+1))
+      fi
+      # every references/<file> link must resolve on disk. preflight reports
+      # only the first miss per skill, so this lists all of them at once.
+      for ref in $(grep -oE '\(references/[^)]+\)' "$f" 2>/dev/null | tr -d '()' | sort -u); do
+        if [ ! -e "$s/$ref" ]; then
+          echo "  ✘ $s: dead reference $ref"
+          problems=$((problems+1))
+        fi
+      done
+    done
+    if [ "$problems" -eq 0 ]; then
+      echo "  ✓ every skill: frontmatter name matches directory, all references resolve"
+    else
+      echo "  $problems problem(s) — each needs a real edit; this recipe reports, it does not guess"
+    fi
