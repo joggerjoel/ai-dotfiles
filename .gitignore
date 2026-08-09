@@ -36,6 +36,5 @@ __pycache__/
 # subagent-driven-development scratch ledger
 .superpowers/
 
-# superpowers planning docs accumulate personal/project context - keep untracked
-docs/superpowers/plans/
-docs/superpowers/specs/
+# docs accumulate personal/project context over time - keep the whole tree untracked
+docs/
