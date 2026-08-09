@@ -51,6 +51,24 @@ node-services:
     if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-node.sh" service install all
     else exec ssh {{node}} '~/ai-dotfiles/scripts/herdr-node.sh service install all'; fi
 
+# [herdr] diff ~/.config/herdr/layout.conf against the node's live spaces
+spaces:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-layout.sh" status
+    else exec ssh {{node}} '~/ai-dotfiles/scripts/herdr-layout.sh status'; fi
+
+# Creates only what is missing and never closes anything, so it is safe to
+# re-run. Pass through the script's own flags, e.g. `just spaces-apply --dry-run`
+# or `just spaces-apply --wire --policy reconnect` to also launch each tab's
+# program.
+# [herdr] apply the declared space/tab layout to the node's session
+spaces-apply *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-layout.sh" apply {{ARGS}}
+    else exec ssh {{node}} "~/ai-dotfiles/scripts/herdr-layout.sh apply {{ARGS}}"; fi
+
 # ── captain (firstmate) ─────────────────────────────────────────────
 # Ensures a persistent captain tab (claude in ~/firstmate) inside the node's
 # herdr session, then attaches. Survives laptop lids, dropped connections, and
