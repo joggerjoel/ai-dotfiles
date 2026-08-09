@@ -359,6 +359,60 @@ ensure_herdr_renderers() {
   esac
 }
 
+# cass — searches this machine's local coding-agent session history (Codex,
+# Claude Code, Cursor, Aider and ~20 more) from one index. Every host gets it:
+# the archive is per-machine, so a worker's history is only searchable on that
+# worker.
+#
+# Two install paths because the fleet has no Homebrew: brew has a tap with
+# bottles for macOS, and the Linux boxes take the upstream installer, which
+# fetches a prebuilt cass-linux-amd64 release asset (--verify checks the
+# published sha256, so no source build and no Rust toolchain).
+#
+# The agent-facing SKILL.md is fetched at install time rather than vendored
+# into skills/. cass is MIT with a rider forbidding making the software or
+# derivative works available to OpenAI/Anthropic, and this repo is public —
+# so the file lands on the host and never in git. See references/cass.md.
+ensure_cass() {
+  if command -v cass &>/dev/null; then
+    ok "cass present ($(cass --version 2>/dev/null | head -1))"
+  elif [ "$PKG_MANAGER" = "brew" ]; then
+    warn "cass missing — installing via brew tap..."
+    brew tap dicklesworthstone/tap >/dev/null 2>&1 || true
+    brew install dicklesworthstone/tap/cass >/dev/null 2>&1 \
+      && ok "cass installed" \
+      || warn "cass install failed — brew install dicklesworthstone/tap/cass (non-fatal)"
+  else
+    warn "cass missing — installing (upstream installer → ~/.local/bin)..."
+    mkdir -p "$HOME/.local/bin"
+    curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/coding_agent_session_search/main/install.sh" \
+      | bash -s -- --easy-mode --verify >/dev/null 2>&1 \
+      && ok "cass installed (~/.local/bin)" \
+      || warn "cass install failed — see github.com/Dicklesworthstone/coding_agent_session_search (non-fatal)"
+  fi
+
+  command -v cass &>/dev/null || return 0
+  fetch_cass_skill
+}
+
+# Pull the agent-facing skill straight from upstream onto this host. Deliberately
+# NOT committed to skills/ — see the licence note on ensure_cass above.
+fetch_cass_skill() {
+  local dest="$CLAUDE_DIR/skills/cass"
+  mkdir -p "$dest"
+  if curl -fsSL --max-time 20 \
+    "https://raw.githubusercontent.com/Dicklesworthstone/coding_agent_session_search/main/SKILL.md" \
+    -o "$dest/SKILL.md.tmp" 2>/dev/null && [ -s "$dest/SKILL.md.tmp" ]; then
+    mv "$dest/SKILL.md.tmp" "$dest/SKILL.md"
+    ok "cass skill fetched → ~/.claude/skills/cass/"
+  else
+    rm -f "$dest/SKILL.md.tmp"
+    [ -f "$dest/SKILL.md" ] \
+      && warn "cass skill fetch failed — keeping the existing copy" \
+      || warn "cass skill fetch failed — agents lose the usage guide (non-fatal)"
+  fi
+}
+
 ensure_just() {
   command -v just &>/dev/null && { ok "just present"; return 0; }
   if [ "$PKG_MANAGER" = "brew" ]; then
@@ -464,6 +518,7 @@ ensure_dependencies() {
   ensure_claude  # Claude Code itself
   ensure_openspec # spec-driven change proposals (npm; needs node >= 20.19)
   ensure_beads   # agent issue tracking + dependency memory (npm, all hosts)
+  ensure_cass    # search this host's coding-agent session history (brew or installer)
   ensure_herdr   # firstmate session backend (macOS/brew only — no-ops on Linux)
   ensure_herdr_renderers  # bat/delta/glow — herdr-file-viewer content panes
   ensure_just    # fleet command runner (cross-platform: brew or install.sh)

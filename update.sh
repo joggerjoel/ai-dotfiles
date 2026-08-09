@@ -349,6 +349,48 @@ if [ "$RUN_AGENTS" = "yes" ]; then
   fi
 fi
 
+# ── 3f. cass (coding-agent session search) ───────────────────────
+# Upgrades only what setup.sh already installed — a host without cass is left
+# alone rather than silently gaining a tool mid-update. Two paths, because the
+# Linux fleet has no Homebrew: brew upgrade on macOS, the upstream installer
+# (prebuilt release asset, --verify checks the published sha256) elsewhere.
+#
+# The skill is re-fetched from upstream every run rather than versioned here.
+# cass is MIT with a rider forbidding making it or derivative works available
+# to OpenAI/Anthropic and this repo is public, so the file belongs on the host
+# and not in git. See references/cass.md.
+if [ "$RUN_AGENTS" = "yes" ] && command -v cass &>/dev/null; then
+  header "cass (session search)"
+  cs_before="$(cass --version 2>/dev/null | head -1)"
+  if [ "$DRY_RUN" = "yes" ]; then
+    skip "Would upgrade cass (currently ${cs_before:-unknown})"
+  else
+    if command -v brew &>/dev/null; then
+      brew upgrade dicklesworthstone/tap/cass >/dev/null 2>&1 || true
+    else
+      curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/coding_agent_session_search/main/install.sh" \
+        | bash -s -- --easy-mode --verify >/dev/null 2>&1 || true
+    fi
+    cs_after="$(cass --version 2>/dev/null | head -1)"
+    [ "$cs_before" = "$cs_after" ] \
+      && ok "cass: already latest (${cs_after:-unknown})" \
+      || ok "cass: ${cs_before:-unknown} → ${cs_after:-unknown}"
+
+    # Refresh the agent-facing skill; keep the existing copy if upstream is down.
+    mkdir -p "$HOME/.claude/skills/cass"
+    if curl -fsSL --max-time 20 \
+      "https://raw.githubusercontent.com/Dicklesworthstone/coding_agent_session_search/main/SKILL.md" \
+      -o "$HOME/.claude/skills/cass/SKILL.md.tmp" 2>/dev/null \
+      && [ -s "$HOME/.claude/skills/cass/SKILL.md.tmp" ]; then
+      mv "$HOME/.claude/skills/cass/SKILL.md.tmp" "$HOME/.claude/skills/cass/SKILL.md"
+      ok "cass skill refreshed"
+    else
+      rm -f "$HOME/.claude/skills/cass/SKILL.md.tmp"
+      warn "cass skill fetch failed — keeping the existing copy (non-fatal)"
+    fi
+  fi
+fi
+
 # ── 4. 9router skills (vendored from decolua/9router) ────────────
 # Re-vendors the skill set from upstream and deploys it to
 # ~/.claude/skills. Writes into the repo's skills/ dir, so changes
