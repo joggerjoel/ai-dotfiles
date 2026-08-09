@@ -229,6 +229,48 @@ ensure_claude() {
   fi
 }
 
+# Shared npm-global installer for the agent-workflow CLIs below. Deliberately
+# NOT used by ensure_claude above: that one is on the critical path for every
+# fresh machine and stays untouched. Fail-soft — a missing npm or a failed
+# install warns and continues; only git/curl/jq may abort setup.
+npm_install_global() {   # <pkg> <binary> <label>
+  local pkg="$1" bin="$2" label="$3"
+  command -v "$bin" &>/dev/null && { ok "$label present"; return 0; }
+  command -v npm &>/dev/null || { warn "$label skipped — npm unavailable"; return 0; }
+  warn "$label missing — installing via npm..."
+  npm install -g "$pkg@latest" >/dev/null 2>&1 \
+    || $SUDO npm install -g "$pkg@latest" >/dev/null 2>&1
+  command -v "$bin" &>/dev/null && ok "$label installed" \
+    || warn "$label install failed — npm install -g $pkg (non-fatal)"
+}
+
+# OpenSpec + Beads — spec-driven change proposals and agent issue tracking.
+# Cross-platform, unlike ensure_herdr below: useful on any host, so they follow
+# the herdr-renderers precedent and run wherever setup.sh runs. npm is the only
+# path that covers the Linux fleet — beads ships no apt package, and brew there
+# is not a given. Both CLIs are inert until a project runs `openspec init` /
+# `bd init`, so installing unconditionally costs one npm package each.
+# Rationale: references/openspec-beads-plan.md
+ensure_openspec() {
+  # OpenSpec needs node >= 20.19. ensure_node accepts whatever node is already
+  # present, so without this guard an older host fails deep inside npm's
+  # EBADENGINE instead of saying why.
+  local ver major minor
+  ver="$(node -v 2>/dev/null)" && ver="${ver#v}" || ver=""
+  if [ -z "$ver" ]; then
+    warn "OpenSpec skipped — node unavailable"; return 0
+  fi
+  major="${ver%%.*}"; minor="${ver#*.}"; minor="${minor%%.*}"
+  if [ "$major" -lt 20 ] || { [ "$major" -eq 20 ] && [ "$minor" -lt 19 ]; }; then
+    warn "OpenSpec skipped — needs node >= 20.19 (have v${ver})"; return 0
+  fi
+  npm_install_global "@fission-ai/openspec" openspec "OpenSpec"
+}
+
+ensure_beads() {
+  npm_install_global "@beads/bd" bd "Beads (bd)"
+}
+
 # herdr — agent-aware terminal session manager, the firstmate session backend
 # (better than cmux: verified secondmate liveness probes). macOS/brew ONLY by
 # design: firstmate runs on the Mac control nodes (macstudio/this laptop), not
@@ -339,6 +381,27 @@ ensure_just() {
 # (the serena plugin included) honor, so disable it there — this is what stops
 # the popup reproducibly on a fresh machine. Serena fills every other key with
 # its own defaults, so a minimal seed file is safe.
+# Tools this repo's own entry points hard-require but nothing ever installed.
+# bin/herdr-new-project exits with "fzf not found" if fzf is absent — and
+# link_bin_tools deploys that launcher regardless — while `just lint` aborts
+# without shellcheck. Same package name on brew and apt, so pkg_install covers
+# both; failures warn rather than abort, matching the rest of the chain.
+ensure_repo_tools() {
+  local tool
+  for tool in fzf shellcheck; do
+    if command -v "$tool" &>/dev/null; then
+      ok "$tool present"
+    else
+      warn "$tool missing — installing..."
+      # Check the outcome, not the package manager's exit code: brew and apt
+      # both exit 0 on no-ops that leave nothing on PATH.
+      pkg_install "$tool" >/dev/null 2>&1 || true
+      command -v "$tool" &>/dev/null && ok "$tool installed" \
+        || warn "$tool install failed — install manually (non-fatal)"
+    fi
+  done
+}
+
 ensure_serena_dashboard_off() {
   mkdir -p "$(dirname "$SERENA_CONFIG")"
 
@@ -399,9 +462,12 @@ ensure_dependencies() {
   ensure_bun     # JS/TS package manager
   ensure_uv      # Python package manager (serena runs via uvx)
   ensure_claude  # Claude Code itself
+  ensure_openspec # spec-driven change proposals (npm; needs node >= 20.19)
+  ensure_beads   # agent issue tracking + dependency memory (npm, all hosts)
   ensure_herdr   # firstmate session backend (macOS/brew only — no-ops on Linux)
   ensure_herdr_renderers  # bat/delta/glow — herdr-file-viewer content panes
   ensure_just    # fleet command runner (cross-platform: brew or install.sh)
+  ensure_repo_tools  # fzf (herdr launcher pickers) + shellcheck (just lint)
   ensure_serena_dashboard_off  # suppress serena's browser dashboard popup
 }
 
