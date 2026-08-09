@@ -44,10 +44,45 @@ therefore gate on `cass --version` succeeding rather than on the binary
 existing, and remove a present-but-dead binary instead of leaving it to be
 "upgraded" on every future run.
 
-Upstream publishes no musl build, so a 22.04 host needs either a source build
-(`install.sh --from-source`, which wants a full Rust toolchain) or an OS
-upgrade. Neither is worth doing implicitly, so `ensure_cass` reports the host
-as unsupported and moves on.
+Upstream publishes no musl build, and **every release back to v0.6.11 requires
+2.39** — so there is no older version to fall back to. A 22.04 host needs
+either a source build or an OS upgrade. Neither is worth doing implicitly, so
+`ensure_cass` reports the host as unsupported and moves on.
+
+Do not try to upgrade glibc on its own. It is the floor the whole userland is
+compiled against; forcing 2.39 onto a 22.04 system is a good way to lose sshd
+on a headless box. The supported route is an OS upgrade to 24.04, where glibc
+comes along as a consequence.
+
+### Ubuntu 22.04: build once, copy to the rest
+
+The cheap fix, used on this fleet's three 22.04 hosts. A binary compiled
+natively on 22.04 links against glibc 2.35 and runs on every host of that
+release, so **one** toolchain covers all of them:
+
+```bash
+# on one 22.04 host
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+  | sh -s -- -y --profile minimal --default-toolchain nightly
+git clone --depth 1 --branch <tag> \
+  https://github.com/Dicklesworthstone/coding_agent_session_search.git
+cd coding_agent_session_search && cargo build --release
+install -m 755 target/release/cass ~/.local/bin/cass
+
+# then, from a machine that can reach both
+ssh builder 'cat ~/.local/bin/cass' > /tmp/cass
+scp /tmp/cass other-host:/tmp/cass.new
+ssh other-host 'install -m 755 /tmp/cass.new ~/.local/bin/cass'
+```
+
+`rust-toolchain.toml` pins **nightly**, so this is not a stable-Rust build to
+reproduce casually. Measured once: ~11 minutes on 32 cores, 54 MB binary,
+`ldd` clean on every 22.04 host.
+
+**These binaries are unmanaged.** `update.sh` upgrades through brew or the
+upstream installer, and neither touches a hand-built binary — so those hosts
+stay pinned at whatever tag was built until someone repeats the procedure.
+That is the standing cost of keeping 22.04.
 
 ## The archive is per-machine
 
@@ -94,6 +129,22 @@ distinction is the rider, not the fact of vendoring.
 (`rm -rf ~/.claude/skills/<name>` per repo skill), so a fetched `cass` skill
 survives setup runs untouched. That property is what makes fetch-at-install
 viable; a loop that pruned unmanaged skills would break it.
+
+## `unhealthy` is the steady state, not a fault
+
+Once agent sessions land after the last index, triage reports `status:
+unhealthy` with `recommended_action: Run 'cass index' to refresh the index`.
+On any host where agents actually run — all of them — this happens
+continuously. **Search keeps working while stale**; the results are simply
+missing the newest sessions. Do not read it as a broken install.
+
+`scripts/cass-cron-setup.sh` schedules the refresh, per-host and idempotent
+(there is no shared index to fan out from a control node). Default every 2
+hours at :25, which measured out as roughly a 2% duty cycle: an incremental
+pass takes ~90s on a node holding ~93k conversations and is instant on a
+worker holding a handful. It bakes the absolute path to cass into the entry,
+since cron's PATH has neither `~/.local/bin` nor Homebrew, and refuses to
+schedule a binary that will not run.
 
 ## Agent usage
 

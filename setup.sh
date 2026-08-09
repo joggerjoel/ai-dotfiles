@@ -387,6 +387,8 @@ ensure_cass() {
     cass --version 2>&1 | head -1 | sed 's/^/    /'
     rm -f "$HOME/.local/bin/cass"
     warn "cass unavailable on this host (prebuilt binary needs glibc >= 2.39)"
+    warn "  build once on a same-release host and copy the binary over —"
+    warn "  see 'Ubuntu 22.04' in references/cass.md"
     return 0
   elif [ "$PKG_MANAGER" = "brew" ]; then
     warn "cass missing — installing via brew tap..."
