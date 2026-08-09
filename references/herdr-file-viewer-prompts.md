@@ -1,7 +1,8 @@
 # Summoning the file viewer from a Claude session
 
 What to say to get a location opened in a Files pane. Requires the vendored
-skill (`skills/herdr-file-viewer/`) to be deployed — see [README.md](README.md).
+skill (`skills/herdr-file-viewer/`) to be deployed — see
+[herdr-file-viewer.md](herdr-file-viewer.md).
 
 ## Direct targeting
 
@@ -71,4 +72,5 @@ inside double quotes, and prefer a structured argv that passes
 `HERDR_FILE_VIEWER_OPEN=<target>` as one argument.
 
 No `--cwd`, no injected `HERDR_PLUGIN_CONTEXT_JSON`. See the gotchas in
-[README.md](README.md) for why both break in ways that look like success.
+[herdr-file-viewer.md](herdr-file-viewer.md) for why both break in ways that
+look like success.

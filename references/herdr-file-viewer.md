@@ -8,7 +8,8 @@ rendered markdown and syntax highlighting.
 - **Installed:** v1.15.0 @ `71d4c1c`, 2026-08-09
 - **Requires:** herdr ≥ 0.7.0 (this host runs 0.8.0)
 
-Companion doc: [prompts.md](prompts.md) — how to summon it from a Claude session.
+Companion doc: [herdr-file-viewer-prompts.md](herdr-file-viewer-prompts.md) —
+how to summon it from a Claude session.
 
 ## Install
 
