@@ -212,6 +212,143 @@ if [ "$RUN_AGENTS" = "yes" ] && command -v brew &>/dev/null && command -v herdr 
   fi
 fi
 
+# ── 3c. herdr-file-viewer content renderers (bat / delta / glow) ──
+# Cross-platform, unlike herdr above: these are useful on any host and the
+# fleet's Linux boxes can carry them too. INSTALLS what's missing rather than
+# only upgrading, so an existing checkout picks them up without a full
+# setup.sh re-run. Per-OS naming differs — Debian ships bat's binary as
+# `batcat` (bacula-console clash) and has no glow at all; setup.sh owns the
+# Charm-repo + shim work, so here a missing glow on apt is just reported.
+if [ "$RUN_AGENTS" = "yes" ]; then
+  hr_missing=""
+  if command -v brew &>/dev/null; then
+    header "herdr-file-viewer renderers"
+    for hr_pair in bat:bat git-delta:delta glow:glow; do
+      command -v "${hr_pair#*:}" &>/dev/null || hr_missing="$hr_missing ${hr_pair%%:*}"
+    done
+    if [ -n "$hr_missing" ]; then
+      # shellcheck disable=SC2086
+      brew install $hr_missing >/dev/null 2>&1 \
+        && ok "renderers installed —${hr_missing}" \
+        || warn "renderer install failed — brew install${hr_missing} (non-fatal)"
+    else
+      brew upgrade bat git-delta glow >/dev/null 2>&1 || true
+      ok "renderers current (bat, delta, glow)"
+    fi
+  elif command -v apt-get &>/dev/null; then
+    header "herdr-file-viewer renderers"
+    command -v batcat &>/dev/null || command -v bat &>/dev/null || hr_missing="$hr_missing bat"
+    command -v delta &>/dev/null || hr_missing="$hr_missing git-delta"
+    command -v glow &>/dev/null || warn "glow absent — run setup.sh to add Charm's apt repo"
+    if [ -n "$hr_missing" ]; then
+      $SUDO apt-get update -y >/dev/null 2>&1 || true
+      # shellcheck disable=SC2086
+      $SUDO apt-get install -y $hr_missing >/dev/null 2>&1 \
+        && ok "renderers installed —${hr_missing}" \
+        || warn "renderer install failed — apt-get install${hr_missing} (non-fatal)"
+    else
+      ok "renderers current (bat/batcat, delta)"
+    fi
+  fi
+fi
+
+# ── 3d. Spec & issue tooling (openspec, bd) ──────────────────────
+# The OpenSpec + Beads pair backing the spec → task-DAG workflow. Cross-platform
+# npm globals, so unlike herdr above this runs on the fleet too. setup.sh owns
+# first install; this only upgrades what is already present. Versions come from
+# npm's own metadata rather than each CLI's version flag, so one code path
+# covers both packages.
+#
+# Beads deliberately stops at the binary. On a remote-backed Dolt database an
+# upgrade can cross a schema migration, where the correct sequence is per-clone
+# and per-project: sync, `bd export --all`, upgrade, then exactly one designated
+# clone runs `bd migrate && bd dolt push` while the rest run `bd bootstrap`.
+# update.sh runs machine-wide and cannot know which checkouts are remote-backed
+# or which clone is designated, so it reports the bump and points at the guide
+# rather than guessing. See references/openspec-beads-plan.md.
+if [ "$RUN_AGENTS" = "yes" ] && command -v npm &>/dev/null && command -v jq &>/dev/null; then
+  st_version() {   # <pkg> — installed global version, empty if absent
+    npm ls -g --depth=0 --json 2>/dev/null \
+      | jq -r --arg p "$1" '.dependencies[$p].version // empty'
+  }
+  st_shown="no"
+  for st_entry in "@fission-ai/openspec:openspec:OpenSpec" "@beads/bd:bd:Beads"; do
+    st_pkg="${st_entry%%:*}"; st_rest="${st_entry#*:}"
+    st_bin="${st_rest%%:*}"; st_label="${st_rest#*:}"
+    command -v "$st_bin" &>/dev/null || continue
+    [ "$st_shown" = "yes" ] || { header "Spec & issue tooling"; st_shown="yes"; }
+    if [ "$DRY_RUN" = "yes" ]; then
+      skip "Would run: ${SUDO:+sudo }npm install -g ${st_pkg}@latest"
+      continue
+    fi
+    st_before="$(st_version "$st_pkg")"; st_before="${st_before:-unknown}"
+    if ! npm install -g "${st_pkg}@latest" >/dev/null 2>&1 \
+      && ! $SUDO npm install -g "${st_pkg}@latest" >/dev/null 2>&1; then
+      warn "${st_label}: upgrade failed — npm install -g ${st_pkg}@latest (non-fatal)"
+      continue
+    fi
+    st_after="$(st_version "$st_pkg")"; st_after="${st_after:-unknown}"
+    if [ "$st_before" = "$st_after" ]; then
+      ok "${st_label}: already latest (${st_after})"
+    else
+      ok "${st_label}: ${st_before} → ${st_after}"
+      if [ "$st_bin" = "bd" ]; then
+        warn "bd version moved — this may cross a Dolt schema migration."
+        warn "  Per project with a remote-backed DB: bd info --whats-new; bd hooks install"
+        warn "  Upgrade guide: https://beads.gascity.com/getting-started/upgrading"
+      fi
+    fi
+  done
+fi
+
+# ── 3e. Repo tooling (fzf, shellcheck) ───────────────────────────
+# bin/herdr-new-project dies without fzf, and `just lint` aborts when the
+# linter itself is absent. Like the renderers above, this INSTALLS what is
+# missing rather than only upgrading, so an existing checkout picks them up
+# without a full setup.sh re-run. Same package name on brew and apt.
+if [ "$RUN_AGENTS" = "yes" ]; then
+  # Recomputed after installing so success is judged on what landed on PATH,
+  # not on brew's/apt's exit code — both exit 0 on no-ops that install nothing.
+  rt_scan() {
+    rt_missing=""
+    for rt_tool in fzf shellcheck; do
+      command -v "$rt_tool" &>/dev/null || rt_missing="$rt_missing $rt_tool"
+    done
+  }
+  rt_scan
+  if command -v brew &>/dev/null; then
+    header "Repo tooling"
+    if [ "$DRY_RUN" = "yes" ]; then
+      [ -n "$rt_missing" ] && skip "Would run: brew install${rt_missing}" \
+        || skip "Would run: brew upgrade fzf shellcheck"
+    elif [ -n "$rt_missing" ]; then
+      # shellcheck disable=SC2086
+      brew install $rt_missing >/dev/null 2>&1 || true
+      rt_scan
+      [ -z "$rt_missing" ] && ok "repo tooling installed (fzf, shellcheck)" \
+        || warn "still missing —${rt_missing} (brew install${rt_missing})"
+    else
+      brew upgrade fzf shellcheck >/dev/null 2>&1 || true
+      ok "repo tooling current (fzf, shellcheck)"
+    fi
+  elif command -v apt-get &>/dev/null; then
+    header "Repo tooling"
+    if [ "$DRY_RUN" = "yes" ]; then
+      [ -n "$rt_missing" ] && skip "Would run: apt-get install${rt_missing}" \
+        || skip "repo tooling current (fzf, shellcheck)"
+    elif [ -n "$rt_missing" ]; then
+      $SUDO apt-get update -y >/dev/null 2>&1 || true
+      # shellcheck disable=SC2086
+      $SUDO apt-get install -y $rt_missing >/dev/null 2>&1 || true
+      rt_scan
+      [ -z "$rt_missing" ] && ok "repo tooling installed (fzf, shellcheck)" \
+        || warn "still missing —${rt_missing} (apt-get install${rt_missing})"
+    else
+      ok "repo tooling current (fzf, shellcheck)"
+    fi
+  fi
+fi
+
 # ── 4. 9router skills (vendored from decolua/9router) ────────────
 # Re-vendors the skill set from upstream and deploys it to
 # ~/.claude/skills. Writes into the repo's skills/ dir, so changes

@@ -229,6 +229,48 @@ ensure_claude() {
   fi
 }
 
+# Shared npm-global installer for the agent-workflow CLIs below. Deliberately
+# NOT used by ensure_claude above: that one is on the critical path for every
+# fresh machine and stays untouched. Fail-soft — a missing npm or a failed
+# install warns and continues; only git/curl/jq may abort setup.
+npm_install_global() {   # <pkg> <binary> <label>
+  local pkg="$1" bin="$2" label="$3"
+  command -v "$bin" &>/dev/null && { ok "$label present"; return 0; }
+  command -v npm &>/dev/null || { warn "$label skipped — npm unavailable"; return 0; }
+  warn "$label missing — installing via npm..."
+  npm install -g "$pkg@latest" >/dev/null 2>&1 \
+    || $SUDO npm install -g "$pkg@latest" >/dev/null 2>&1
+  command -v "$bin" &>/dev/null && ok "$label installed" \
+    || warn "$label install failed — npm install -g $pkg (non-fatal)"
+}
+
+# OpenSpec + Beads — spec-driven change proposals and agent issue tracking.
+# Cross-platform, unlike ensure_herdr below: useful on any host, so they follow
+# the herdr-renderers precedent and run wherever setup.sh runs. npm is the only
+# path that covers the Linux fleet — beads ships no apt package, and brew there
+# is not a given. Both CLIs are inert until a project runs `openspec init` /
+# `bd init`, so installing unconditionally costs one npm package each.
+# Rationale: references/openspec-beads-plan.md
+ensure_openspec() {
+  # OpenSpec needs node >= 20.19. ensure_node accepts whatever node is already
+  # present, so without this guard an older host fails deep inside npm's
+  # EBADENGINE instead of saying why.
+  local ver major minor
+  ver="$(node -v 2>/dev/null)" && ver="${ver#v}" || ver=""
+  if [ -z "$ver" ]; then
+    warn "OpenSpec skipped — node unavailable"; return 0
+  fi
+  major="${ver%%.*}"; minor="${ver#*.}"; minor="${minor%%.*}"
+  if [ "$major" -lt 20 ] || { [ "$major" -eq 20 ] && [ "$minor" -lt 19 ]; }; then
+    warn "OpenSpec skipped — needs node >= 20.19 (have v${ver})"; return 0
+  fi
+  npm_install_global "@fission-ai/openspec" openspec "OpenSpec"
+}
+
+ensure_beads() {
+  npm_install_global "@beads/bd" bd "Beads (bd)"
+}
+
 # herdr — agent-aware terminal session manager, the firstmate session backend
 # (better than cmux: verified secondmate liveness probes). macOS/brew ONLY by
 # design: firstmate runs on the Mac control nodes (macstudio/this laptop), not
@@ -242,6 +284,79 @@ ensure_herdr() {
   brew install herdr >/dev/null 2>&1 \
     && ok "herdr installed" \
     || warn "herdr install failed — brew install herdr (non-fatal)"
+}
+
+# Charm's apt repo — glow is absent from Ubuntu's archives, so it needs the
+# vendor repo. Mirrors the keyring + sources.list dance ensure_gh does for the
+# GitHub CLI, and like that one it needs root or sudo.
+add_charm_apt_repo() {
+  [ -f /etc/apt/keyrings/charm.gpg ] && return 0
+  [ "$(id -u)" -eq 0 ] || [ -n "$SUDO" ] || return 1
+  $SUDO mkdir -p -m 755 /etc/apt/keyrings || return 1
+  curl -fsSL https://repo.charm.sh/apt/gpg.key \
+    | $SUDO gpg --dearmor -o /etc/apt/keyrings/charm.gpg || return 1
+  echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" \
+    | $SUDO tee /etc/apt/sources.list.d/charm.list >/dev/null || return 1
+  $SUDO apt-get update -y >/dev/null 2>&1 || true
+}
+
+# Content renderers for the herdr-file-viewer plugin. The viewer pipes file
+# content to bat / delta / glow on stdin and silently degrades that pane to
+# plain text when one is absent — so the plugin "works" while losing syntax
+# highlighting, colorized diffs and rendered markdown.
+#
+# Cross-platform, and the per-OS naming is the whole trap:
+#   package      brew binary   apt binary
+#   bat          bat           batcat   <- Debian renamed it (bacula-console clash)
+#   git-delta    delta         delta
+#   glow         glow          glow     <- not in Ubuntu; needs Charm's apt repo
+# The viewer's default syntax command invokes `bat`, so on apt we expose a shim
+# in ~/.local/bin rather than rewrite the plugin's own config.
+ensure_herdr_renderers() {
+  local pair missing=""
+  case "$PKG_MANAGER" in
+    brew)
+      for pair in bat:bat git-delta:delta glow:glow; do
+        command -v "${pair#*:}" &>/dev/null || missing="$missing ${pair%%:*}"
+      done
+      if [ -n "$missing" ]; then
+        warn "herdr renderers missing —${missing} (viewer panes fall back to plain text)"
+        # shellcheck disable=SC2086
+        brew install $missing >/dev/null 2>&1 \
+          && ok "herdr renderers installed —${missing}" \
+          || warn "renderer install failed — brew install${missing} (non-fatal)"
+      else
+        ok "herdr renderers present (bat, delta, glow)"
+      fi
+      ;;
+    apt)
+      command -v batcat &>/dev/null || command -v bat &>/dev/null || missing="$missing bat"
+      command -v delta &>/dev/null || missing="$missing git-delta"
+      if ! command -v glow &>/dev/null; then
+        add_charm_apt_repo && missing="$missing glow" \
+          || warn "glow skipped — Charm apt repo needs root (non-fatal)"
+      fi
+      if [ -n "$missing" ]; then
+        warn "herdr renderers missing —${missing} (viewer panes fall back to plain text)"
+        apt_update_once
+        # shellcheck disable=SC2086
+        $SUDO apt-get install -y $missing >/dev/null 2>&1 \
+          && ok "herdr renderers installed —${missing}" \
+          || warn "renderer install failed — apt-get install${missing} (non-fatal)"
+      else
+        ok "herdr renderers present (bat/batcat, delta, glow)"
+      fi
+      # Debian's binary is batcat; the viewer calls `bat`. Shim it, no sudo needed.
+      if command -v batcat &>/dev/null && ! command -v bat &>/dev/null; then
+        mkdir -p "$HOME/.local/bin"
+        ln -sf "$(command -v batcat)" "$HOME/.local/bin/bat" \
+          && ok "linked batcat → ~/.local/bin/bat (viewer invokes it as 'bat')"
+      fi
+      ;;
+    *)
+      skip "herdr renderers skipped (no supported package manager)"
+      ;;
+  esac
 }
 
 ensure_just() {
@@ -266,6 +381,27 @@ ensure_just() {
 # (the serena plugin included) honor, so disable it there — this is what stops
 # the popup reproducibly on a fresh machine. Serena fills every other key with
 # its own defaults, so a minimal seed file is safe.
+# Tools this repo's own entry points hard-require but nothing ever installed.
+# bin/herdr-new-project exits with "fzf not found" if fzf is absent — and
+# link_bin_tools deploys that launcher regardless — while `just lint` aborts
+# without shellcheck. Same package name on brew and apt, so pkg_install covers
+# both; failures warn rather than abort, matching the rest of the chain.
+ensure_repo_tools() {
+  local tool
+  for tool in fzf shellcheck; do
+    if command -v "$tool" &>/dev/null; then
+      ok "$tool present"
+    else
+      warn "$tool missing — installing..."
+      # Check the outcome, not the package manager's exit code: brew and apt
+      # both exit 0 on no-ops that leave nothing on PATH.
+      pkg_install "$tool" >/dev/null 2>&1 || true
+      command -v "$tool" &>/dev/null && ok "$tool installed" \
+        || warn "$tool install failed — install manually (non-fatal)"
+    fi
+  done
+}
+
 ensure_serena_dashboard_off() {
   mkdir -p "$(dirname "$SERENA_CONFIG")"
 
@@ -326,8 +462,12 @@ ensure_dependencies() {
   ensure_bun     # JS/TS package manager
   ensure_uv      # Python package manager (serena runs via uvx)
   ensure_claude  # Claude Code itself
+  ensure_openspec # spec-driven change proposals (npm; needs node >= 20.19)
+  ensure_beads   # agent issue tracking + dependency memory (npm, all hosts)
   ensure_herdr   # firstmate session backend (macOS/brew only — no-ops on Linux)
+  ensure_herdr_renderers  # bat/delta/glow — herdr-file-viewer content panes
   ensure_just    # fleet command runner (cross-platform: brew or install.sh)
+  ensure_repo_tools  # fzf (herdr launcher pickers) + shellcheck (just lint)
   ensure_serena_dashboard_off  # suppress serena's browser dashboard popup
 }
 
