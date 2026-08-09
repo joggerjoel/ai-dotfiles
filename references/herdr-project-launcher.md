@@ -142,3 +142,11 @@ keybinding you have:
 sed -i '' '/^\[\[keys.command\]\]/,$d' ~/.config/herdr/config.toml
 herdr server reload-config
 ```
+
+## See also
+
+- [herdr-project-launcher-plan.md](herdr-project-launcher-plan.md) — design
+  record: constraints discovered, decisions and their rationale, what was
+  deliberately not built, and what went wrong along the way
+- [herdr-project-launcher-todo.md](herdr-project-launcher-todo.md) — open items,
+  deferred ideas, and herdr bugs worth reporting upstream
