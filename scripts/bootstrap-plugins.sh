@@ -9,7 +9,7 @@
 # Run standalone (./scripts/bootstrap-plugins.sh) or via ./setup.sh.
 set -uo pipefail
 
-BOLD='\033[1m'; DIM='\033[2m'; GREEN='\033[32m'; YELLOW='\033[33m'; CYAN='\033[36m'; RESET='\033[0m'
+BOLD='\033[1m'; DIM='\033[2m'; GREEN='\033[32m'; YELLOW='\033[33m'; RESET='\033[0m'
 ok()   { echo -e "  ${GREEN}✓${RESET} $1"; }
 skip() { echo -e "  ${DIM}○ $1${RESET}"; }
 warn() { echo -e "  ${YELLOW}!${RESET} $1"; }

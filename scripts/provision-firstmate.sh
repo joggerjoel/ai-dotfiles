@@ -24,7 +24,6 @@ warn() { echo -e "  ${YELLOW}!${RESET} $1"; }
 fail() { echo -e "  ${RED}✗${RESET} $1"; }
 header(){ echo -e "\n${BOLD}$1${RESET}"; }
 
-DOTFILES_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SRC_DIR="${FIRSTMATE_SRC_DIR:-$HOME/Documents/Projects}"
 FM_DIR="${FIRSTMATE_DIR:-$HOME/firstmate}"
 LOCAL_BIN="$HOME/.local/bin"

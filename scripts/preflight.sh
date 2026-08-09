@@ -56,8 +56,6 @@ FINDINGS=()
 CHECKER_BROKEN=0
 CHECKER_REASON=""
 MCP_TIMED_OUT=0
-CONFIG_MALFORMED_CLAUDE=0
-CONFIG_MALFORMED_SETTINGS=0
 
 add_finding() {
   # Public signature stays (class, name, verdict, detail, containable) — no
@@ -75,11 +73,9 @@ add_finding() {
 # and what it takes down, instead of letting it evaporate.
 validate_configs() {
   if [ -f "$CLAUDE_JSON" ] && ! jq -e . "$CLAUDE_JSON" >/dev/null 2>&1; then
-    CONFIG_MALFORMED_CLAUDE=1
     add_finding config "$CLAUDE_JSON" fail "malformed JSON — mcp cross-reference and env probes cannot run" no
   fi
   if [ -f "$SETTINGS_JSON" ] && ! jq -e . "$SETTINGS_JSON" >/dev/null 2>&1; then
-    CONFIG_MALFORMED_SETTINGS=1
     add_finding config "$SETTINGS_JSON" fail "malformed JSON — hooks probe cannot run" no
   fi
 }
