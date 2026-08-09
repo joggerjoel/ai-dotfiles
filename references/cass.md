@@ -60,6 +60,14 @@ space.
 First run on a new host needs `cass index --full` once; `cass triage --json`
 reports `not_initialized` until then and names the exact command.
 
+**Then run plain `cass index` once more.** `--full` defers the lexical index
+into an authoritative DB rebuild (`lexical_strategy:
+deferred_authoritative_db_rebuild`), and until a follow-up incremental pass
+lands it, triage reports `status: unhealthy` on a freshly indexed host — with
+`recommended_action: Run 'cass index' to refresh the index`. Nothing is wrong;
+the first pass simply is not the whole job. Reading the `--full` completion as
+"done" makes a healthy install look broken.
+
 ## The skill is fetched, never vendored
 
 **This is the load-bearing decision.** Every other skill here is committed to
