@@ -81,10 +81,13 @@ case "$out" in
   *) ko "a host with no qualifying sessions is skipped" "got [$out]" ;;
 esac
 
-case "$out" in
-  *macstudio*) ko "local rows are not probed" "got [$out]" ;;
-  *) ok "local rows are not probed" ;;
-esac
+# The layout label ("macstudio") never appears in status output regardless of
+# whether local rows are skipped — herdr-tmux.sh only ever prints the HOST
+# column. What actually proves a local row was skipped is that no status line
+# is emitted for a host named "local" (the guard-broken line would start
+# "local     unreachable", per the %-10s host column).
+got=$(printf '%s\n' "$out" | grep -c '^local[[:space:]]')
+eq "local rows are not probed" "0" "$got"
 
 # --- unreachable host --------------------------------------------------------
 
