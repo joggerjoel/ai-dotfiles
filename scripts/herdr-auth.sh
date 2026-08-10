@@ -208,13 +208,68 @@ cmd_status() {
   printf '\n%d authed, %d missing, %d unreachable\n' "$a" "$m" "$u"
 }
 
+open_url() {
+  "${HERDR_AUTH_OPEN:-open}" "$1" >/dev/null 2>&1
+}
+
+# cursor prints its URL over a plain pipe and then polls Cursor's servers, so
+# no PTY is needed and the URL completes the login opened from any machine.
+# NO_OPEN_BROWSER stops the remote from trying to launch a browser it has not
+# got. The remote process is left running: it polls until the human half of
+# the flow completes.
+login_cursor() {
+  local host="$1" out url
+  out="$(remote "$host" 'bash -lc "NO_OPEN_BROWSER=1 cursor-agent login"')"
+  url="$(printf '%s\n' "$out" | extract_url)"
+  printf '%s' "$url"
+}
+
+cmd_login() {
+  local cli="$1" host url opened=0
+  case "$cli" in
+    cursor)
+      for host in $HOSTS_STR; do
+        if ! host_reachable "$host"; then
+          echo "  host $host: unreachable, skipping — a login fired at a dead host wastes a device code"
+          continue
+        fi
+        url="$(login_cursor "$host")"
+        if [ -z "$url" ]; then
+          echo "  host $host: no login URL — flow did not start"
+          continue
+        fi
+        open_url "$url"
+        opened=$((opened + 1))
+        echo "  opened login URL for host $host"
+      done
+      echo "$opened URL(s) opened. Complete them in the browser; each remote polls until done."
+      ;;
+    *)
+      echo "unknown or unimplemented cli: $cli" >&2; exit 2 ;;
+  esac
+}
+
 main() {
-  case "${1:-status}" in
+  local verb="${1:-status}"; shift 2>/dev/null || true
+  case "$verb" in
     status) cmd_status ;;
-    _probe) shift; probe "$@" ;;          # test seam
-    _extract_url) extract_url ;;          # test seam
-    _redact) redact ;;                    # test seam
-    *) echo "usage: herdr-auth.sh status" >&2; exit 2 ;;
+    login)
+      local cli=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --cli)  cli="$2"; shift 2 ;;
+          --host) HOSTS_STR="$2"; shift 2 ;;
+          --no-wait) shift ;;   # consumed in Task 4
+          *) echo "unknown flag: $1" >&2; exit 2 ;;
+        esac
+      done
+      [ -n "$cli" ] || { echo "login needs --cli cursor|codex|claude" >&2; exit 2; }
+      cmd_login "$cli"
+      ;;
+    _probe) probe "$@" ;;
+    _extract_url) extract_url ;;
+    _redact) redact ;;
+    *) echo "usage: herdr-auth.sh status | login --cli <cli> [--host H]" >&2; exit 2 ;;
   esac
 }
 

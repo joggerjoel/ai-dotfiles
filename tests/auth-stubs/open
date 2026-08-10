@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Stub for macOS `open`. Records each URL it is handed, one per line, so tests
+# can assert which URLs were opened without launching a browser.
+printf '%s\n' "$1" >> "$HERDR_AUTH_OPENED"
+exit 0

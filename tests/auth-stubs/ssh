@@ -22,6 +22,7 @@ if [ "$cmd" = true ] && [ -f "$HERDR_AUTH_FIXTURE/$host.unreachable" ]; then
 fi
 
 case "$cmd" in
+  *"cursor-agent login"*) probe=cursorlogin ;;
   *cursor-agent*) probe=cursor ;;
   *"codex login status"*) probe=codex ;;
   *credentials.json*) probe=claude ;;

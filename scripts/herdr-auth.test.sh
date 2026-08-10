@@ -210,5 +210,59 @@ got=$(printf 'Open this link: https://x.test/a?mode=login\x1b[0m\n' | bash "$A" 
   && ok "extract_url: strips a trailing ANSI escape" \
   || ko "extract_url: strips a trailing ANSI escape" "got '$got'"
 
+# --- cursor login batch -----------------------------------------------------
+: > "$HERDR_AUTH_OPENED"
+fixture aorus.cursorlogin 'Starting login process...
+Open a browser and navigate to this link: https://cursor.com/loginDeepControl?challenge=SYNTHETIC_A&uuid=00000000-0000-0000-0000-00000000000a&mode=login&redirectTarget=cli'
+fixture aorus4.cursorlogin 'Starting login process...
+Open a browser and navigate to this link: https://cursor.com/loginDeepControl?challenge=SYNTHETIC_B&uuid=00000000-0000-0000-0000-00000000000b&mode=login&redirectTarget=cli'
+
+out=$(HERDR_AUTH_HOSTS="aorus aorus4" bash "$A" login --cli cursor --no-wait)
+
+[ "$(grep -c . "$HERDR_AUTH_OPENED")" = 2 ] \
+  && ok "cursor login: opens one URL per host" \
+  || ko "cursor login: opens one URL per host" "opened $(grep -c . "$HERDR_AUTH_OPENED")"
+grep -q 'SYNTHETIC_A' "$HERDR_AUTH_OPENED" && grep -q 'SYNTHETIC_B' "$HERDR_AUTH_OPENED" \
+  && ok "cursor login: opens the real URL for each host" \
+  || ko "cursor login: opens the real URL for each host"
+printf '%s' "$out" | grep -qE 'SYNTHETIC_A|SYNTHETIC_B' \
+  && ko "cursor login: never prints a challenge" "leaked: $out" \
+  || ok "cursor login: never prints a challenge"
+printf '%s' "$out" | grep -q 'opened login URL for host aorus4' \
+  && ok "cursor login: logs per host without the URL" \
+  || ko "cursor login: logs per host without the URL" "$out"
+
+fixture aorus.cursorlogin 'some error, no link'
+: > "$HERDR_AUTH_OPENED"
+out=$(HERDR_AUTH_HOSTS="aorus" bash "$A" login --cli cursor --no-wait)
+[ "$(grep -c . "$HERDR_AUTH_OPENED")" = 0 ] \
+  && ok "cursor login: opens nothing when no URL is printed" \
+  || ko "cursor login: opens nothing when no URL is printed"
+printf '%s' "$out" | grep -q 'no login URL' \
+  && ok "cursor login: reports a missing URL loudly" \
+  || ko "cursor login: reports a missing URL loudly" "$out"
+
+# An unreachable host must not have a login fired at it: a device code spent
+# on a dead host expires unused. host_reachable() already gates cmd_status
+# this way (Task 1); cmd_login must reuse it, report the host, and move on to
+# the next one rather than trying cursor-agent against it.
+: > "$HERDR_AUTH_FIXTURE/aorus5.unreachable"
+fixture aorus4.cursorlogin 'Starting login process...
+Open a browser and navigate to this link: https://cursor.com/loginDeepControl?challenge=SYNTHETIC_B&uuid=00000000-0000-0000-0000-00000000000b&mode=login&redirectTarget=cli'
+: > "$HERDR_AUTH_OPENED"
+out=$(HERDR_AUTH_HOSTS="aorus5 aorus4" bash "$A" login --cli cursor --no-wait)
+[ "$(grep -c . "$HERDR_AUTH_OPENED")" = 1 ] \
+  && ok "cursor login: skips an unreachable host, still opens the reachable one" \
+  || ko "cursor login: skips an unreachable host, still opens the reachable one" "opened $(grep -c . "$HERDR_AUTH_OPENED")"
+printf '%s' "$out" | grep -q 'host aorus5.*unreachable' \
+  && ok "cursor login: reports the unreachable host by name and reason" \
+  || ko "cursor login: reports the unreachable host by name and reason" "$out"
+# Distinguish "skipped, unreachable" from "tried and got no URL" — a dead
+# host must never fall into the generic no-login-URL message, or an operator
+# cannot tell a dead box from a cursor-agent failure.
+printf '%s' "$out" | grep -q 'aorus5.*no login URL' \
+  && ko "cursor login: unreachable host must not report as a bare login failure" "$out" \
+  || ok "cursor login: unreachable host must not report as a bare login failure"
+
 printf '\n  %d passed, %d failed\n\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
