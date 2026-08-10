@@ -17,10 +17,12 @@ set -euo pipefail
 SPACE_LABEL=""
 SSH_HOST=""
 POLICY="fallback"
+PRINT_COMMAND=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --policy) POLICY="$2"; shift 2 ;;
+    --print-command) PRINT_COMMAND="$2"; shift 2 ;;
     -*) echo "unknown flag: $1" >&2; exit 2 ;;
     *) if [ -z "$SPACE_LABEL" ]; then SPACE_LABEL="$1"; else SSH_HOST="$1"; fi; shift ;;
   esac
@@ -35,7 +37,10 @@ case "$POLICY" in bare|fallback|reconnect) ;; *) echo "bad policy: $POLICY" >&2;
 program_for_tab() {
   case "$1" in
     cursor) echo "agent" ;;   # `agent` and `cursor-agent` are the same binary
-    *)      echo "$1" ;;      # claude, codex, pi, tmux run under their own name
+    tmux)   echo "tmux new-session -A -s herdr" ;;  # attach-or-create; bare
+                                                    # `tmux` spawned a new
+                                                    # session on every wiring
+    *)      echo "$1" ;;      # claude, codex, pi run under their own name
   esac
 }
 
@@ -76,6 +81,13 @@ command_for_tab() {
     echo "ssh -t $SSH_HOST $(sq "$inner")"
   fi
 }
+
+# Print one tab's command and exit. No API call, no ssh — this is the seam the
+# tests drive, and a quick way to see what a pane would actually be sent.
+if [ -n "$PRINT_COMMAND" ]; then
+  command_for_tab "$PRINT_COMMAND"
+  exit 0
+fi
 
 # --- resolve the space, then its tabs ---------------------------------------
 
