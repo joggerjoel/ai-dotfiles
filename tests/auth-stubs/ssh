@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Stub for `ssh`. Serves recorded probe output from $HERDR_AUTH_FIXTURE.
+# Invoked as: ssh [opts] <host> <command...>
+# Picks the fixture by host plus which CLI the command mentions.
+host=""
+skip=0
+for a in "$@"; do
+  if [ "$skip" = 1 ]; then skip=0; continue; fi
+  case "$a" in
+    -o) skip=1 ;;
+    -*) ;;
+    *) host="$a"; break ;;
+  esac
+done
+cmd="$*"
+
+case "$cmd" in
+  *cursor-agent*) probe=cursor ;;
+  *"codex login status"*) probe=codex ;;
+  *credentials.json*) probe=claude ;;
+  *) exit 0 ;;
+esac
+
+f="$HERDR_AUTH_FIXTURE/$host.$probe"
+[ -f "$f" ] || { echo "no fixture: $f" >&2; exit 1; }
+cat "$f"
+exit 0
