@@ -41,5 +41,26 @@ got=$(bash "$W" aorus8 aorus8 --policy bare --print-command claude)
 eq "remote claude, bare policy -> no fallback shell" \
    "ssh -t aorus8 'bash -lc '\\''claude'\\'''" "$got"
 
+# --- attach-tmux mapping -----------------------------------------------------
+# In a tmux space the tab label is a session name, not a program name.
+
+got=$(bash "$W" aorus8-tmux aorus8 --attach-tmux --print-command 07-dice-broadcast)
+eq "attach-tmux -> attach by session name" \
+   "ssh -t aorus8 'bash -lc '\\''tmux attach -t '\\''\\'\\'''\\''07-dice-broadcast'\\''\\'\\'''\\''; exec \$SHELL -l'\\'''" "$got"
+
+# The cursor alias must NOT apply — a session may legitimately be named `cursor`.
+got=$(bash "$W" aorus8-tmux aorus8 --attach-tmux --print-command cursor)
+case "$got" in
+  *"tmux attach -t"*) ok "attach-tmux overrides the cursor alias" ;;
+  *) ko "attach-tmux overrides the cursor alias" "got [$got]" ;;
+esac
+
+# Likewise the tmux scratch mapping must not hijack a session named `tmux`.
+got=$(bash "$W" aorus8-tmux aorus8 --attach-tmux --print-command tmux)
+case "$got" in
+  *"tmux attach -t"*) ok "attach-tmux overrides the scratch-session mapping" ;;
+  *) ko "attach-tmux overrides the scratch-session mapping" "got [$got]" ;;
+esac
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

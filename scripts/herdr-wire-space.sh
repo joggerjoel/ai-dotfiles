@@ -18,11 +18,13 @@ SPACE_LABEL=""
 SSH_HOST=""
 POLICY="fallback"
 PRINT_COMMAND=""
+ATTACH_TMUX=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --policy) POLICY="$2"; shift 2 ;;
     --print-command) PRINT_COMMAND="$2"; shift 2 ;;
+    --attach-tmux) ATTACH_TMUX=1; shift ;;
     -*) echo "unknown flag: $1" >&2; exit 2 ;;
     *) if [ -z "$SPACE_LABEL" ]; then SPACE_LABEL="$1"; else SSH_HOST="$1"; fi; shift ;;
   esac
@@ -35,6 +37,12 @@ case "$POLICY" in bare|fallback|reconnect) ;; *) echo "bad policy: $POLICY" >&2;
 # --- tab label -> program ---------------------------------------------------
 
 program_for_tab() {
+  # In a tmux space the label IS a session name, so no alias applies — a
+  # session may legitimately be called `cursor` or `tmux`.
+  if [ -n "$ATTACH_TMUX" ]; then
+    printf 'tmux attach -t %s' "$(sq "$1")"
+    return
+  fi
   case "$1" in
     cursor) echo "agent" ;;   # `agent` and `cursor-agent` are the same binary
     tmux)   echo "tmux new-session -A -s herdr" ;;  # attach-or-create; bare
