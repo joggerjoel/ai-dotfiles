@@ -260,11 +260,50 @@ Needed before implementation, not before this spec:
 
 ## Follow-up
 
-Eleven idle tmux sessions remain from the two wiring runs (Aug 9 11:58 and
-Aug 10 09:26): `aorus` 5 and 6, `aorus4` 0 and 1, `aorus5` 0 and 1, `aorus6` 36
-and 37, `aorus7` 19 and 20, `aorus8` 89. Each has one pane, running `bash`, with
-zero child processes. They can be killed once the `tmux` recipe lands; the
-recipe is what stops the count from growing.
+**Done.** The eleven idle tmux sessions left by the two wiring runs (Aug 9 11:58
+and Aug 10 09:26) were killed on 2026-08-10: `aorus` 5 and 6, `aorus4` 0 and 1,
+`aorus5` 0 and 1, `aorus6` 36 and 37, `aorus7` 19 and 20, `aorus8` 89. Each was
+re-verified immediately before deletion — one pane, `bash`, zero children — and
+every session holding work survived. The `tmux` recipe is what stops the count
+from growing again.
+
+Older numeric sessions predating the wiring leak remain untouched: 14 on
+`aorus7` and 21 on `aorus8`, going back to July. They were not attributable to a
+wiring run and are likelier to hold something wanted.
+
+### Findings for the implementer
+
+- **`tab.move` exists in the socket API**, though not in the CLI (`herdr tab`
+  offers only list/create/get/focus/rename/close). The comment in
+  `herdr-layout.sh` — "herdr's CLI exposes no tab.move, so this reports rather
+  than pretends to fix" — is true of the CLI but not the API. Tab-order drift is
+  fixable via a direct socket call, not merely reportable. Correct that comment
+  when touching the file.
+- **`layout.export` and `layout.apply` exist** in the API (103 methods total).
+  Worth investigating before assuming `session.json` is the only route to
+  structure.
+- **herdr has no tmux awareness.** Neither `tmux` nor `multiplexer` appears
+  anywhere in the API schema. tmux is opaque to herdr — just a program in a
+  pane. Any tmux integration must go through `ssh <host> tmux …`.
+
+## Phase 2 — tmux session discovery (separate spec)
+
+Agreed in principle, deferred to its own spec so this one stays a single
+implementation plan. On reload, discover live tmux sessions per host and add a
+tab for each, wired with `tmux attach -t '=<name>'`.
+
+**Filter: named sessions only** — skip purely-numeric names. Across the fleet
+that is 13 tabs rather than 45, and it matches actual habit: a session gets a
+name when it means something. Current named sessions are `06-go-events-dice`,
+`07-dice-broadcast`, `07-reachpro-prevent-cancel-rebroadcast`,
+`07-sell-eventid-stubhub-scrape`, `07-stubhub-cancelled-orders-watch`, `dice`,
+`dice-price-sync`, `mem`, `stubhub-pipeline`, `venue-match` on `aorus8`, and
+`stubhub-01/02/03` on `aorus6`. `aorus7`'s 14 sessions are all numeric and would
+yield nothing.
+
+Open questions for that spec: how discovered tabs reconcile with declared ones,
+what happens to a tab whose session later dies (the "only ever adds" rule
+suggests it stays), and whether discovery runs on every reload or only at boot.
 
 ## Out of scope
 
