@@ -1,0 +1,129 @@
+---
+# Install / converge `herdr` (terminal workspace manager for coding agents) on
+# every fleet host (ai_all = aorus fleet + macstudio + this box).
+#
+# Both macOS and Linux use the official install.sh — deliberately NOT Homebrew on
+# macOS, unlike provision-just.yml. Reason: herdr's `update --handoff` path (which
+# transfers live panes to the new server so pane processes survive a version
+# replacement) only works with herdr's own updater, not with Homebrew or Nix.
+# Installing via brew would permanently forfeit handoff upgrades on that host.
+#
+# The installer honors HERDR_INSTALL_DIR (default $HOME/.local/bin) and verifies
+# a SHA-256 from https://herdr.dev/latest.json. It always tracks latest — there
+# is no version-pin argument, so this playbook converges to latest by design.
+#
+# Idempotent for missing hosts: install only when `herdr` is absent.
+# Offline hosts are reported unreachable and skipped (ignore_unreachable).
+- name: Install and converge herdr on the fleet
+  hosts: ai_all
+  gather_facts: true
+  ignore_unreachable: true
+  vars:
+    curl_retry: "--retry 5 --retry-delay 2 --retry-connrefused"
+    herdr_install_dir: "{{ ansible_facts.env.HOME | default('~') }}/.local/bin"
+    # Upgrade policy (b): also converge hosts that already have herdr, but only
+    # when their server is idle. Defaults on because the safety lives in the
+    # running-server check below, not in this flag — leaving it off would let a
+    # stale host be skipped silently and read as "converged".
+    # Override with: -e herdr_converge_existing=false  (install-only run)
+    herdr_converge_existing: true
+
+  tasks:
+    - name: Check whether herdr is already installed, and at what version
+      ansible.builtin.shell: |
+        export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        command -v herdr >/dev/null || exit 1
+        herdr --version
+      register: herdr_check
+      changed_when: false
+      failed_when: false
+
+    - name: Report whether a herdr server is currently running
+      ansible.builtin.shell: |
+        export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        herdr status server 2>/dev/null | awk '/status:/ { print $2; exit }'
+      register: herdr_server_state
+      changed_when: false
+      failed_when: false
+      when: herdr_check.rc | default(1) == 0
+
+    - name: Install herdr via the official installer (absent hosts)
+      ansible.builtin.shell: |
+        set -o pipefail
+        mkdir -p "{{ herdr_install_dir }}"
+        HERDR_INSTALL_DIR="{{ herdr_install_dir }}" \
+          curl {{ curl_retry }} --proto '=https' --tlsv1.2 -fsSL https://herdr.dev/install.sh \
+          | sh
+      args:
+        executable: /bin/bash
+      when: herdr_check.rc | default(1) != 0
+      changed_when: true
+
+    # ── Upgrade policy (b): converge only idle hosts, never interrupt work ───
+    #
+    # `herdr update` uses the normal restart/stop flow — it STOPS THE SERVER,
+    # killing pane processes and any agent mid-task. So we only update a host
+    # whose server is not running, where there is nothing to lose. A host with
+    # a live server is skipped and reported (see the next task) rather than
+    # silently passed over.
+    #
+    # Because we only ever update an idle host, plain `herdr update` is safe
+    # here and the experimental `--handoff` flag is not needed: there are no
+    # live panes to hand off.
+    #
+    # This also protects the control node from updating itself out from under a
+    # running session — if this playbook is driven from inside a Herdr pane on
+    # macstudio, that host has a running server by definition and is skipped.
+    - name: Upgrade existing herdr installs (only where no server is running)
+      ansible.builtin.shell: |
+        export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        before="$(herdr --version 2>/dev/null | awk '{ print $2 }')"
+        herdr update >/dev/null 2>&1
+        after="$(herdr --version 2>/dev/null | awk '{ print $2 }')"
+        echo "${before:-unknown} -> ${after:-unknown}"
+      args:
+        executable: /bin/bash
+      register: herdr_upgrade
+      when:
+        - herdr_converge_existing | bool
+        - herdr_check.rc | default(1) == 0
+        - (herdr_server_state.stdout | default('') | trim) != 'running'
+      failed_when: herdr_upgrade.rc | default(0) != 0
+      # Report changed only when the version actually moved, so a re-run on an
+      # already-current fleet recaps as 0 changed instead of always-changed.
+      changed_when: >-
+        herdr_upgrade.stdout is defined
+        and '->' in herdr_upgrade.stdout
+        and (herdr_upgrade.stdout.split('->')[0] | trim)
+            != (herdr_upgrade.stdout.split('->')[1] | trim)
+
+    # Policy (b) can leave an always-busy host permanently stale. Surface that
+    # explicitly — a silent skip reads as "fleet converged" when it did not.
+    - name: Warn about hosts left stale because a server was running
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: SKIPPED upgrade — herdr server is running
+          ({{ herdr_check.stdout | default('') | trim }}). Drain it and re-run,
+          or update it by hand with `herdr update --handoff`.
+      when:
+        - herdr_converge_existing | bool
+        - herdr_check.rc | default(1) == 0
+        - (herdr_server_state.stdout | default('') | trim) == 'running'
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # Skipped on hosts with no gathered facts (offline/unreachable) so a down
+    # box recaps as a clean skip, never a false failure.
+    - name: Verify herdr is available and capture version + protocol
+      ansible.builtin.shell: |
+        export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        herdr status client 2>/dev/null | awk '/version:|protocol:/ { printf "%s ", $2 }'
+      register: herdr_ver
+      changed_when: false
+      failed_when: herdr_ver.rc | default(0) != 0
+      when: ansible_facts.system is defined
+
+    - name: Report installed version and protocol
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          {{ (herdr_ver.stdout | default('') | trim) or '(host offline — skipped)' }}

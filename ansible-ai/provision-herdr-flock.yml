@@ -1,0 +1,215 @@
+---
+# Install / update the `herdr-flock` herdr plugin (github.com/ragamo/herdr-flock)
+# — a ratatui TUI that visualizes agents as pixel-art sheep on a farm.
+#
+# TARGET: defaults to `local_ai` (macstudio, the cockpit) — NOT the whole fleet.
+# Flock is a viewer: it reads the LOCAL herdr socket and renders that host's own
+# agents, so on a headless worker it draws for nobody. It also needs a Rust
+# toolchain to build, and only macstudio + aorus6 have one.
+# Widen deliberately:  -e flock_hosts=aorus_ai   /   -e flock_hosts=aorus6
+#
+# UPDATE MODEL: herdr has no `plugin update` subcommand (install/uninstall/link/
+# enable/disable/list/config-dir/action/log/pane only). Installed plugins are
+# pinned to a commit SHA, visible in `herdr plugin list` as
+# `[github:owner/repo@<sha>]`. So "update" here means: compare the installed SHA
+# against `flock_ref`, and if they differ, uninstall and reinstall at the target.
+#
+# This playbook does NOT install Rust. Bootstrapping a toolchain on a host is a
+# big, opinionated side effect — it fails fast with instructions instead.
+- name: Install and update the herdr-flock plugin
+  hosts: "{{ flock_hosts | default('local_ai') }}"
+  gather_facts: true
+  ignore_unreachable: true
+  vars:
+    flock_repo: "ragamo/herdr-flock"
+    # Pinned by default. The repo has no tags/releases and no LICENSE file, so a
+    # floating HEAD means arbitrary third-party code lands unreviewed on a box
+    # that can read your agent state. Bump this deliberately after a diff.
+    # Track HEAD instead with: -e flock_ref=HEAD
+    flock_ref: "ae24844b3c8b1cf7cf3dfc3d6e6bc701b6e048a3"
+    # Opt-in: append the README's `prefix+i` binding to config.toml.
+    # Off by default — keybindings are personal, and prefix+i could collide with
+    # something you have bound. Verify what is free with `prefix+?` first.
+    flock_install_keybinding: false
+
+  tasks:
+    # ── Preflight ────────────────────────────────────────────────────────────
+    - name: Check for herdr and a Rust toolchain
+      ansible.builtin.shell: |
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        printf 'herdr=%s\n' "$(herdr --version 2>/dev/null | awk '{ print $2 }')"
+        printf 'cargo=%s\n' "$(cargo --version 2>/dev/null | awk '{ print $2 }')"
+      register: flock_pre
+      changed_when: false
+      failed_when: false
+
+    - name: Parse preflight results
+      ansible.builtin.set_fact:
+        flock_herdr_ver: "{{ flock_pre.stdout | default('') | regex_search('herdr=([^\\s]*)', '\\1') | first | default('', true) }}"
+        flock_cargo_ver: "{{ flock_pre.stdout | default('') | regex_search('cargo=([^\\s]*)', '\\1') | first | default('', true) }}"
+      when: flock_pre.stdout is defined
+
+    # Fail fast at the boundary with something actionable, rather than letting
+    # `plugin install` die halfway through a cargo build.
+    - name: Require herdr (>= 0.7.0) and cargo (>= 1.85)
+      ansible.builtin.assert:
+        that:
+          - flock_herdr_ver | default('') | length > 0
+          - flock_cargo_ver | default('') | length > 0
+          - flock_herdr_ver is version('0.7.0', '>=')
+          - flock_cargo_ver is version('1.85', '>=')
+        fail_msg: >-
+          {{ inventory_hostname }} cannot build herdr-flock.
+          herdr={{ flock_herdr_ver | default('(absent)') }}
+          cargo={{ flock_cargo_ver | default('(absent)') }}.
+          Needs herdr >= 0.7.0 (run provision-herdr.yml) and cargo >= 1.85
+          (install Rust: https://www.rust-lang.org/tools/install).
+        success_msg: >-
+          {{ inventory_hostname }}: herdr {{ flock_herdr_ver }},
+          cargo {{ flock_cargo_ver }} — ok to build.
+      when: ansible_facts.system is defined
+
+    # ── Detect current state ─────────────────────────────────────────────────
+    # The plugin's own id is read out of `plugin list` rather than hardcoded, so
+    # the uninstall half of the update path always names something herdr accepts.
+    - name: Detect whether herdr-flock is installed, and at which commit
+      ansible.builtin.shell: |
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        line="$(herdr plugin list 2>/dev/null | grep -F 'github:{{ flock_repo }}@' || true)"
+        if [ -z "$line" ]; then
+          echo "state=absent id= sha="
+        else
+          # `plugin list` prints:  - <id> (<display name>) <state> [github:owner/repo@sha]
+          # The id is the FIRST field; the parentheses hold the human-readable
+          # NAME. They differ — flock is `flock.farm (Flock)` — and only the id
+          # is accepted by `plugin uninstall`. Do NOT read the parenthesised
+          # value: herdr-file-viewer uses the same string for both, so that
+          # mistake passes on that plugin and fails on every other one.
+          id="$(printf '%s' "$line" | sed -n 's/^[[:space:]]*-[[:space:]]*\([^ ]*\).*/\1/p')"
+          # Do NOT anchor on the closing bracket. herdr appends diagnostics
+          # inside it — a real line reads `@80bae8b…; 1 warning(s)]` — so a
+          # pattern requiring `]` right after the hex silently returns nothing.
+          # Match a run of >=7 hex digits after the @ and ignore the rest.
+          sha="$(printf '%s' "$line" | sed -n 's/.*@\([0-9a-fA-F]\{7,\}\).*/\1/p')"
+          echo "state=present id=${id} sha=${sha}"
+        fi
+      register: flock_state
+      changed_when: false
+      failed_when: false
+      when: ansible_facts.system is defined
+
+    - name: Parse installed plugin id and commit
+      ansible.builtin.set_fact:
+        flock_present: "{{ 'state=present' in (flock_state.stdout | default('')) }}"
+        flock_id: "{{ flock_state.stdout | default('') | regex_search('id=([^\\s]*)', '\\1') | first | default('', true) }}"
+        flock_sha: "{{ flock_state.stdout | default('') | regex_search('sha=([^\\s]*)', '\\1') | first | default('', true) }}"
+      when: flock_state.stdout is defined
+
+    # An installed plugin whose SHA we could not read is a hard error, never a
+    # silent pass. The prefix comparison below uses str.startswith, and an empty
+    # string is a prefix of EVERY string — so an unparsed SHA would make the
+    # playbook conclude "already at the target ref" and report changed=0. A
+    # detection failure that renders as convergence is the worst outcome here,
+    # so refuse to proceed instead.
+    - name: Fail if an installed plugin's commit could not be determined
+      ansible.builtin.assert:
+        that:
+          - flock_sha | default('') | length >= 7
+        fail_msg: >-
+          {{ inventory_hostname }}: herdr-flock is installed but its commit could
+          not be parsed from `herdr plugin list`. Refusing to guess whether an
+          update is needed. Raw detection output:
+          {{ flock_state.stdout | default('(none)') | trim }}
+      when:
+        - flock_state.stdout is defined
+        - flock_present | default(false)
+
+    # A pinned ref matches the installed SHA by prefix (either may be abbreviated);
+    # flock_ref=HEAD is always treated as "reinstall to move the pin forward".
+    - name: Decide whether an update is needed
+      ansible.builtin.set_fact:
+        flock_needs_update: >-
+          {{ flock_present | default(false)
+             and (flock_ref == 'HEAD'
+                  or not (flock_ref.startswith(flock_sha) or flock_sha.startswith(flock_ref))) }}
+      when: flock_state.stdout is defined
+
+    # ── Install (absent) ─────────────────────────────────────────────────────
+    - name: Install herdr-flock
+      ansible.builtin.shell: |
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        herdr plugin install {{ flock_repo }} -y {{ '--ref ' ~ flock_ref if flock_ref != 'HEAD' else '' }}
+      args:
+        executable: /bin/bash
+      when:
+        - ansible_facts.system is defined
+        - not (flock_present | default(false))
+      changed_when: true
+      # A cold cargo build of ratatui + bundled rusqlite is slow on these boxes.
+      async: 900
+      poll: 15
+
+    # ── Update (present, wrong commit) ───────────────────────────────────────
+    # No `plugin update` exists, and whether `plugin install` upgrades an already
+    # installed plugin in place is undocumented — so do the explicit thing.
+    # Uninstall does not touch flock.db (that lives in the XDG data dir), so
+    # sheep history survives the swap.
+    - name: Update herdr-flock (uninstall, then reinstall at target ref)
+      ansible.builtin.shell: |
+        set -e
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        herdr plugin uninstall {{ flock_id | quote }}
+        herdr plugin install {{ flock_repo }} -y {{ '--ref ' ~ flock_ref if flock_ref != 'HEAD' else '' }}
+      args:
+        executable: /bin/bash
+      when:
+        - ansible_facts.system is defined
+        - flock_needs_update | default(false) | bool
+      changed_when: true
+      async: 900
+      poll: 15
+
+    # ── Optional keybinding ──────────────────────────────────────────────────
+    - name: Add the prefix+i binding for the farm (opt-in)
+      ansible.builtin.blockinfile:
+        path: "{{ ansible_facts.env.HOME }}/.config/herdr/config.toml"
+        create: true
+        mode: "0644"
+        backup: true
+        marker: "# {mark} ANSIBLE MANAGED — herdr-flock"
+        block: |
+          [[keys.command]]
+          key = "prefix+i"
+          type = "plugin_action"
+          command = "flock.farm.open"
+          description = "Open Flock Farm"
+      when:
+        - ansible_facts.system is defined
+        - flock_install_keybinding | bool
+      notify: Reload herdr config
+
+    # ── Report ───────────────────────────────────────────────────────────────
+    - name: Re-read plugin state after changes
+      ansible.builtin.shell: |
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        herdr plugin list 2>/dev/null | grep -F '{{ flock_repo }}' || echo '(not installed)'
+      register: flock_after
+      changed_when: false
+      failed_when: false
+      when: ansible_facts.system is defined
+
+    - name: Report final plugin state
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          {{ (flock_after.stdout | default('') | trim) or '(host offline — skipped)' }}
+
+  handlers:
+    - name: Reload herdr config
+      ansible.builtin.shell: |
+        export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        herdr server reload-config
+      args:
+        executable: /bin/bash
+      changed_when: true
+      failed_when: false

@@ -138,3 +138,22 @@
 # CLI. Skip with:  ansible-playbook update.yml --skip-tags headroom
 - import_playbook: deploy-headroom-proxy.yml
   tags: [headroom]
+
+# ── 6. herdr terminal workspace manager (ai_all) ────────────────────────────
+# Installs herdr where absent, and converges stale installs — but ONLY on hosts
+# whose herdr server is idle, because `herdr update` stops the server and would
+# kill live panes and any agent mid-task. A host with a running server is left
+# alone and reported by name. Also keeps the control node from updating itself
+# out from under a live session.
+# Skip with:  ansible-playbook update.yml --skip-tags herdr
+- import_playbook: provision-herdr.yml
+  tags: [herdr]
+
+# ── 7. herdr-flock plugin (local_ai only, by default) ───────────────────────
+# Pixel-art agent visualizer. Scoped to the cockpit deliberately: it renders the
+# LOCAL host's agents, and needs a Rust toolchain to build, so putting it on
+# headless workers costs a toolchain to draw for nobody. Pinned to a reviewed
+# commit — the upstream repo has no tags, releases, or LICENSE.
+# Widen with:  -e flock_hosts=aorus_ai      Skip with:  --skip-tags flock
+- import_playbook: provision-herdr-flock.yml
+  tags: [flock]
