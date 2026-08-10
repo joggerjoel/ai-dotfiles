@@ -176,6 +176,20 @@ guard-report:
 cache-test:
     @bash {{dotfiles}}/hooks/cache-guard.test.sh
 
+# [herdr] fleet agent-CLI login state (read-only)
+auth-status:
+    @bash {{dotfiles}}/scripts/herdr-auth.sh status
+
+# Only `cursor` is implemented. codex and claude need a PTY-driven flow that is
+# not built yet; they exit 2 with "unknown or unimplemented cli".
+# [herdr] log a CLI in across the fleet: `just auth-login cursor`
+auth-login CLI:
+    @bash {{dotfiles}}/scripts/herdr-auth.sh login --cli {{CLI}}
+
+# [local] herdr-auth: unit tests (scripts/herdr-auth.test.sh)
+auth-test:
+    @bash {{dotfiles}}/scripts/herdr-auth.test.sh
+
 # [local] per-session cache/token report via ccusage (on demand — never in the statusline)
 cache-report *ARGS:
     bunx ccusage@latest claude session --breakdown {{ARGS}}
