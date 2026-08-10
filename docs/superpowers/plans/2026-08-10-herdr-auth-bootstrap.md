@@ -122,7 +122,9 @@ printf '%s' "$out" | grep -q 'aorus4' \
 printf '%s' "$out" | grep -qE 'aorus4 +[^ ]+ +[^ ]+ +authed|aorus4.*authed' \
   && ok "status: reports aorus4 claude as authed" \
   || ko "status: reports aorus4 claude as authed"
-printf '%s' "$out" | grep -q '2 authed, 4 missing' \
+# aorus contributes 0 authed / 3 missing; aorus4 contributes 1 authed (claude)
+# / 2 missing. Six probes across two hosts: 1 authed, 5 missing.
+printf '%s' "$out" | grep -q '1 authed, 5 missing' \
   && ok "status: prints a totals line" \
   || ko "status: prints a totals line" "$(printf '%s' "$out" | tail -1)"
 
