@@ -152,6 +152,13 @@ start with one machine playing every role and split out roles as you grow:
 Deployment is **pull-based and reproducible**: hosts run `git pull` against this repo, so the flow
 is always **commit → push → playbook**. Nothing reaches a host that isn't on `origin/main` first.
 
+> **macOS node, first `just node-services`:** once herdr's server runs under launchd instead of
+> from your terminal, macOS treats it as a new subject for **Local Network** access. Until it is
+> granted, ssh from a herdr pane to any LAN host fails with `No route to host` — while `ping` and
+> ssh from your own terminal succeed against the same address. Enable `herdr` under System
+> Settings → Privacy & Security → Local Network. Details, and why the first ~30 connections
+> survive anyway: [references/herdr-spaces.md](references/herdr-spaces.md).
+
 ```bash
 ./deploy.sh -m "feat: my change"   # commit, push, and update every target in one shot
 ./update.sh                        # this machine: Claude Code + sibling CLIs (codex, cursor,

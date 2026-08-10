@@ -110,3 +110,31 @@ broken forever.
   scratch session (`tmux new-session -A -s herdr`). Reaching the fleet's
   long-running named sessions is handled by `herdr-tmux.sh` — see
   `herdr-tmux-spaces.md`.
+
+## macOS: a launchd-started server needs Local Network permission
+
+Moving the herdr server under launchd makes it a **new subject** for the macOS
+Local Network privacy control. Started by hand from a terminal it inherits the
+terminal app's existing grant, so the fleet is reachable and nothing looks
+amiss; started by `launchctl` it is judged on its own, and without a grant every
+ssh from a pane to a LAN host fails:
+
+    ssh: connect to host 192.168.1.217 port 22: No route to host
+
+The error is misleading. The host is up, `ping` answers, and the same `ssh`
+succeeds from your own terminal against the same address in the same second.
+Only pane-originated connections fail.
+
+What makes it genuinely confusing: connections opened in the first seconds after
+the switch **survive**. A `spaces-apply --wire` firing ~30 ssh sessions at once
+lands them all, and only the next thing you run fails — which reads as load or a
+transient blip, and is neither.
+
+Fix: System Settings → Privacy & Security → Local Network → enable `herdr`. It
+takes effect immediately; the server does not need restarting. Verify from a
+pane, not from your terminal — your terminal was never the broken context:
+
+    herdr pane run <pane-id> "ssh -o BatchMode=yes -o ConnectTimeout=6 <host> hostname"
+
+Expect this on any machine where the node's server moves from a terminal start
+to `dev.herdr.node`, including a first-time `just node-services` install.
