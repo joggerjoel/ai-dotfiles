@@ -4,15 +4,22 @@
 # Picks the fixture by host plus which CLI the command mentions.
 host=""
 skip=0
-for a in "$@"; do
-  if [ "$skip" = 1 ]; then skip=0; continue; fi
-  case "$a" in
-    -o) skip=1 ;;
-    -*) ;;
-    *) host="$a"; break ;;
+while [ $# -gt 0 ]; do
+  if [ "$skip" = 1 ]; then skip=0; shift; continue; fi
+  case "$1" in
+    -o) skip=1; shift ;;
+    -*) shift ;;
+    *) host="$1"; shift; break ;;
   esac
 done
 cmd="$*"
+
+# host_reachable() probes with the bare command `true`. If a fixture named
+# <host>.unreachable exists, model an ssh connect failure by exiting 255 —
+# ssh's own code for "couldn't reach the host" — instead of succeeding.
+if [ "$cmd" = true ] && [ -f "$HERDR_AUTH_FIXTURE/$host.unreachable" ]; then
+  exit 255
+fi
 
 case "$cmd" in
   *cursor-agent*) probe=cursor ;;

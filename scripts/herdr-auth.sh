@@ -17,6 +17,10 @@
 # bash 3.2 compatible (the node is macOS): no mapfile, no associative arrays.
 
 set -uo pipefail
+# -f disables pathname expansion. The host list is deliberately word-split from
+# a space-separated string, and without -f a glob metacharacter in
+# HERDR_AUTH_HOSTS would expand against files in the cwd instead of naming hosts.
+set -f
 
 HOSTS_DEFAULT="aorus aorus4 aorus5 aorus6 aorus7 aorus8"
 HOSTS_STR="${HERDR_AUTH_HOSTS:-$HOSTS_DEFAULT}"
@@ -70,19 +74,33 @@ probe() {  # <cli> <host>
   esac
 }
 
+# An unreachable host must not read as merely logged-out: later phases drive
+# login flows off these probes, and firing one at a dead host wastes a device
+# code that expires.
+host_reachable() {
+  ssh $SSH_OPTS "$1" true >/dev/null 2>&1
+}
+
 cmd_status() {
-  local host cli state a=0 m=0
+  local host cli state a=0 m=0 u=0
   printf '%-10s %-10s %-10s %-10s\n' HOST CURSOR CODEX CLAUDE
   for host in $HOSTS_STR; do
     printf '%-10s' "$host"
-    for cli in cursor codex claude; do
-      state="$(probe "$cli" "$host")"
-      printf ' %-10s' "$state"
-      if [ "$state" = authed ]; then a=$((a + 1)); else m=$((m + 1)); fi
-    done
+    if host_reachable "$host"; then
+      for cli in cursor codex claude; do
+        state="$(probe "$cli" "$host")"
+        printf ' %-10s' "$state"
+        if [ "$state" = authed ]; then a=$((a + 1)); else m=$((m + 1)); fi
+      done
+    else
+      for cli in cursor codex claude; do
+        printf ' %-10s' unreachable
+        u=$((u + 1))
+      done
+    fi
     printf '\n'
   done
-  printf '\n%d authed, %d missing\n' "$a" "$m"
+  printf '\n%d authed, %d missing, %d unreachable\n' "$a" "$m" "$u"
 }
 
 main() {

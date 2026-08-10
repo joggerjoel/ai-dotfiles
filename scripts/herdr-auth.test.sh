@@ -69,14 +69,30 @@ out=$(HERDR_AUTH_HOSTS="aorus aorus4" bash "$A" status)
 printf '%s' "$out" | grep -q 'aorus4' \
   && ok "status: lists every host" \
   || ko "status: lists every host" "missing aorus4"
-printf '%s' "$out" | grep -qE 'aorus4 +[^ ]+ +[^ ]+ +authed|aorus4.*authed' \
+# Pin the COLUMN, not just the row: aorus4 is missing/missing/authed, so
+# `authed` must be the third state on the line. A permissive `aorus4.*authed`
+# would pass even if authed landed in the cursor or codex column.
+printf '%s' "$out" | grep -qE '^aorus4 +missing +missing +authed' \
   && ok "status: reports aorus4 claude as authed" \
-  || ko "status: reports aorus4 claude as authed"
+  || ko "status: reports aorus4 claude as authed" "$(printf '%s' "$out" | grep aorus4)"
 # aorus contributes 0 authed / 3 missing; aorus4 contributes 1 authed (claude)
-# / 2 missing. Six probes across two hosts: 1 authed, 5 missing.
-printf '%s' "$out" | grep -q '1 authed, 5 missing' \
+# / 2 missing. Six probes across two hosts: 1 authed, 5 missing, 0 unreachable.
+printf '%s' "$out" | grep -q '1 authed, 5 missing, 0 unreachable' \
   && ok "status: prints a totals line" \
   || ko "status: prints a totals line" "$(printf '%s' "$out" | tail -1)"
+
+# An unreachable host must report all three columns as `unreachable` and be
+# tallied in its own bucket, not silently counted as `missing` — later phases
+# drive login flows off these probes and a dead host must not look merely
+# logged-out.
+: > "$HERDR_AUTH_FIXTURE/aorus5.unreachable"
+out=$(HERDR_AUTH_HOSTS="aorus4 aorus5" bash "$A" status)
+printf '%s' "$out" | grep -qE '^aorus5 +unreachable +unreachable +unreachable' \
+  && ok "status: reports an unreachable host distinctly" \
+  || ko "status: reports an unreachable host distinctly" "$(printf '%s' "$out" | grep aorus5)"
+printf '%s' "$out" | grep -q '1 authed, 2 missing, 3 unreachable' \
+  && ok "status: tallies unreachable separately from missing" \
+  || ko "status: tallies unreachable separately from missing" "$(printf '%s' "$out" | tail -1)"
 
 printf '\n  %d passed, %d failed\n\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
