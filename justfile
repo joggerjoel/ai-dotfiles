@@ -69,6 +69,22 @@ spaces-apply *ARGS:
     if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-layout.sh" apply {{ARGS}}
     else exec ssh {{node}} "~/ai-dotfiles/scripts/herdr-layout.sh apply {{ARGS}}"; fi
 
+# [herdr] report live tmux sessions on each fleet host (read-only)
+tmux-spaces:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-tmux.sh" status
+    else exec ssh {{node}} '~/ai-dotfiles/scripts/herdr-tmux.sh status'; fi
+
+# Discovers sessions fresh on every run, so re-run it after a herdr restart or
+# whenever a long-running session is added. Never kills anything.
+# [herdr] build a <host>-tmux space per host from its live tmux sessions
+tmux-spaces-apply *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-tmux.sh" apply {{ARGS}}
+    else exec ssh {{node}} "~/ai-dotfiles/scripts/herdr-tmux.sh apply {{ARGS}}"; fi
+
 # ── captain (firstmate) ─────────────────────────────────────────────
 # Ensures a persistent captain tab (claude in ~/firstmate) inside the node's
 # herdr session, then attaches. Survives laptop lids, dropped connections, and

@@ -17,10 +17,14 @@ set -euo pipefail
 SPACE_LABEL=""
 SSH_HOST=""
 POLICY="fallback"
+PRINT_COMMAND=""
+ATTACH_TMUX=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --policy) POLICY="$2"; shift 2 ;;
+    --print-command) PRINT_COMMAND="$2"; shift 2 ;;
+    --attach-tmux) ATTACH_TMUX=1; shift ;;
     -*) echo "unknown flag: $1" >&2; exit 2 ;;
     *) if [ -z "$SPACE_LABEL" ]; then SPACE_LABEL="$1"; else SSH_HOST="$1"; fi; shift ;;
   esac
@@ -33,9 +37,18 @@ case "$POLICY" in bare|fallback|reconnect) ;; *) echo "bad policy: $POLICY" >&2;
 # --- tab label -> program ---------------------------------------------------
 
 program_for_tab() {
+  # In a tmux space the label IS a session name, so no alias applies — a
+  # session may legitimately be called `cursor` or `tmux`.
+  if [ -n "$ATTACH_TMUX" ]; then
+    printf 'tmux attach -t %s' "$(sq "$1")"
+    return
+  fi
   case "$1" in
     cursor) echo "agent" ;;   # `agent` and `cursor-agent` are the same binary
-    *)      echo "$1" ;;      # claude, codex, pi, tmux run under their own name
+    tmux)   echo "tmux new-session -A -s herdr" ;;  # attach-or-create; bare
+                                                    # `tmux` spawned a new
+                                                    # session on every wiring
+    *)      echo "$1" ;;      # claude, codex, pi run under their own name
   esac
 }
 
@@ -77,6 +90,13 @@ command_for_tab() {
   fi
 }
 
+# Print one tab's command and exit. No API call, no ssh — this is the seam the
+# tests drive, and a quick way to see what a pane would actually be sent.
+if [ -n "$PRINT_COMMAND" ]; then
+  command_for_tab "$PRINT_COMMAND"
+  exit 0
+fi
+
 # --- resolve the space, then its tabs ---------------------------------------
 
 WS="$(herdr workspace list | python3 -c "
@@ -102,8 +122,12 @@ fi
 
 echo "space '$SPACE_LABEL' ($WS) -> ${SSH_HOST:-local}  [policy: $POLICY]${DRY_RUN:+  (dry run)}"
 
-# Emits "<tab-label> <pane-id> <busy|free>". A pane is busy when herdr has already
-# detected an agent in it — sending text there would type into a running program.
+# Emits "<pane-id>\t<busy|free>\t<tab-label>", tab-delimited with the
+# variable-width label LAST — a tab label may legitimately contain spaces (a
+# tmux session can be named "my sess"), and space-splitting would shear such
+# a label across fields, misdirecting the pane_id and busy-guard downstream.
+# A pane is busy when herdr has already detected an agent in it — sending
+# text there would type into a running program.
 herdr pane list | python3 -c "
 import json,sys,subprocess
 ws=sys.argv[1]
@@ -111,8 +135,8 @@ tabs={t['tab_id']:t['label'] for t in json.loads(subprocess.run(['herdr','tab','
 for p in json.load(sys.stdin)['result']['panes']:
     if p['workspace_id']==ws:
         busy = bool(p.get('agent')) or p.get('agent_status') not in (None,'unknown')
-        print(tabs.get(p['tab_id'],'?'), p['pane_id'], 'busy' if busy else 'free')
-" "$WS" | while read -r tab_label pane_id state; do
+        print(p['pane_id'], 'busy' if busy else 'free', tabs.get(p['tab_id'],'?'), sep='\t')
+" "$WS" | while IFS=$'\t' read -r pane_id state tab_label; do
   # Never wire the pane this script is running from — that injects into our own stdin.
   if [ "$pane_id" = "${HERDR_PANE_ID:-}" ]; then
     echo "  $tab_label ($pane_id): SKIP — this is the pane running this script"
