@@ -35,28 +35,28 @@ node-status:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-node.sh" status
-    else exec ssh {{node}} '~/ai-dotfiles/scripts/herdr-node.sh status'; fi
+    else exec ssh {{node}} '~/Developer/ai-dotfiles/scripts/herdr-node.sh status'; fi
 
 # [herdr] (re)start herdr server + mesh bridge on the node
 node-up:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-node.sh" up
-    else exec ssh {{node}} '~/ai-dotfiles/scripts/herdr-node.sh up'; fi
+    else exec ssh {{node}} '~/Developer/ai-dotfiles/scripts/herdr-node.sh up'; fi
 
 # [herdr] install the node's launchd agents (server + bridge, always-on)
 node-services:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-node.sh" service install all
-    else exec ssh {{node}} '~/ai-dotfiles/scripts/herdr-node.sh service install all'; fi
+    else exec ssh {{node}} '~/Developer/ai-dotfiles/scripts/herdr-node.sh service install all'; fi
 
 # [herdr] diff ~/.config/herdr/layout.conf against the node's live spaces
 spaces:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-layout.sh" status
-    else exec ssh {{node}} '~/ai-dotfiles/scripts/herdr-layout.sh status'; fi
+    else exec ssh {{node}} '~/Developer/ai-dotfiles/scripts/herdr-layout.sh status'; fi
 
 # Creates only what is missing and never closes anything, so it is safe to
 # re-run. Pass through the script's own flags, e.g. `just spaces-apply --dry-run`
@@ -67,14 +67,14 @@ spaces-apply *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-layout.sh" apply {{ARGS}}
-    else exec ssh {{node}} "~/ai-dotfiles/scripts/herdr-layout.sh apply {{ARGS}}"; fi
+    else exec ssh {{node}} "~/Developer/ai-dotfiles/scripts/herdr-layout.sh apply {{ARGS}}"; fi
 
 # [herdr] report live tmux sessions on each fleet host (read-only)
 tmux-spaces:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-tmux.sh" status
-    else exec ssh {{node}} '~/ai-dotfiles/scripts/herdr-tmux.sh status'; fi
+    else exec ssh {{node}} '~/Developer/ai-dotfiles/scripts/herdr-tmux.sh status'; fi
 
 # Discovers sessions fresh on every run, so re-run it after a herdr restart or
 # whenever a long-running session is added. Never kills anything.
@@ -83,7 +83,7 @@ tmux-spaces-apply *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-tmux.sh" apply {{ARGS}}
-    else exec ssh {{node}} "~/ai-dotfiles/scripts/herdr-tmux.sh apply {{ARGS}}"; fi
+    else exec ssh {{node}} "~/Developer/ai-dotfiles/scripts/herdr-tmux.sh apply {{ARGS}}"; fi
 
 # ── captain (firstmate) ─────────────────────────────────────────────
 # Ensures a persistent captain tab (claude in ~/firstmate) inside the node's
@@ -97,7 +97,7 @@ captain: node-up
       "{{dotfiles}}/scripts/herdr-node.sh" captain-tab
       exec herdr
     else
-      ssh {{node}} '~/ai-dotfiles/scripts/herdr-node.sh captain-tab'
+      ssh {{node}} '~/Developer/ai-dotfiles/scripts/herdr-node.sh captain-tab'
       exec herdr --remote {{node}}
     fi
 
