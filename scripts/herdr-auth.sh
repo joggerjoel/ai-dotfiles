@@ -82,29 +82,108 @@ host_reachable() {
 }
 
 # Pull the login URL out of captured CLI output. Last match wins: a retry
-# prints a fresh URL below the stale one.
+# prints a fresh URL below the stale one. Real pane output can carry ANSI
+# color/cursor codes and can be embedded in prose ("...to this link: URL."),
+# so both ANSI escapes and trailing punctuation are stripped before matching
+# and before returning, or a mangled URL gets opened.
 extract_url() {
-  grep -oE 'https://[^[:space:]]+' | tail -1
+  # The script is built via a heredoc (for readability) but run with `-c`,
+  # not fed to python3's own stdin: python3 with no script argument treats
+  # its stdin as the program to execute, which would swallow the piped pane
+  # text instead of leaving it for sys.stdin.read() below.
+  python3 -c "$(cat <<'PY'
+import re
+import sys
+
+# CSI ("\x1b[...m"), OSC ("\x1b]...BEL/ST"), and simple two-byte ("\x1b" + one
+# byte in @-_) escape forms. Good enough for real terminal output; this is a
+# scrubber, not a full ANSI parser.
+ANSI_RE = re.compile(
+    r"\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[@-_])"
+)
+# Characters that cannot legally end a URL when it is really trailing prose
+# punctuation or a stray escape remnant, not part of the URL itself.
+TRAILING = ".,;:!?)]}'\">"
+
+data = ANSI_RE.sub("", sys.stdin.read())
+urls = re.findall(r"https://\S+", data)
+if urls:
+    sys.stdout.write(urls[-1].rstrip(TRAILING))
+PY
+)"
 }
 
-# Strip credential-bearing query parameter values. Everything this script
-# prints goes through here — the URL itself is a bearer credential for the
-# login attempt, so only the parameter names may appear in output.
+# Strip credential-bearing parameter values. Everything this script prints
+# goes through here — a login URL is a bearer credential for that login
+# attempt, so only parameter NAMES may appear in output, never their values.
 #
-# ALLOWLIST, not denylist. Every parameter value is redacted except the few
-# known to carry nothing secret. Three vendors own these URLs and can add a
-# parameter without telling us — `state`, `verifier`, whatever comes next — and
-# a denylist prints anything it has not heard of. This fails closed instead.
+# ALLOWLIST, not denylist. Every key=value token is redacted except the few
+# keys known to carry nothing secret. Three vendors own these URLs and can add
+# a parameter without telling us — `state`, `verifier`, whatever comes next —
+# and a denylist prints anything it has not heard of. This fails closed
+# instead: unknown key, redacted value.
 #
-# Implemented in three passes because sed has no negative lookahead: protect the
-# allowlisted separators with a control character, redact everything still
-# holding an `=`, then restore. \001 cannot occur in a URL, so it is safe.
+# This operates on ARBITRARY TEXT, not a guaranteed-clean URL — captured pane
+# output, not just the URL substring — so a key=value token is recognized
+# after `?`, `&`, `#`, OR at the start of a line/whitespace-delimited word.
+# `#` matters because a fragment (everything after `#`) never reaches the
+# server and many OAuth implicit/PKCE flows carry the token there; the old
+# sed pipeline only ever matched after `?`/`&` and let fragment tokens through
+# in the clear. A token with no leading separator at all (the very first
+# key=value on a line) is also covered, which the old two-argument sed pass
+# missed.
+#
+# Repeated key semantics: each occurrence is judged independently by its own
+# key name against the allowlist, with no "remember what we already redacted"
+# state. A repeated non-allowlisted key is redacted on every occurrence
+# (fail-closed); a repeated allowlisted key is left alone on every occurrence,
+# consistent with the allowlist's premise that a value paired with an
+# allowlisted key is defined as non-secret regardless of how many times that
+# key appears.
+#
+# C0 control bytes (other than tab/newline) are stripped before any pattern
+# runs. The prior implementation protected allowlisted keys with a `\001`
+# sentinel and rewrote it back to `=` in a final pass; raw pane text is not a
+# clean URL and can itself contain a literal `\001`, which let a forged
+# sentinel reconstruct a secret's `key=value` shape in the clear. This
+# implementation never reintroduces a sentinel of any kind, so stripping
+# control bytes up front is enough to close that off — there is nothing left
+# for a forged control byte to collide with.
+#
+# RESIDUAL RISK, not fixed here: a secret embedded in the URL PATH itself
+# (e.g. `/device/ABC-123-SECRET`) has no `key=value` shape and this cannot
+# catch it — redacting arbitrary path segments would mangle every ordinary
+# URL. The primary control for that case is the plan's rule that this script
+# never prints a login URL at all; redact() is defence in depth for whatever
+# text does get printed (retries, error output, etc.), not the only line of
+# defence.
 REDACT_KEEP='mode|redirectTarget|response_type|scope|prompt'
 redact() {
-  local sep; sep=$(printf '\001')
-  sed -E "s/([?&])($REDACT_KEEP)=/\1\2${sep}/g" \
-    | sed -E 's/([?&])([A-Za-z_][A-Za-z0-9_.-]*)=[^&[:space:]]*/\1\2=REDACTED/g' \
-    | sed -E "s/${sep}/=/g"
+  # See extract_url() above for why this is `-c "$(cat <<...)"` and not a
+  # heredoc fed straight to python3's own stdin.
+  REDACT_KEEP="$REDACT_KEEP" python3 -c "$(cat <<'PY'
+import os
+import re
+import sys
+
+KEEP = frozenset(os.environ["REDACT_KEEP"].split("|"))
+# C0 control bytes except tab (0x09) and newline (0x0a).
+CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f]")
+TOKEN_RE = re.compile(r"(^|[\s?&#])([A-Za-z_][A-Za-z0-9_.-]*)=([^\s&#]*)")
+
+
+def _redact_token(m):
+    sep, key = m.group(1), m.group(2)
+    if key in KEEP:
+        return m.group(0)
+    return sep + key + "=REDACTED"
+
+
+data = CONTROL_RE.sub("", sys.stdin.read())
+lines = [TOKEN_RE.sub(_redact_token, line) for line in data.split("\n")]
+sys.stdout.write("\n".join(lines))
+PY
+)"
 }
 
 cmd_status() {

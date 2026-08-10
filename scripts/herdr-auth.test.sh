@@ -138,5 +138,77 @@ printf '%s' "$got" | grep -q 'mode=login' \
   && ok "redact: keeps allowlisted params readable" \
   || ko "redact: keeps allowlisted params readable" "$got"
 
+# --- regression: sed-pipeline leaks, replaced by the python3 implementation -
+
+# Finding 1 (CRITICAL): a fragment token. The old sed pipeline only ever
+# matched a key after `?` or `&`, so anything after `#` — including an
+# implicit/PKCE access token, which several OAuth flows put in the fragment —
+# survived in the clear.
+got=$(printf 'https://x.test/callback#access_token=LEAKED&state=xyz\n' | bash "$A" _redact)
+printf '%s' "$got" | grep -q 'LEAKED' \
+  && ko "redact: closes the fragment leak (#access_token)" "leaked: $got" \
+  || ok "redact: closes the fragment leak (#access_token)"
+printf '%s' "$got" | grep -q 'access_token=REDACTED' \
+  && ok "redact: fragment key is redacted, not dropped" \
+  || ko "redact: fragment key is redacted, not dropped" "$got"
+
+# Finding 2 (CRITICAL): a key=value token with no leading `?`/`&` at all —
+# the first token on a line. The old sed pass required a literal separator
+# right before the key, so the very first token on a line was never touched.
+got=$(printf 'code=BARE_LEAK_TEST&mode=login\n' | bash "$A" _redact)
+printf '%s' "$got" | grep -q 'BARE_LEAK_TEST' \
+  && ko "redact: closes the no-separator leak (line-leading key)" "leaked: $got" \
+  || ok "redact: closes the no-separator leak (line-leading key)"
+printf '%s' "$got" | grep -q '^code=REDACTED&mode=login$' \
+  && ok "redact: line-leading key redacted, trailing allowlisted key kept" \
+  || ko "redact: line-leading key redacted, trailing allowlisted key kept" "$got"
+
+# Finding 3 (CRITICAL): a forged sentinel. The old implementation protected
+# allowlisted keys by swapping their `=` for a literal `\001`, then swapping
+# it back at the end — but redact() runs on raw pane text, not a guaranteed-
+# clean URL, so an attacker-controlled `\001` already in the input rewrote
+# back into a live `=`, reconstructing `secret=LEAKED` in the clear. This
+# implementation strips C0 control bytes up front and never uses a sentinel,
+# so there is nothing for a forged control byte to collide with.
+got=$(printf '?secret\001LEAKED&mode=login\n' | bash "$A" _redact)
+printf '%s' "$got" | grep -q 'secret=LEAKED' \
+  && ko "redact: closes the forged-sentinel leak" "reconstructed: $got" \
+  || ok "redact: closes the forged-sentinel leak"
+printf '%s' "$got" | grep -q $'\001' \
+  && ko "redact: strips the raw control byte" "survived in: $got" \
+  || ok "redact: strips the raw control byte"
+
+# Finding 4 (IMPORTANT): a repeated key. Documented semantic: every
+# occurrence is judged independently by its own key name, with no memory of
+# earlier occurrences. A repeated allowlisted key (mode is never secret by
+# definition) is left alone on every occurrence...
+got=$(printf '?mode=login&mode=LEAKED_SECOND\n' | bash "$A" _redact)
+[ "$got" = '?mode=login&mode=LEAKED_SECOND' ] \
+  && ok "redact: repeated allowlisted key left alone on every occurrence" \
+  || ko "redact: repeated allowlisted key left alone on every occurrence" "got '$got'"
+# ...while a repeated NON-allowlisted key is redacted on every occurrence —
+# fail-closed, no "first one wins" special case that could let a later
+# duplicate slip through.
+got=$(printf '?token=AAA&token=BBB\n' | bash "$A" _redact)
+printf '%s' "$got" | grep -qE 'AAA|BBB' \
+  && ko "redact: repeated non-allowlisted key redacted on every occurrence" "leaked: $got" \
+  || ok "redact: repeated non-allowlisted key redacted on every occurrence"
+[ "$got" = '?token=REDACTED&token=REDACTED' ] \
+  && ok "redact: repeated redaction hits both occurrences, not just one" \
+  || ko "redact: repeated redaction hits both occurrences, not just one" "got '$got'"
+
+# Finding 5 (IMPORTANT): extract_url corrupting the URL it returns. Real pane
+# output can trail a URL with prose punctuation or an ANSI reset code with no
+# whitespace in between; `[^[:space:]]+` swallowed both into the "URL".
+got=$(printf 'Open this link: https://x.test/a?mode=login.\n' | bash "$A" _extract_url)
+[ "$got" = 'https://x.test/a?mode=login' ] \
+  && ok "extract_url: strips trailing prose punctuation" \
+  || ko "extract_url: strips trailing prose punctuation" "got '$got'"
+
+got=$(printf 'Open this link: https://x.test/a?mode=login\x1b[0m\n' | bash "$A" _extract_url)
+[ "$got" = 'https://x.test/a?mode=login' ] \
+  && ok "extract_url: strips a trailing ANSI escape" \
+  || ko "extract_url: strips a trailing ANSI escape" "got '$got'"
+
 printf '\n  %d passed, %d failed\n\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
