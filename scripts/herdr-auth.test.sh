@@ -281,6 +281,43 @@ got=$(HERDR_AUTH_HOSTS="aorus" bash "$A" _wait cursor aorus)
 [ "$got" = timeout ] && ok "wait: returns timeout at the ceiling" \
                      || ko "wait: returns timeout at the ceiling" "got '$got'"
 
+# Real-arithmetic regression guard: interval=0 must no longer short-circuit
+# through a special case, it must terminate through the SAME ceiling
+# arithmetic production uses. With interval=1 and ceiling=2 a host that never
+# authenticates must genuinely loop (not exit on iteration 1) and still
+# return timeout — costs ~2s of real sleeping, acceptable for the coverage.
+export HERDR_AUTH_POLL_INTERVAL=1
+export HERDR_AUTH_POLL_CEILING=2
+fixture aorus.cursor 'Not logged in'
+got=$(HERDR_AUTH_HOSTS="aorus" bash "$A" _wait cursor aorus)
+[ "$got" = timeout ] && ok "wait: genuinely loops (interval=1, ceiling=2) and times out" \
+                     || ko "wait: genuinely loops (interval=1, ceiling=2) and times out" "got '$got'"
+unset HERDR_AUTH_POLL_INTERVAL HERDR_AUTH_POLL_CEILING
+
+# --- login wait phase skips hosts with no started flow ----------------------
+
+# Finding 1: a host skipped as unreachable, or one that produced no login
+# URL, must never enter the wait phase — it never had a flow started, so it
+# must not burn a full poll ceiling. This exercises the real wait path (no
+# --no-wait), unlike the earlier unreachable-host test above.
+export HERDR_AUTH_POLL_INTERVAL=0
+export HERDR_AUTH_POLL_CEILING=1
+: > "$HERDR_AUTH_FIXTURE/aorus5.unreachable"
+fixture aorus.cursorlogin 'some error, no link'
+fixture aorus4.cursorlogin 'Starting login process...
+Open a browser and navigate to this link: https://cursor.com/loginDeepControl?challenge=SYNTHETIC_C&uuid=00000000-0000-0000-0000-00000000000c&mode=login&redirectTarget=cli'
+fixture aorus4.cursor 'Logged in as joel@example.com'
+: > "$HERDR_AUTH_OPENED"
+out=$(HERDR_AUTH_HOSTS="aorus5 aorus aorus4" bash "$A" login --cli cursor 2>&1)
+printf '%s' "$out" | grep -q 'host aorus5: still not logged in' \
+  && ko "login wait: unreachable host must not enter the wait phase" "$out" \
+  || ok "login wait: unreachable host must not enter the wait phase"
+printf '%s' "$out" | grep -q 'host aorus: still not logged in' \
+  && ko "login wait: host with no login URL must not enter the wait phase" "$out" \
+  || ok "login wait: host with no login URL must not enter the wait phase"
+printf '%s' "$out" | grep -q 'host aorus4: logged in' \
+  && ok "login wait: the one host with a started flow is still waited on" \
+  || ko "login wait: the one host with a started flow is still waited on" "$out"
 unset HERDR_AUTH_POLL_INTERVAL HERDR_AUTH_POLL_CEILING
 
 printf '\n  %d passed, %d failed\n\n' "$pass" "$fail"

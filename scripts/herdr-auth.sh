@@ -27,6 +27,10 @@ HOSTS_STR="${HERDR_AUTH_HOSTS:-$HOSTS_DEFAULT}"
 
 SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=8"
 HERDR_AUTH_NO_WAIT="${HERDR_AUTH_NO_WAIT:-0}"
+# Single source of truth for the poll ceiling default: used both by
+# wait_for_login()'s own default and by cmd_login's timeout message, so the
+# two can never drift apart.
+POLL_CEILING_DEFAULT=300
 
 # Single indirection point for every remote call, so tests can stub `ssh`.
 remote() {
@@ -230,13 +234,18 @@ login_cursor() {
 wait_for_login() {
   local cli="$1" host="$2"
   local interval="${HERDR_AUTH_POLL_INTERVAL:-5}"
-  local ceiling="${HERDR_AUTH_POLL_CEILING:-300}"
-  local waited=0
+  local ceiling="${HERDR_AUTH_POLL_CEILING:-$POLL_CEILING_DEFAULT}"
+  local waited=0 step
+  # step is at least 1 even when interval is 0 (tests use interval=0 to avoid
+  # real sleeping), so the loop always makes progress toward ceiling through
+  # the SAME arithmetic production uses — no separate "interval=0" shortcut
+  # that could mask a regression in the real increment/comparison.
   while [ "$waited" -lt "$ceiling" ]; do
     if [ "$(probe "$cli" "$host")" = authed ]; then echo ok; return 0; fi
     sleep "$interval"
-    waited=$((waited + interval))
-    [ "$interval" -eq 0 ] && break   # test mode: one pass, no spin
+    step="$interval"
+    [ "$step" -ge 1 ] || step=1
+    waited=$((waited + step))
   done
   [ "$(probe "$cli" "$host")" = authed ] && { echo ok; return 0; }
   echo timeout
@@ -245,6 +254,12 @@ wait_for_login() {
 
 cmd_login() {
   local cli="$1" host url opened=0
+  # Space-separated accumulator, not an array — bash 3.2 has no arrays.
+  # Only hosts a flow actually started for belong here: a host skipped as
+  # unreachable, or one that produced no login URL, never got a login
+  # attempt running, so it must not sit in the wait phase burning a full
+  # poll ceiling waiting for something that was never started.
+  local waiting=""
   case "$cli" in
     cursor)
       for host in $HOSTS_STR; do
@@ -259,14 +274,19 @@ cmd_login() {
         fi
         open_url "$url"
         opened=$((opened + 1))
+        waiting="$waiting $host"
         echo "  opened login URL for host $host"
       done
       echo "$opened URL(s) opened. Complete them in the browser."
-      if [ "${HERDR_AUTH_NO_WAIT:-0}" = 0 ]; then
-        for host in $HOSTS_STR; do
-          case "$(wait_for_login cursor "$host")" in
+      if [ "${HERDR_AUTH_NO_WAIT:-0}" != 0 ]; then
+        :
+      elif [ -z "$waiting" ]; then
+        echo "  no hosts to wait on — no login flow was started"
+      else
+        for host in $waiting; do
+          case "$(wait_for_login "$cli" "$host")" in
             ok) echo "  host $host: logged in" ;;
-            *)  echo "  host $host: still not logged in after ${HERDR_AUTH_POLL_CEILING:-300}s" >&2 ;;
+            *)  echo "  host $host: still not logged in after ${HERDR_AUTH_POLL_CEILING:-$POLL_CEILING_DEFAULT}s" >&2 ;;
           esac
         done
       fi
