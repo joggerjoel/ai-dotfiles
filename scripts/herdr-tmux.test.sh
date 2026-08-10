@@ -98,5 +98,44 @@ case "$out" in
   *) ko "an unreachable host is reported, not fatal" "got [$out]" ;;
 esac
 
+# --- apply -------------------------------------------------------------------
+
+export HERDR_TMUX_CALLS="$TMP/calls"
+export HERDR_TMUX_WS="$TMP/ws"
+export HERDR_TMUX_TABS="$TMP/tabs"
+
+reset_state() { : > "$HERDR_TMUX_CALLS"; : > "$HERDR_TMUX_WS"; : > "$HERDR_TMUX_TABS"; }
+
+fixture aorus8 '07-dice-broadcast: 1 windows (created Fri Jul 17 18:57:21 2026)
+10: 1 windows (created Fri Jul 10 07:51:25 2026)
+06-go-events-dice: 1 windows (created Fri Jul 24 09:52:57 2026) (attached)'
+fixture aorus5 '0: 1 windows (created Mon Aug 10 16:19:04 2026)'
+
+reset_state
+bash "$T" apply --config "$CONF" --dry-run >/dev/null 2>&1 || true
+
+got=$(grep -c 'workspace create --label aorus8-tmux' "$HERDR_TMUX_CALLS" || true)
+eq "apply creates the <host>-tmux space" "1" "$got"
+
+got=$(grep -c 'workspace create --label aorus5-tmux' "$HERDR_TMUX_CALLS" || true)
+eq "a host with no qualifying sessions gets no space" "0" "$got"
+
+# One tab per qualifying session: the first takes over the workspace's initial
+# tab via rename, the rest are created.
+got=$(grep -c 'tab rename' "$HERDR_TMUX_CALLS" || true)
+eq "the initial tab is renamed rather than left stray" "1" "$got"
+
+got=$(grep -c 'tab create' "$HERDR_TMUX_CALLS" || true)
+eq "remaining sessions each get a tab" "1" "$got"
+
+# Idempotence: with the space and both tabs already present, nothing is created.
+reset_state
+printf 'w7|aorus8-tmux\n' > "$HERDR_TMUX_WS"
+printf 't1|w7|07-dice-broadcast\nt2|w7|06-go-events-dice\n' > "$HERDR_TMUX_TABS"
+bash "$T" apply --config "$CONF" --dry-run >/dev/null 2>&1 || true
+
+got=$(grep -c 'create' "$HERDR_TMUX_CALLS" || true)
+eq "re-running apply creates nothing" "0" "$got"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
