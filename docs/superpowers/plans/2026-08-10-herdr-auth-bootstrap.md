@@ -366,10 +366,20 @@ printf '%s' "$got" | grep -q 'redirectTarget=cli' \
   && ok "redact: leaves non-secret params alone" \
   || ko "redact: leaves non-secret params alone"
 
-got=$(printf 'token=abc123&access_token=def456&code=ghi789\n' | bash "$A" _redact)
+got=$(printf 'https://x.test/a?token=abc123&access_token=def456&code=ghi789\n' | bash "$A" _redact)
 printf '%s' "$got" | grep -qE 'abc123|def456|ghi789' \
   && ko "redact: covers token, access_token, code" "a value survived: $got" \
   || ok "redact: covers token, access_token, code"
+
+# The allowlist's whole reason for existing: a parameter nobody anticipated is
+# redacted by default. A denylist would print these two in the clear.
+got=$(printf 'https://x.test/a?state=SECRET_STATE&verifier=SECRET_VERIFIER&mode=login\n' | bash "$A" _redact)
+printf '%s' "$got" | grep -qE 'SECRET_STATE|SECRET_VERIFIER' \
+  && ko "redact: redacts unanticipated params (allowlist)" "leaked: $got" \
+  || ok "redact: redacts unanticipated params (allowlist)"
+printf '%s' "$got" | grep -q 'mode=login' \
+  && ok "redact: keeps allowlisted params readable" \
+  || ko "redact: keeps allowlisted params readable" "$got"
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -391,8 +401,21 @@ extract_url() {
 # Strip credential-bearing query parameter values. Everything this script
 # prints goes through here — the URL itself is a bearer credential for the
 # login attempt, so only the parameter names may appear in output.
+#
+# ALLOWLIST, not denylist. Every parameter value is redacted except the few
+# known to carry nothing secret. Three vendors own these URLs and can add a
+# parameter without telling us — `state`, `verifier`, whatever comes next — and
+# a denylist prints anything it has not heard of. This fails closed instead.
+#
+# Implemented in three passes because sed has no negative lookahead: protect the
+# allowlisted separators with a control character, redact everything still
+# holding an `=`, then restore. \001 cannot occur in a URL, so it is safe.
+REDACT_KEEP='mode|redirectTarget|response_type|scope|prompt'
 redact() {
-  sed -E 's/(challenge|access_token|token|code|uuid)=[^&[:space:]]*/\1=REDACTED/g'
+  local sep; sep=$(printf '\001')
+  sed -E "s/([?&])($REDACT_KEEP)=/\1\2${sep}/g" \
+    | sed -E 's/([?&])([A-Za-z_][A-Za-z0-9_.-]*)=[^&[:space:]]*/\1\2=REDACTED/g' \
+    | sed -E "s/${sep}/=/g"
 }
 ```
 
@@ -407,7 +430,7 @@ Then extend the `main` dispatch — replace the `_probe` line with:
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `bash scripts/herdr-auth.test.sh`
-Expected: `16 passed, 0 failed`
+Expected: `20 passed, 0 failed`
 
 - [ ] **Step 5: Verify no real secret can reach the repo**
 
@@ -585,7 +608,7 @@ main() {
 - [ ] **Step 5: Run the test to verify it passes**
 
 Run: `bash scripts/herdr-auth.test.sh`
-Expected: `22 passed, 0 failed`
+Expected: `26 passed, 0 failed`
 
 - [ ] **Step 6: Commit**
 
@@ -697,7 +720,7 @@ adding `HERDR_AUTH_NO_WAIT="${HERDR_AUTH_NO_WAIT:-0}"` near the top of the scrip
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `bash scripts/herdr-auth.test.sh`
-Expected: `25 passed, 0 failed`
+Expected: `29 passed, 0 failed`
 
 - [ ] **Step 5: Commit**
 
@@ -865,8 +888,11 @@ for w in call('workspace','list')['result']['workspaces']:
 if wsid is None:
     sys.exit(0)
 
-# 2. tab label, scoped to THAT workspace -> tab ids
-want={t['tab_id'] for t in call('tab','list')['result']['tabs']
+# 2. tab label, scoped to THAT workspace -> tab ids.
+# tab.list takes a workspace filter, so scope server-side rather than listing
+# the fleet and filtering here. The workspace_id check is kept as a belt-and-
+# braces guard: this value decides which pane receives keystrokes.
+want={t['tab_id'] for t in call('tab','list','--workspace',wsid)['result']['tabs']
       if t['label']==tab and t['workspace_id']==wsid}
 if not want:
     sys.exit(0)
@@ -921,9 +947,12 @@ Extend `cmd_login` — replace `*) echo "unknown or unimplemented cli: $cli"…`
     codex|claude)
       # Set from the live confirmation described at the top of this task.
       local keys pattern tab
+      # Key names are lowercase Herdr key-combo strings — `enter`, `down`,
+      # `ctrl+h`, `shift+tab`, and `esc` as the canonical Escape. Capitalised
+      # names are not the documented form; do not write `Enter`.
       case "$cli" in
-        codex)  keys="${CODEX_KEYS:-Down Enter}";  pattern='https://'; tab=codex ;;
-        claude) keys="${CLAUDE_KEYS:-Enter}";      pattern='https://'; tab=claude ;;
+        codex)  keys="${CODEX_KEYS:-down enter}";  pattern='https://'; tab=codex ;;
+        claude) keys="${CLAUDE_KEYS:-enter}";      pattern='https://'; tab=claude ;;
       esac
       for host in $HOSTS_STR; do
         [ "$(probe "$cli" "$host")" = authed ] && { echo "  host $host: already authed"; continue; }
@@ -962,7 +991,7 @@ Add the three seams to `main`, beside `_probe`:
 - [ ] **Step 5: Run the test to verify it passes**
 
 Run: `bash scripts/herdr-auth.test.sh`
-Expected: `34 passed, 0 failed`
+Expected: `40 passed, 0 failed`
 
 - [ ] **Step 6: Commit**
 
@@ -1012,7 +1041,7 @@ Run: `just --list | grep auth`
 Expected: three lines — `auth-login`, `auth-status`, `auth-test`.
 
 Run: `just auth-test`
-Expected: `34 passed, 0 failed`
+Expected: `40 passed, 0 failed`
 
 - [ ] **Step 3: Write the reference doc**
 
