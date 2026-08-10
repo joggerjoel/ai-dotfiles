@@ -122,8 +122,12 @@ fi
 
 echo "space '$SPACE_LABEL' ($WS) -> ${SSH_HOST:-local}  [policy: $POLICY]${DRY_RUN:+  (dry run)}"
 
-# Emits "<tab-label> <pane-id> <busy|free>". A pane is busy when herdr has already
-# detected an agent in it — sending text there would type into a running program.
+# Emits "<pane-id>\t<busy|free>\t<tab-label>", tab-delimited with the
+# variable-width label LAST — a tab label may legitimately contain spaces (a
+# tmux session can be named "my sess"), and space-splitting would shear such
+# a label across fields, misdirecting the pane_id and busy-guard downstream.
+# A pane is busy when herdr has already detected an agent in it — sending
+# text there would type into a running program.
 herdr pane list | python3 -c "
 import json,sys,subprocess
 ws=sys.argv[1]
@@ -131,8 +135,8 @@ tabs={t['tab_id']:t['label'] for t in json.loads(subprocess.run(['herdr','tab','
 for p in json.load(sys.stdin)['result']['panes']:
     if p['workspace_id']==ws:
         busy = bool(p.get('agent')) or p.get('agent_status') not in (None,'unknown')
-        print(tabs.get(p['tab_id'],'?'), p['pane_id'], 'busy' if busy else 'free')
-" "$WS" | while read -r tab_label pane_id state; do
+        print(p['pane_id'], 'busy' if busy else 'free', tabs.get(p['tab_id'],'?'), sep='\t')
+" "$WS" | while IFS=$'\t' read -r pane_id state tab_label; do
   # Never wire the pane this script is running from — that injects into our own stdin.
   if [ "$pane_id" = "${HERDR_PANE_ID:-}" ]; then
     echo "  $tab_label ($pane_id): SKIP — this is the pane running this script"

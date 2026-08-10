@@ -95,3 +95,15 @@ eventually take real work with it. Pruning stays a human decision.
 - **Agent detection still blind through ssh.** As with every remote space, the
   local foreground process is `ssh`, so the agent panel reports `unknown`.
   Verify with `tmux ls` on the host.
+- **Structure is idempotent; wiring is not.** Re-running `apply` is safe for
+  the spaces/tabs it builds — a tab that already exists is left alone. But
+  the busy-pane guard in `herdr-wire-space.sh` depends on herdr's agent
+  detection, and that detection cannot see through ssh: the pane's local
+  foreground process is always `ssh`, never whatever the remote session is
+  actually running. Every remote pane in a tmux space therefore classifies
+  as `free`, and the guard is structurally inert here. Re-applying an
+  already-wired space re-sends `ssh -t … tmux attach -t X` as **keystrokes**
+  into a pane that is already attached — the text lands in whatever is
+  foregrounded inside that live session, possibly a running agent's prompt.
+  Detach the session first, or run `apply --dry-run` to see what would be
+  sent, before re-applying a space you already wired.

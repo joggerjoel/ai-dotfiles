@@ -2,16 +2,29 @@
 # Stub ssh for herdr-tmux tests. Serves `tmux ls` output from a fixture file
 # named after the host. Never connects to anything.
 
-host=""; skip=0
+host=""; skip=0; cmd=""
 for a in "$@"; do
   if [ "$skip" = 1 ]; then skip=0; continue; fi
   case "$a" in
     -o) skip=1 ;;
     -*) ;;
-    *)  [ -z "$host" ] && host="$a" ;;
+    *)  if [ -z "$host" ]; then host="$a"; else cmd="$a"; fi ;;
   esac
 done
 
 f="$HERDR_TMUX_FIXTURE/$host.tmuxls"
 [ -f "$f" ] || exit 255      # unreachable host
+
+# An empty fixture models a reachable host with no tmux server running: real
+# `tmux ls` exits 1 in that case, same as ssh would. Whether that turns into
+# an empty *success* depends on the remote command tolerating it (`|| true`)
+# — mirror that here so the fixture actually exercises that fix rather than
+# always succeeding regardless of what the caller sent.
+if [ ! -s "$f" ]; then
+  case "$cmd" in
+    *'|| true'*) exit 0 ;;
+    *)           exit 1 ;;
+  esac
+fi
+
 cat "$f"

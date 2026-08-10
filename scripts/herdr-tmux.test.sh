@@ -27,9 +27,15 @@ TABS=claude,codex,cursor,pi,tmux
 macstudio   local
 aorus8      aorus8
 aorus5      aorus5
+aorus6      aorus6
 EOF
 
 fixture() { printf '%s\n' "$2" > "$HERDR_TMUX_FIXTURE/$1.tmuxls"; }
+
+# aorus6 is reachable but never has a fixture written for it below — it stays
+# a genuinely empty file throughout, standing in for a host with no tmux
+# server running at all (real `tmux ls` exits 1 there; see tests/tmux-stubs/ssh).
+: > "$HERDR_TMUX_FIXTURE/aorus6.tmuxls"
 
 # --- qualifying filter -------------------------------------------------------
 
@@ -62,6 +68,19 @@ bash "$T" _sessions aorus5 >/dev/null 2>&1 \
   && ok "a reachable host with no qualifying sessions still exits 0" \
   || ko "a reachable host with no qualifying sessions still exits 0" "non-zero exit"
 
+# --- reachable host, no tmux server running ----------------------------------
+# `tmux ls` itself exits 1 when there is no server at all — not the same as
+# ssh failing. A host in this state must read as zero sessions, not
+# "unreachable" (see tests/tmux-stubs/ssh for how the empty aorus6 fixture
+# reproduces that distinction).
+
+got=$(bash "$T" _sessions aorus6 | wc -l | tr -d ' ')
+eq "a reachable host with no tmux server yields zero sessions" "0" "$got"
+
+bash "$T" _sessions aorus6 >/dev/null 2>&1 \
+  && ok "a reachable host with no tmux server still exits 0 (not unreachable)" \
+  || ko "a reachable host with no tmux server still exits 0 (not unreachable)" "non-zero exit"
+
 # --- status ------------------------------------------------------------------
 
 out=$(bash "$T" status --config "$CONF")
@@ -79,6 +98,20 @@ esac
 case "$out" in
   *"aorus5"*"skipped"*) ok "a host with no qualifying sessions is skipped" ;;
   *) ko "a host with no qualifying sessions is skipped" "got [$out]" ;;
+esac
+
+case "$out" in
+  *"aorus6"*"skipped — 0 named, 0 numeric"*)
+    ok "a reachable host with no tmux server is skipped, not unreachable" ;;
+  *)
+    ko "a reachable host with no tmux server is skipped, not unreachable" "got [$out]" ;;
+esac
+
+case "$out" in
+  *"aorus6"*unreachable*)
+    ko "a reachable host with no tmux server must never be reported unreachable" "got [$out]" ;;
+  *)
+    ok "a reachable host with no tmux server must never be reported unreachable" ;;
 esac
 
 # The layout label ("macstudio") never appears in status output regardless of
@@ -112,13 +145,32 @@ fixture aorus8 '07-dice-broadcast: 1 windows (created Fri Jul 17 18:57:21 2026)
 fixture aorus5 '0: 1 windows (created Mon Aug 10 16:19:04 2026)'
 
 reset_state
-bash "$T" apply --config "$CONF" --dry-run >/dev/null 2>&1 || true
+# Deliberately no `>/dev/null 2>&1` and no `|| true` on this invocation — both
+# would hide a crash behind a passing grep, which is exactly how the previous
+# version of "a host with no qualifying sessions gets no space" stayed green
+# even after the zero-session skip block was deleted from herdr-tmux.sh.
+apply_out=$(bash "$T" apply --config "$CONF" --dry-run 2>&1)
+apply_status=$?
 
 got=$(grep -c 'workspace create --label aorus8-tmux' "$HERDR_TMUX_CALLS" || true)
 eq "apply creates the <host>-tmux space" "1" "$got"
 
 got=$(grep -c 'workspace create --label aorus5-tmux' "$HERDR_TMUX_CALLS" || true)
-eq "a host with no qualifying sessions gets no space" "0" "$got"
+eq "a host with no qualifying sessions makes no workspace-create call" "0" "$got"
+
+# The positive contract: apply must actually print a skip line naming the
+# host, and must exit 0 — not merely fail to have called `workspace create`
+# (which a crash would also produce).
+case "$apply_out" in
+  *"host 'aorus5': no qualifying sessions — skipped"*)
+    ok "a host with no qualifying sessions prints a skip line naming it" ;;
+  *)
+    ko "a host with no qualifying sessions prints a skip line naming it" "got [$apply_out]" ;;
+esac
+
+[ "$apply_status" -eq 0 ] \
+  && ok "apply exits 0 when a host has no qualifying sessions" \
+  || ko "apply exits 0 when a host has no qualifying sessions" "exit $apply_status"
 
 # One tab per qualifying session: the first takes over the workspace's initial
 # tab via rename, the rest are created.

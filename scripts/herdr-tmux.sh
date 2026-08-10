@@ -62,8 +62,12 @@ qualifies() {
 # (unreachable) propagates as an empty result plus a non-zero return.
 live_sessions() {  # <host>
   local out
+  # `tmux ls` exits 1 when the host is reachable but no tmux server is
+  # running at all — that is not the same as ssh failing. `|| true` inside
+  # the remote command folds that case into an empty, successful result so
+  # only a genuine ssh failure (bad host, auth, timeout) trips the `|| return 1`.
   out="$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$1" \
-        'bash -lc "tmux ls 2>/dev/null"' 2>/dev/null)" || return 1
+        'bash -lc "tmux ls 2>/dev/null || true"' 2>/dev/null)" || return 1
   # The `|| true` matters as much as the trailing `return 0`: the loop's exit
   # status is the last `qualifies` test, so a trailing non-qualifying session
   # makes this pipeline fail — and under `set -e` a failing pipeline statement
@@ -108,8 +112,11 @@ done < "$CONFIG"
 if [ "$ACTION" = status ]; then
   printf '%-10s %s\n' HOST SESSIONS
   for host in "${HOSTS[@]}"; do
+    # Same reasoning as live_sessions(): a reachable host with no tmux server
+    # running exits 1 on `tmux ls`, which is not "unreachable". `|| true`
+    # folds that into an empty, successful result.
     if ! raw="$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$host" \
-                'bash -lc "tmux ls 2>/dev/null"' 2>/dev/null)"; then
+                'bash -lc "tmux ls 2>/dev/null || true"' 2>/dev/null)"; then
       printf '%-10s unreachable\n' "$host"
       continue
     fi
@@ -192,7 +199,7 @@ import json,sys; print(json.load(sys.stdin)['result']['workspace']['workspace_id
   fi
 
   for name in "${names[@]}"; do
-    if printf '%s' ",$have," | grep -q ",$name,"; then
+    if printf '%s' ",$have," | grep -qF ",$name,"; then
       continue
     fi
     echo "  + $name"
