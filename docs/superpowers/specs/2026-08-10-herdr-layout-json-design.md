@@ -57,7 +57,8 @@ host names are private; the repo ships `examples/herdr-layout.example.json`.
     "model": {
       "claude": "opus",
       "codex":  "gpt-5-codex",
-      "pi":     "openai/gpt-4o"
+      "pi":     "openai/gpt-4o",
+      "agent":  "sonnet-4-thinking"
     }
   },
   "spaces": [
@@ -94,6 +95,7 @@ All owned by `scripts/lib/layout.py`.
 | Tab as string | `label` = `cmd` = the string; no `dir`, no `model` |
 | Tab as object | `cmd` ← `defaults.cmd`; `dir` optional; `model` ← `defaults.model[cmd]` |
 | `model` value | Appended as `--model <value>`; absent from both map and tab means no flag |
+| `defaults.model` keys | Keyed by the **resolved command**, not the tab label. The `cursor` tab resolves to `agent`, so its entry is `"agent"`. Recipes are applied before the model lookup. |
 | `host` | Local when `host == $FLEET_NODE` **and** `$FLEET_ROLE == node`; otherwise ssh |
 | `tabs` omitted | Space uses `defaults.tabs` |
 
@@ -255,8 +257,11 @@ Needed before implementation, not before this spec:
   path, or the tab is dropped.
 - **`liveproxies`** — currently specified as `go-events-lib/config`, where its
   files actually live. Confirm this rather than the repo root.
-- **`cursor-agent --model`** — confirm support on a host with an unlocked
-  keychain, then add a `defaults.model` entry.
+- ~~**`cursor-agent --model`**~~ — **confirmed** on `aorus8`:
+  `--model <model>` exists, taking values like `gpt-5` or `sonnet-4-thinking`,
+  and also reads `CURSOR_API_KEY`. Add a `defaults.model` entry for `cursor`;
+  note the key is the tab label `cursor`, while the command is `agent`, so the
+  model map must be keyed by the **resolved command**, not the label.
 
 ## Follow-up
 
