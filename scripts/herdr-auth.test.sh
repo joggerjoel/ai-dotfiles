@@ -16,6 +16,14 @@ trap 'rm -rf "$TMP"' EXIT
 export PATH="$ROOT/tests/auth-stubs:$PATH"
 export HERDR_AUTH_FIXTURE="$TMP/fixture"
 export HERDR_AUTH_OPENED="$TMP/opened"
+# Where the detached remote login writes its output, and where the stub records
+# a cancellation. Under $TMP so a run never touches the real /tmp path.
+export HERDR_AUTH_CURSOR_LOG="$TMP/cursor-login.log"
+export HERDR_AUTH_CANCELLED="$TMP/cancelled"
+# How long the stub blocks in the foreground form. The elapsed-time assertion
+# uses this as the line between "read the URL live" and "waited for exit".
+export HERDR_AUTH_STUB_BLOCK=5
+export HERDR_AUTH_URL_INTERVAL=0
 mkdir -p "$HERDR_AUTH_FIXTURE"
 
 ok() { printf '  PASS  %s\n' "$1"; pass=$((pass + 1)); }
@@ -234,6 +242,25 @@ printf '%s' "$out" | grep -qE 'SYNTHETIC_A|SYNTHETIC_B' \
 printf '%s' "$out" | grep -q 'opened login URL for host aorus4' \
   && ok "cursor login: logs per host without the URL" \
   || ko "cursor login: logs per host without the URL" "$out"
+
+# The real `cursor-agent login` never exits until the flow completes — it has to
+# keep running to poll Cursor's servers. Reading its URL therefore must not wait
+# for the process to exit. It once did (out="$(remote ...)"), which deadlocked on
+# host 1 and never reached the fleet, while the suite stayed green because the
+# stub modelled a command that returns. The stub now blocks like the real CLI,
+# so a regression to that shape costs at least HERDR_AUTH_STUB_BLOCK seconds
+# PER HOST instead of passing quietly.
+: > "$HERDR_AUTH_OPENED"
+start=$SECONDS
+out=$(HERDR_AUTH_HOSTS="aorus aorus4" bash "$A" login --cli cursor --no-wait 2>&1)
+elapsed=$((SECONDS - start))
+[ "$elapsed" -lt "$HERDR_AUTH_STUB_BLOCK" ] \
+  && ok "cursor login: reads the URL without waiting for the process to exit (${elapsed}s)" \
+  || ko "cursor login: reads the URL without waiting for the process to exit" \
+        "took ${elapsed}s — at or past the ${HERDR_AUTH_STUB_BLOCK}s block, so it waited for exit"
+[ "$(grep -c . "$HERDR_AUTH_OPENED")" = 2 ] \
+  && ok "cursor login: still opens both URLs under the detached model" \
+  || ko "cursor login: still opens both URLs under the detached model" "opened $(grep -c . "$HERDR_AUTH_OPENED")"
 
 fixture aorus.cursorlogin 'some error, no link'
 : > "$HERDR_AUTH_OPENED"

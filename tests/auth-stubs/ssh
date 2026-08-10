@@ -21,6 +21,34 @@ if [ "$cmd" = true ] && [ -f "$HERDR_AUTH_FIXTURE/$host.unreachable" ]; then
   exit 255
 fi
 
+# Model `cursor-agent login`'s process LIFETIME, not just its output. The real
+# CLI prints its URL and then keeps running, polling until the human completes
+# the flow. A stub that prints and exits models a command that returns — the
+# assumption that let a deadlock ship under a green suite.
+#
+#   detached form (nohup … >LOG &) → deliver the fixture into LOG, return now
+#   reading form  (cat LOG)        → serve whatever LOG holds
+#   foreground form                → print, then BLOCK, like the real one
+LOG="${HERDR_AUTH_CURSOR_LOG:-/tmp/herdr-auth-cursor-login.log}"
+
+case "$cmd" in
+  *nohup*"cursor-agent login"*)
+    f="$HERDR_AUTH_FIXTURE/$host.cursorlogin"
+    [ -f "$f" ] || { echo "no fixture: $f" >&2; exit 1; }
+    cat "$f" > "$LOG"
+    exit 0
+    ;;
+  *cat*herdr-auth-cursor-login*|*cat*"$LOG"*)
+    [ -f "$LOG" ] && cat "$LOG"
+    exit 0
+    ;;
+  *pkill*"cursor-agent login"*)
+    printf '%s\n' "$host" >> "${HERDR_AUTH_CANCELLED:-/dev/null}"
+    rm -f "$LOG"
+    exit 0
+    ;;
+esac
+
 case "$cmd" in
   *"cursor-agent login"*) probe=cursorlogin ;;
   *cursor-agent*) probe=cursor ;;
@@ -31,6 +59,15 @@ esac
 
 f="$HERDR_AUTH_FIXTURE/$host.$probe"
 [ -f "$f" ] || { echo "no fixture: $f" >&2; exit 1; }
+
+# The foreground form is the bug under guard: serve the fixture, then hang.
+# A caller that waits for exit now stalls and fails on elapsed time instead of
+# passing quietly.
+if [ "$probe" = cursorlogin ]; then
+  cat "$f"
+  sleep "${HERDR_AUTH_STUB_BLOCK:-5}"
+  exit 0
+fi
 
 # Model the real CLIs' stream behaviour. `codex login status` writes to STDERR
 # (verified: 0 bytes on stdout), so a caller that does not merge the streams

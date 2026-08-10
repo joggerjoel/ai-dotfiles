@@ -220,13 +220,46 @@ open_url() {
 # cursor prints its URL over a plain pipe and then polls Cursor's servers, so
 # no PTY is needed and the URL completes the login opened from any machine.
 # NO_OPEN_BROWSER stops the remote from trying to launch a browser it has not
-# got. The remote process is left running: it polls until the human half of
-# the flow completes.
+# got. The remote process must be LEFT RUNNING: it polls Cursor's servers until
+# the human half of the flow completes.
+#
+# That is exactly why the URL cannot be read with `out="$(remote ...)"`.
+# Command substitution waits for the process to exit, and this one does not
+# exit until the login lands — so the URL never arrives, no browser tab is
+# opened, and the script waits forever for a login nobody can complete because
+# the link was never handed over. It also blocks on host 1 and never reaches
+# the rest of the fleet. (Found on the first live run; the stub used to model a
+# command that returns, so 46 passing tests said nothing about it.)
+#
+# Start it detached with its output on the host, then read the URL out of that
+# file while the process keeps running.
+CURSOR_LOG="${HERDR_AUTH_CURSOR_LOG:-/tmp/herdr-auth-cursor-login.log}"
+
 login_cursor() {
-  local host="$1" out url
-  out="$(remote "$host" 'bash -lc "NO_OPEN_BROWSER=1 cursor-agent login"')"
-  url="$(printf '%s\n' "$out" | extract_url)"
+  local host="$1" url="" waited=0
+  local ceiling="${HERDR_AUTH_URL_TIMEOUT:-20}"
+  local interval="${HERDR_AUTH_URL_INTERVAL:-1}"
+
+  remote "$host" "bash -lc 'rm -f $CURSOR_LOG; NO_OPEN_BROWSER=1 nohup cursor-agent login >$CURSOR_LOG 2>&1 &'" >/dev/null 2>&1
+
+  # The URL appears a beat after the process starts, so poll the log rather
+  # than reading once and concluding the flow produced nothing.
+  while :; do
+    url="$(remote "$host" "bash -lc 'cat $CURSOR_LOG 2>/dev/null'" | extract_url)"
+    [ -n "$url" ] && break
+    [ "$waited" -ge "$ceiling" ] && break
+    sleep "$interval"
+    waited=$((waited + 1))
+  done
   printf '%s' "$url"
+}
+
+# Stop a login flow that never completed. Without this the detached process
+# outlives the run and sits on the host polling forever — one had to be killed
+# by hand after the first live attempt.
+cancel_login() {
+  local host="$1"
+  remote "$host" "bash -lc 'pkill -f \"cursor-agent login\" >/dev/null 2>&1; rm -f $CURSOR_LOG'" >/dev/null 2>&1 || true
 }
 
 # Poll until the CLI reports itself logged in, or give up at the ceiling.
@@ -286,7 +319,8 @@ cmd_login() {
         for host in $waiting; do
           case "$(wait_for_login "$cli" "$host")" in
             ok) echo "  host $host: logged in" ;;
-            *)  echo "  host $host: still not logged in after ${HERDR_AUTH_POLL_CEILING:-$POLL_CEILING_DEFAULT}s" >&2 ;;
+            *)  echo "  host $host: still not logged in after ${HERDR_AUTH_POLL_CEILING:-$POLL_CEILING_DEFAULT}s — cancelling the flow" >&2
+                cancel_login "$host" ;;
           esac
         done
       fi
