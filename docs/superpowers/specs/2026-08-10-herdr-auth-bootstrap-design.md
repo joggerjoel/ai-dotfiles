@@ -27,6 +27,12 @@ one**. `cursor-agent` has never been logged in anywhere, including the two hosts
 that have run claude and codex for weeks — so this is a standing gap, not
 reboot fallout.
 
+> **Naming hazard.** `aorus` is both a host and the prefix shared by the other
+> five. "claude on aorus" means the single box, not the fleet — claude is
+> authenticated on aorus4 through aorus8. Never use `aorus*` to mean "the
+> workers": it matches all six. Address hosts explicitly, and in log output
+> prefer an unambiguous phrasing such as `host aorus` over a bare `aorus`.
+
 Doing this by hand means eleven interactive ssh sessions. The goal is not to
 eliminate the human — OAuth requires a browser — but to reduce eleven sessions
 to roughly three rounds of attention.
