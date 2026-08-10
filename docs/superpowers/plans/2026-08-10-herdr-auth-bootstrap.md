@@ -141,9 +141,16 @@ Create `tests/auth-stubs/ssh` and make it executable:
 # Stub for `ssh`. Serves recorded probe output from $HERDR_AUTH_FIXTURE.
 # Invoked as: ssh [opts] <host> <command...>
 # Picks the fixture by host plus which CLI the command mentions.
+#
+# The host scan must skip an option's VALUE as well as the option: SSH_OPTS
+# word-splits to `-o BatchMode=yes -o ConnectTimeout=8`, and a naive scan takes
+# `BatchMode=yes` for the host.
 host=""
+skip=0
 for a in "$@"; do
+  if [ "$skip" = 1 ]; then skip=0; continue; fi
   case "$a" in
+    -o) skip=1 ;;
     -*) ;;
     *) host="$a"; break ;;
   esac
@@ -159,9 +166,23 @@ esac
 
 f="$HERDR_AUTH_FIXTURE/$host.$probe"
 [ -f "$f" ] || { echo "no fixture: $f" >&2; exit 1; }
-cat "$f"
+
+# Model the real CLIs' stream behaviour. `codex login status` writes to STDERR
+# (verified: 0 bytes on stdout), so a caller that does not merge the streams
+# inside the remote command sees nothing. Serving the codex fixture on stderr
+# unless the command contains 2>&1 is what makes the probe tests a real
+# regression guard rather than a tautology.
+if [ "$probe" = codex ] && [ "${cmd#*2>&1}" = "$cmd" ]; then
+  cat "$f" >&2
+else
+  cat "$f"
+fi
 exit 0
 ```
+
+The two existing codex probe assertions become the regression guard: with the
+stub modelling stderr, `probe_codex` only returns `authed` if the script merges
+the streams. No extra test is needed.
 
 Run: `chmod +x tests/auth-stubs/ssh`
 
@@ -215,8 +236,14 @@ probe_cursor() {
   esac
 }
 
+# codex writes its status line to STDERR, not stdout — verified on aorus7:
+# stdout is 0 bytes, and `2>&1` is what surfaces "Logged in using ChatGPT".
+# The 2>&1 must live INSIDE the remote command so the remote's stderr merges
+# into the remote's stdout; remote()'s own 2>/dev/null still discards local ssh
+# noise. Without this the probe reports every host as missing, and cmd_login
+# then drives a fresh login on hosts that are already authenticated.
 probe_codex() {
-  local out; out="$(remote "$1" 'bash -lc "codex login status"')"
+  local out; out="$(remote "$1" 'bash -lc "codex login status 2>&1"')"
   case "$out" in
     *"Logged in"*) echo authed ;;
     *) echo missing ;;
