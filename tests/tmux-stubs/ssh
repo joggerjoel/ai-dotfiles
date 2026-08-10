@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Stub ssh for herdr-tmux tests. Serves `tmux ls` output from a fixture file
+# named after the host. Never connects to anything.
+
+host=""; skip=0
+for a in "$@"; do
+  if [ "$skip" = 1 ]; then skip=0; continue; fi
+  case "$a" in
+    -o) skip=1 ;;
+    -*) ;;
+    *)  [ -z "$host" ] && host="$a" ;;
+  esac
+done
+
+f="$HERDR_TMUX_FIXTURE/$host.tmuxls"
+[ -f "$f" ] || exit 255      # unreachable host
+cat "$f"
