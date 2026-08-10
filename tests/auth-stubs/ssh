@@ -23,5 +23,15 @@ esac
 
 f="$HERDR_AUTH_FIXTURE/$host.$probe"
 [ -f "$f" ] || { echo "no fixture: $f" >&2; exit 1; }
-cat "$f"
+
+# Model the real CLIs' stream behaviour. `codex login status` writes to STDERR
+# (verified: 0 bytes on stdout), so a caller that does not merge the streams
+# inside the remote command sees nothing. Serving the codex fixture on stderr
+# unless the command contains 2>&1 is what makes the probe tests a real
+# regression guard rather than a tautology.
+if [ "$probe" = codex ] && [ "${cmd#*2>&1}" = "$cmd" ]; then
+  cat "$f" >&2
+else
+  cat "$f"
+fi
 exit 0

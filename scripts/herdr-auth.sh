@@ -38,8 +38,14 @@ probe_cursor() {
   esac
 }
 
+# codex writes its status line to STDERR, not stdout — verified on aorus7:
+# stdout is 0 bytes, and `2>&1` is what surfaces "Logged in using ChatGPT".
+# The 2>&1 must live INSIDE the remote command so the remote's stderr merges
+# into the remote's stdout; remote()'s own 2>/dev/null still discards local ssh
+# noise. Without this the probe reports every host as missing, and cmd_login
+# then drives a fresh login on hosts that are already authenticated.
 probe_codex() {
-  local out; out="$(remote "$1" 'bash -lc "codex login status"')"
+  local out; out="$(remote "$1" 'bash -lc "codex login status 2>&1"')"
   case "$out" in
     *"Logged in"*) echo authed ;;
     *) echo missing ;;
