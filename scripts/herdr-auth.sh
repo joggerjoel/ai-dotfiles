@@ -81,6 +81,32 @@ host_reachable() {
   ssh $SSH_OPTS "$1" true >/dev/null 2>&1
 }
 
+# Pull the login URL out of captured CLI output. Last match wins: a retry
+# prints a fresh URL below the stale one.
+extract_url() {
+  grep -oE 'https://[^[:space:]]+' | tail -1
+}
+
+# Strip credential-bearing query parameter values. Everything this script
+# prints goes through here — the URL itself is a bearer credential for the
+# login attempt, so only the parameter names may appear in output.
+#
+# ALLOWLIST, not denylist. Every parameter value is redacted except the few
+# known to carry nothing secret. Three vendors own these URLs and can add a
+# parameter without telling us — `state`, `verifier`, whatever comes next — and
+# a denylist prints anything it has not heard of. This fails closed instead.
+#
+# Implemented in three passes because sed has no negative lookahead: protect the
+# allowlisted separators with a control character, redact everything still
+# holding an `=`, then restore. \001 cannot occur in a URL, so it is safe.
+REDACT_KEEP='mode|redirectTarget|response_type|scope|prompt'
+redact() {
+  local sep; sep=$(printf '\001')
+  sed -E "s/([?&])($REDACT_KEEP)=/\1\2${sep}/g" \
+    | sed -E 's/([?&])([A-Za-z_][A-Za-z0-9_.-]*)=[^&[:space:]]*/\1\2=REDACTED/g' \
+    | sed -E "s/${sep}/=/g"
+}
+
 cmd_status() {
   local host cli state a=0 m=0 u=0
   printf '%-10s %-10s %-10s %-10s\n' HOST CURSOR CODEX CLAUDE
@@ -106,7 +132,9 @@ cmd_status() {
 main() {
   case "${1:-status}" in
     status) cmd_status ;;
-    _probe) shift; probe "$@" ;;   # test seam
+    _probe) shift; probe "$@" ;;          # test seam
+    _extract_url) extract_url ;;          # test seam
+    _redact) redact ;;                    # test seam
     *) echo "usage: herdr-auth.sh status" >&2; exit 2 ;;
   esac
 }

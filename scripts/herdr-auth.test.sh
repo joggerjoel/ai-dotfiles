@@ -94,5 +94,49 @@ printf '%s' "$out" | grep -q '1 authed, 2 missing, 3 unreachable' \
   && ok "status: tallies unreachable separately from missing" \
   || ko "status: tallies unreachable separately from missing" "$(printf '%s' "$out" | tail -1)"
 
+# --- url extraction and redaction -------------------------------------------
+# SYNTHETIC challenge/uuid only. A real one must never enter this repo.
+SAMPLE='Starting login process...
+Waiting for browser authentication...
+Open a browser and navigate to this link: https://cursor.com/loginDeepControl?challenge=SYNTHETIC_CHALLENGE_VALUE&uuid=00000000-0000-0000-0000-000000000000&mode=login&redirectTarget=cli'
+
+got=$(printf '%s\n' "$SAMPLE" | bash "$A" _extract_url)
+[ "$got" = 'https://cursor.com/loginDeepControl?challenge=SYNTHETIC_CHALLENGE_VALUE&uuid=00000000-0000-0000-0000-000000000000&mode=login&redirectTarget=cli' ] \
+  && ok "extract_url: pulls the URL out of surrounding noise" \
+  || ko "extract_url: pulls the URL out of surrounding noise" "got '$got'"
+
+got=$(printf 'no link here at all\n' | bash "$A" _extract_url)
+[ -z "$got" ] && ok "extract_url: empty when no URL present" \
+              || ko "extract_url: empty when no URL present" "got '$got'"
+
+got=$(printf '%s\n' "$SAMPLE" | bash "$A" _redact)
+printf '%s' "$got" | grep -q 'SYNTHETIC_CHALLENGE_VALUE' \
+  && ko "redact: strips the challenge value" "challenge survived" \
+  || ok "redact: strips the challenge value"
+printf '%s' "$got" | grep -q '00000000-0000' \
+  && ko "redact: strips the uuid value" "uuid survived" \
+  || ok "redact: strips the uuid value"
+printf '%s' "$got" | grep -q 'challenge=REDACTED' \
+  && ok "redact: keeps the parameter name" \
+  || ko "redact: keeps the parameter name" "$got"
+printf '%s' "$got" | grep -q 'redirectTarget=cli' \
+  && ok "redact: leaves non-secret params alone" \
+  || ko "redact: leaves non-secret params alone"
+
+got=$(printf 'https://x.test/a?token=abc123&access_token=def456&code=ghi789\n' | bash "$A" _redact)
+printf '%s' "$got" | grep -qE 'abc123|def456|ghi789' \
+  && ko "redact: covers token, access_token, code" "a value survived: $got" \
+  || ok "redact: covers token, access_token, code"
+
+# The allowlist's whole reason for existing: a parameter nobody anticipated is
+# redacted by default. A denylist would print these two in the clear.
+got=$(printf 'https://x.test/a?state=SECRET_STATE&verifier=SECRET_VERIFIER&mode=login\n' | bash "$A" _redact)
+printf '%s' "$got" | grep -qE 'SECRET_STATE|SECRET_VERIFIER' \
+  && ko "redact: redacts unanticipated params (allowlist)" "leaked: $got" \
+  || ok "redact: redacts unanticipated params (allowlist)"
+printf '%s' "$got" | grep -q 'mode=login' \
+  && ok "redact: keeps allowlisted params readable" \
+  || ko "redact: keeps allowlisted params readable" "$got"
+
 printf '\n  %d passed, %d failed\n\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
