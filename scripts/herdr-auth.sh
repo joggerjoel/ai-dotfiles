@@ -26,6 +26,7 @@ HOSTS_DEFAULT="aorus aorus4 aorus5 aorus6 aorus7 aorus8"
 HOSTS_STR="${HERDR_AUTH_HOSTS:-$HOSTS_DEFAULT}"
 
 SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=8"
+HERDR_AUTH_NO_WAIT="${HERDR_AUTH_NO_WAIT:-0}"
 
 # Single indirection point for every remote call, so tests can stub `ssh`.
 remote() {
@@ -224,6 +225,24 @@ login_cursor() {
   printf '%s' "$url"
 }
 
+# Poll until the CLI reports itself logged in, or give up at the ceiling.
+# Always returns — a stalled login must not block the remaining hosts.
+wait_for_login() {
+  local cli="$1" host="$2"
+  local interval="${HERDR_AUTH_POLL_INTERVAL:-5}"
+  local ceiling="${HERDR_AUTH_POLL_CEILING:-300}"
+  local waited=0
+  while [ "$waited" -lt "$ceiling" ]; do
+    if [ "$(probe "$cli" "$host")" = authed ]; then echo ok; return 0; fi
+    sleep "$interval"
+    waited=$((waited + interval))
+    [ "$interval" -eq 0 ] && break   # test mode: one pass, no spin
+  done
+  [ "$(probe "$cli" "$host")" = authed ] && { echo ok; return 0; }
+  echo timeout
+  return 1
+}
+
 cmd_login() {
   local cli="$1" host url opened=0
   case "$cli" in
@@ -242,7 +261,15 @@ cmd_login() {
         opened=$((opened + 1))
         echo "  opened login URL for host $host"
       done
-      echo "$opened URL(s) opened. Complete them in the browser; each remote polls until done."
+      echo "$opened URL(s) opened. Complete them in the browser."
+      if [ "${HERDR_AUTH_NO_WAIT:-0}" = 0 ]; then
+        for host in $HOSTS_STR; do
+          case "$(wait_for_login cursor "$host")" in
+            ok) echo "  host $host: logged in" ;;
+            *)  echo "  host $host: still not logged in after ${HERDR_AUTH_POLL_CEILING:-300}s" >&2 ;;
+          esac
+        done
+      fi
       ;;
     *)
       echo "unknown or unimplemented cli: $cli" >&2; exit 2 ;;
@@ -259,7 +286,7 @@ main() {
         case "$1" in
           --cli)  cli="$2"; shift 2 ;;
           --host) HOSTS_STR="$2"; shift 2 ;;
-          --no-wait) shift ;;   # consumed in Task 4
+          --no-wait) HERDR_AUTH_NO_WAIT=1; shift ;;
           *) echo "unknown flag: $1" >&2; exit 2 ;;
         esac
       done
@@ -267,6 +294,7 @@ main() {
       cmd_login "$cli"
       ;;
     _probe) probe "$@" ;;
+    _wait) wait_for_login "$@" ;;
     _extract_url) extract_url ;;
     _redact) redact ;;
     *) echo "usage: herdr-auth.sh status | login --cli <cli> [--host H]" >&2; exit 2 ;;

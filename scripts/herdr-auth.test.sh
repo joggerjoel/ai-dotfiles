@@ -217,7 +217,10 @@ Open a browser and navigate to this link: https://cursor.com/loginDeepControl?ch
 fixture aorus4.cursorlogin 'Starting login process...
 Open a browser and navigate to this link: https://cursor.com/loginDeepControl?challenge=SYNTHETIC_B&uuid=00000000-0000-0000-0000-00000000000b&mode=login&redirectTarget=cli'
 
-out=$(HERDR_AUTH_HOSTS="aorus aorus4" bash "$A" login --cli cursor --no-wait)
+# 2>&1: the security property under test is that the URL never reaches the
+# TERMINAL, which is both streams. Capturing stdout alone would let a
+# regression that leaks the URL via stderr slip through this guard undetected.
+out=$(HERDR_AUTH_HOSTS="aorus aorus4" bash "$A" login --cli cursor --no-wait 2>&1)
 
 [ "$(grep -c . "$HERDR_AUTH_OPENED")" = 2 ] \
   && ok "cursor login: opens one URL per host" \
@@ -263,6 +266,22 @@ printf '%s' "$out" | grep -q 'host aorus5.*unreachable' \
 printf '%s' "$out" | grep -q 'aorus5.*no login URL' \
   && ko "cursor login: unreachable host must not report as a bare login failure" "$out" \
   || ok "cursor login: unreachable host must not report as a bare login failure"
+
+# --- completion polling -----------------------------------------------------
+export HERDR_AUTH_POLL_INTERVAL=0
+export HERDR_AUTH_POLL_CEILING=1
+
+fixture aorus.cursor 'Logged in as joel@example.com'
+got=$(HERDR_AUTH_HOSTS="aorus" bash "$A" _wait cursor aorus)
+[ "$got" = ok ] && ok "wait: returns ok once the probe reports authed" \
+                || ko "wait: returns ok once the probe reports authed" "got '$got'"
+
+fixture aorus.cursor 'Not logged in'
+got=$(HERDR_AUTH_HOSTS="aorus" bash "$A" _wait cursor aorus)
+[ "$got" = timeout ] && ok "wait: returns timeout at the ceiling" \
+                     || ko "wait: returns timeout at the ceiling" "got '$got'"
+
+unset HERDR_AUTH_POLL_INTERVAL HERDR_AUTH_POLL_CEILING
 
 printf '\n  %d passed, %d failed\n\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
