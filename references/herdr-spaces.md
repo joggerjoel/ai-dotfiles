@@ -106,3 +106,7 @@ broken forever.
 - **`herdr server stop` is unreliable** — the launchd agent respawns it. Use
   `scripts/herdr-node.sh restart`. For config-only changes prefer
   `herdr server reload-config`, which costs no panes.
+- **Live tmux sessions are a separate concern.** The `tmux` tab is a per-host
+  scratch session (`tmux new-session -A -s herdr`). Reaching the fleet's
+  long-running named sessions is handled by `herdr-tmux.sh` — see
+  `herdr-tmux-spaces.md`.
