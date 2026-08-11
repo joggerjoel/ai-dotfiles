@@ -9,7 +9,7 @@
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
 P="$HERE/herdr-paste.py"
-export P   # the python probes below resolve the program through the environment
+export P TMP   # the python probes below read these from the environment
 pass=0 fail=0
 
 TMP=$(mktemp -d -t herdrpaste-test) || exit 1
@@ -333,6 +333,89 @@ daemon ok
 python3 -c "import sys; sys.stdout.write('bad' + chr(0x0A))" |
   python3 "$P" send --pane w3:p1 --expect-tab w3:t1 --stdin --yes >/dev/null 2>&1
 eq "an invalid payload is refused before any write" 1 "$?"
+
+# --- serve: binding and authorization ------------------------------------------
+# The stub resolves 127.0.0.1 so a test server binds somewhere harmless. On the
+# real node this is the tailnet address and nothing else.
+
+daemon ok
+PASTE_TS_FAIL=1 python3 "$P" serve >/dev/null 2>&1
+eq "serve refuses to start when address resolution fails" 6 "$?"
+
+daemon ok
+PASTE_TS_MULTI=1 python3 "$P" serve >/dev/null 2>&1
+eq "serve refuses to start on an ambiguous address" 6 "$?"
+
+# Everything below drives a live server. It is started once, probed, then shut
+# down through its own endpoint.
+daemon ok
+python3 "$P" serve --port 8779 --timeout 30 > "$TMP/serve.out" 2>&1 &
+SERVE_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  grep -q 'http://' "$TMP/serve.out" 2>/dev/null && break
+  python3 -c "import time; time.sleep(0.25)"
+done
+CAP_URL=$(grep -o 'http://[^ ]*' "$TMP/serve.out" | head -1)
+CAP_PATH=${CAP_URL##*/}
+export CAP_PATH   # the python probes below read it from the environment
+
+[ -n "$CAP_PATH" ] &&
+  ok "serve prints a capability URL" ||
+  ko "serve prints a capability URL" "no URL in output"
+
+python3 - <<'PY2' && ok "the capability is long enough to be unguessable" \
+                  || ko "the capability is long enough to be unguessable"
+import os, sys
+sys.exit(0 if len(os.environ.get("CAP_PATH", "")) >= 32 else 1)
+PY2
+
+probe() {  # <path> <method> [header:value ...] -> status code
+  python3 - "$@" <<'PY2'
+import sys, urllib.error, urllib.request
+path, method = sys.argv[1], sys.argv[2]
+req = urllib.request.Request("http://127.0.0.1:8779" + path, method=method,
+                             data=b"x=1" if method == "POST" else None)
+for h in sys.argv[3:]:
+    k, _, v = h.partition(":")
+    req.add_header(k, v)
+try:
+    print(urllib.request.urlopen(req, timeout=5).status)
+except urllib.error.HTTPError as e:
+    print(e.code)
+except Exception as e:
+    print("ERR %s" % e)
+PY2
+}
+
+eq "a wrong capability path 404s" 404 "$(probe /nope GET)"
+eq "the capability path serves the page" 200 "$(probe "/$CAP_PATH" GET)"
+
+eq "a foreign Host is refused" 403 \
+   "$(probe "/$CAP_PATH" GET "Host:evil.example.com")"
+
+eq "a POST with a foreign Origin is refused" 403 \
+   "$(probe "/$CAP_PATH" POST "Origin:http://evil.example.com")"
+
+# Absent is refused too: a legitimate same-origin form post carries one.
+eq "a POST with no Origin is refused" 403 "$(probe "/$CAP_PATH" POST)"
+
+kill "$SERVE_PID" 2>/dev/null
+wait "$SERVE_PID" 2>/dev/null
+
+# The capability is a bearer secret: it may reach the operator's own terminal,
+# and nothing else. stdlib's default request logger would put it on stderr.
+grep -q "$CAP_PATH" "$TMP/serve.out" &&
+  ok "the capability appears in serve's own output (that is its purpose)" ||
+  ko "the capability appears in serve's own output (that is its purpose)"
+
+python3 - <<'PY2' && ok "the capability is never logged per-request" \
+                  || ko "the capability is never logged per-request"
+import os, sys
+out = open(os.environ["TMP"] + "/serve.out").read()
+cap = os.environ["CAP_PATH"]
+# One occurrence is the printed URL. More means the request logger echoed it.
+sys.exit(0 if out.count(cap) <= 1 else 1)
+PY2
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

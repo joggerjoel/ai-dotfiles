@@ -362,6 +362,139 @@ def cmd_send(args):
     return EXIT_OK
 
 
+DEFAULT_PORT = 8778
+
+
+def resolve_bind_address():
+    """Find the one address to bind, or refuse to start.
+
+    An HTTP server binds an address, not a named interface. The tailnet address
+    is what makes this page unreachable from the LAN and the internet, so if it
+    cannot be established the answer is to stop — not to fall back, because the
+    fallback is 0.0.0.0 and that would silently publish a terminal-injection
+    endpoint to every network this machine is on.
+
+    Exactly one address, too: two means the answer is ambiguous, and guessing
+    which tailnet a credential page should live on is not a guess worth making.
+    """
+    try:
+        r = subprocess.run(["tailscale", "ip", "-4"],
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise Fatal(EXIT_PREFLIGHT, "could not run tailscale: %s" % e)
+    if r.returncode != 0:
+        raise Fatal(EXIT_PREFLIGHT,
+                    "tailscale could not report an address; refusing to start "
+                    "rather than fall back to 0.0.0.0")
+    addrs = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+    if len(addrs) != 1:
+        raise Fatal(EXIT_PREFLIGHT,
+                    "tailscale reported %d addresses; expected exactly one"
+                    % len(addrs))
+    return addrs[0]
+
+
+def build_handler(capability, bind_host, port, state):
+    """The request handler, closed over this run's capability and address."""
+    import html
+    from http.server import BaseHTTPRequestHandler
+
+    expected_host = "%s:%d" % (bind_host, port)
+
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "herdr-paste"
+
+        def log_message(self, fmt, *a):
+            """Suppressed deliberately.
+
+            The default logs the full request line to stderr, and the request
+            line contains the capability path — a bearer secret. Leaving this
+            on would defeat the rule that the capability never reaches anything
+            persistent.
+            """
+
+        def _deny(self, code, why):
+            body = ("refused: %s" % html.escape(why)).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _authorized(self, method):
+            # Host first: a mismatch means DNS rebinding or a proxy, and the
+            # capability should not even be compared under those conditions.
+            if self.headers.get("Host") != expected_host:
+                self._deny(403, "unexpected Host header")
+                return False
+            if self.path.lstrip("/").split("?")[0] != capability:
+                self._deny(404, "no such path")
+                return False
+            if method == "POST":
+                origin = self.headers.get("Origin")
+                if not origin or origin != "http://" + expected_host:
+                    # Absent is refused too: a same-origin form post carries
+                    # one. Some mobile browsers strip it, so say which header.
+                    self._deny(403, "missing or foreign Origin header")
+                    return False
+            return True
+
+        def do_GET(self):
+            if not self._authorized("GET"):
+                return
+            body = state["render"]().encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            if not self._authorized("POST"):
+                return
+            self._deny(501, "not implemented yet")
+
+    return Handler
+
+
+def cmd_serve(args):
+    import secrets
+    from http.server import HTTPServer
+
+    preflight()
+    protocol_check()
+
+    host = resolve_bind_address()
+    port = args.port
+    capability = secrets.token_urlsafe(32)
+
+    state = {"render": lambda: "<!doctype html><title>herdr-paste</title>"
+                               "<p>pane picker goes here</p>"}
+
+    try:
+        httpd = HTTPServer((host, port), build_handler(capability, host, port, state))
+    except OSError as e:
+        raise Fatal(EXIT_PREFLIGHT,
+                    "cannot bind %s:%d (%s). Not falling back to another port: "
+                    "the port is what an ACL names." % (host, port, e))
+
+    url = "http://%s:%d/%s" % (host, port, capability)
+    print(url)
+    print("open this on a device joined to this tailnet; the page is not "
+          "reachable from anywhere else")
+    sys.stdout.flush()
+
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
+    return EXIT_OK
+
+
 def cmd_rpc(args):
     """Internal verb: drive one write end to end, for the transport tests.
 
@@ -396,7 +529,10 @@ def build_parser():
                         help="read the value from stdin instead of the TTY")
     p_send.add_argument("--yes", action="store_true",
                         help="skip the confirmation prompt (scripted use)")
-    sub.add_parser("serve", help="the phone-friendly page; tailnet only")
+    p_serve = sub.add_parser("serve", help="the phone-friendly page; tailnet only")
+    p_serve.add_argument("--port", type=int, default=DEFAULT_PORT)
+    p_serve.add_argument("--timeout", type=float, default=600.0,
+                         help="seconds before the page shuts itself down")
     sub.add_parser("_validate", help=argparse.SUPPRESS)
     p_rpc = sub.add_parser("_rpc", help=argparse.SUPPRESS)
     p_rpc.add_argument("--timeout", type=float, default=5.0)
@@ -414,7 +550,7 @@ def main(argv=None):
         return EXIT_USAGE
 
     handlers = {"_validate": cmd_validate, "_rpc": cmd_rpc,
-                "list": cmd_list, "send": cmd_send}
+                "list": cmd_list, "send": cmd_send, "serve": cmd_serve}
     handler = handlers.get(args.verb)
     if handler is None:
         print("not implemented yet: %s" % args.verb, file=sys.stderr)
