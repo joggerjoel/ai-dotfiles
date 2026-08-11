@@ -528,5 +528,77 @@ else
   kill "$S2" 2>/dev/null; wait "$S2" 2>/dev/null
 fi
 
+# --- serve: pinned to one pane ------------------------------------------------
+# With several flows in the air there are several identical browser tabs, and
+# nothing ties the tab in front of you to the pane that is waiting. A pinned
+# page can only ever target one pane, and its title names that pane.
+
+daemon ok
+python3 "$P" serve --port 8783 --timeout 30 --pane w3:p1 --expect-tab w3:t1 \
+  > "$TMP/serve3.out" 2>&1 &
+S3=$!
+export S3
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  grep -q 'http://' "$TMP/serve3.out" 2>/dev/null && break
+  python3 -c "import time; time.sleep(0.25)"
+done
+C3=$(grep -o 'http://[^ ]*' "$TMP/serve3.out" | head -1); C3=${C3##*/}
+export C3
+
+page=$(python3 - <<'PY2'
+import os, urllib.request
+print(urllib.request.urlopen(
+    "http://127.0.0.1:8783/" + os.environ["C3"], timeout=5).read().decode())
+PY2
+)
+
+printf '%s' "$page" | grep -q '<select' &&
+  ko "a pinned page renders no picker" "the picker is still there" ||
+  ok "a pinned page renders no picker"
+
+printf '%s' "$page" | grep -q 'w3:p1' &&
+  ok "a pinned page names its target" ||
+  ko "a pinned page names its target"
+
+# The title is the correlation: it is what the browser tab strip shows, and it
+# is how you tell six otherwise identical tabs apart.
+python3 - <<'PY2' && ok "the page title names the target pane" \
+                  || ko "the page title names the target pane"
+import os, re, sys, urllib.request
+html = urllib.request.urlopen(
+    "http://127.0.0.1:8783/" + os.environ["C3"], timeout=5).read().decode()
+m = re.search(r"<title>([^<]*)</title>", html)
+sys.exit(0 if m and "w3:p1" in m.group(1) else 1)
+PY2
+
+pinpost() {  # <body> -> "status|body"
+  python3 - "$1" <<'PY2'
+import os, sys, urllib.error, urllib.request
+req = urllib.request.Request(
+    "http://127.0.0.1:8783/" + os.environ["C3"],
+    data=sys.argv[1].encode(), method="POST")
+req.add_header("Origin", "http://127.0.0.1:8783")
+req.add_header("Content-Type", "application/x-www-form-urlencoded")
+try:
+    r = urllib.request.urlopen(req, timeout=5)
+    print("%s|%s" % (r.status, r.read().decode("utf-8", "replace")))
+except urllib.error.HTTPError as e:
+    print("%s|%s" % (e.code, e.read().decode("utf-8", "replace")))
+PY2
+}
+
+# A pinned page must ignore a target supplied by the client. Otherwise the pin
+# is decoration and a crafted POST reaches any pane on the fleet.
+r=$(pinpost 'target=w9:t2|w9:p2&value=SENTINEL-PIN')
+printf '%s' "$r" | grep -q 'w9:p2' &&
+  ko "a pinned page refuses a client-supplied target" "honoured the override" ||
+  ok "a pinned page refuses a client-supplied target"
+
+printf '%s' "$r" | grep -q 'w3:p1' &&
+  ok "a pinned page confirms against its own pin" ||
+  ko "a pinned page confirms against its own pin" "$r"
+
+kill "$S3" 2>/dev/null; wait "$S3" 2>/dev/null
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

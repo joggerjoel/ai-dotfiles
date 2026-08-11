@@ -444,13 +444,11 @@ def build_handler(capability, bind_host, port, state):
         def do_GET(self):
             if not self._authorized("GET"):
                 return
-            body = state["render"]().encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            # Through _html like every other response: it is what supplies the
+            # doctype and the title, and the title is the whole correlation
+            # mechanism. Building the response here separately meant the page
+            # you actually load had no title at all.
+            self._html(200, state["render"]())
 
         def do_POST(self):
             if not self._authorized("POST"):
@@ -518,8 +516,13 @@ def build_handler(capability, bind_host, port, state):
                 # "<tab_id>|<pane_id>" — the identity pair captured when the
                 # page was rendered. Reading two separate fields here would
                 # accept nothing the real form ever sends.
-                target = one("target")
-                tab_id, _, pane_id = target.partition("|")
+                if state["pin"]:
+                    # A pinned page ignores any target the client supplies.
+                    # Honouring one would make the pin decoration: a crafted
+                    # POST could then reach any pane on the fleet.
+                    tab_id, pane_id = state["pin"]
+                else:
+                    tab_id, _, pane_id = one("target").partition("|")
                 if not pane_id:
                     self._html(400, "<p>no target selected</p>")
                     return
@@ -529,8 +532,12 @@ def build_handler(capability, bind_host, port, state):
                 state["lock"].release()
 
         def _html(self, code, body):
+            # The title is what the browser tab strip shows. With several
+            # flows in the air the tabs are otherwise identical, and nothing
+            # would tie the tab in front of you to the pane that is waiting.
+            title = "paste &rarr; %s" % html.escape(state["title"]())
             page = ("<!doctype html><meta charset=utf-8>"
-                    "<title>herdr-paste</title>" + body).encode()
+                    "<title>%s</title>" % title + body).encode()
             self.send_response(code)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
@@ -578,6 +585,29 @@ def cmd_serve(args):
 
     import html as _html
 
+    pin = None
+    if args.pane or args.expect_tab:
+        if not (args.pane and args.expect_tab):
+            raise Fatal(EXIT_USAGE, "--pane requires --expect-tab")
+        pin = (args.expect_tab, args.pane)
+
+    def render_pinned():
+        # No picker: one page, one target. The orchestrator serves a page per
+        # host, so the URL you scanned can only deliver where you meant.
+        return (
+            "<h1>herdr-paste</h1>"
+            "<p>target: <b>%s</b></p>"
+            "<p style='font-size:smaller'>Your browser may call this "
+            "&ldquo;not secure&rdquo;: it is plain HTTP. The connection is "
+            "encrypted by Tailscale, and this page is unreachable off the "
+            "tailnet. A self-signed certificate would only train you to click "
+            "through certificate warnings.</p>"
+            "<form method=post>"
+            "<p><input name=value type=password autocomplete=one-time-code "
+            "placeholder='paste the value' size=48></p>"
+            "<p><button type=submit>continue</button></p>"
+            "</form>" % _html.escape(pin[1]))
+
     def render_picker():
         rows = list_panes()
         opts = "".join(
@@ -610,7 +640,10 @@ def cmd_serve(args):
                 "<button name=cancel value=yes>cancel</button>"
                 "</form>" % _html.escape(pane_id))
 
-    state = {"render": render_picker, "render_confirm": render_confirm,
+    state = {"render": render_pinned if pin else render_picker,
+             "render_confirm": render_confirm,
+             "title": (lambda: pin[1]) if pin else (lambda: "pick a pane"),
+             "pin": pin,
              "held": None, "outcome": None, "lock": threading.Lock()}
 
     try:
@@ -694,6 +727,9 @@ def build_parser():
                         help="skip the confirmation prompt (scripted use)")
     p_serve = sub.add_parser("serve", help="the phone-friendly page; tailnet only")
     p_serve.add_argument("--port", type=int, default=DEFAULT_PORT)
+    p_serve.add_argument("--pane", help="pin the page to one pane (requires --expect-tab)")
+    p_serve.add_argument("--expect-tab", dest="expect_tab",
+                         help="tab_id the pinned pane must still belong to")
     p_serve.add_argument("--timeout", type=float, default=600.0,
                          help="seconds before the page shuts itself down")
     sub.add_parser("_validate", help=argparse.SUPPRESS)
