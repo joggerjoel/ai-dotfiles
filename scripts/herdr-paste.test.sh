@@ -81,5 +81,133 @@ python3 "$P" 2>&1 | grep -qi usage &&
 python3 "$P" bogus >/dev/null 2>&1
 eq "an unknown verb exits 2" 2 "$?"
 
+# --- transport ---------------------------------------------------------------
+# A stand-in daemon on a unix socket. It records the exact bytes it received so
+# the encoding assertions can inspect the wire rather than trust the sender.
+
+export PASTE_FIXTURE="$TMP/fx"; mkdir -p "$PASTE_FIXTURE"
+export PASTE_CALLS="$TMP/calls"
+export PASTE_WIRE="$TMP/wire"
+export HERDR_SOCKET_PATH="$TMP/herdr.sock"
+
+schema() { printf '{"protocol":%s}\n' "$1" > "$PASTE_FIXTURE/schema.json"; }
+schema 19
+
+daemon() {  # <ok|err|silent|eof>  — backgrounded; returns once it is listening
+  rm -f "$HERDR_SOCKET_PATH" "$PASTE_WIRE"
+  python3 - "$HERDR_SOCKET_PATH" "$1" "$PASTE_WIRE" <<'PY' &
+import json, os, socket, sys, time
+path, mode, wire = sys.argv[1], sys.argv[2], sys.argv[3]
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(path); s.listen(1)
+open(path + ".ready", "w").close()
+# Accept repeatedly until someone actually sends a request. preflight() opens
+# a connection and closes it without writing — a one-shot accept() would be
+# eaten by that probe and the real request would find no server. The real
+# daemon serves many connections; a stub that serves one models something that
+# does not exist.
+#
+# The timeout matters too: before the client exists (a TDD red run) an untimed
+# accept() hangs the whole suite instead of failing it.
+s.settimeout(12)
+line = b""
+while True:
+    try:
+        c, _ = s.accept()
+    except (socket.timeout, OSError):
+        s.close(); sys.exit(0)
+    # Read EVERYTHING sent, not just the first line. readline() would make the
+    # "exactly one JSON object reached the socket" assertion untestable: an
+    # injected second request lives on the NEXT line, which readline() never
+    # sees, so the check would pass even against an interpolating encoder.
+    c.settimeout(2)
+    buf = b""
+    try:
+        while True:
+            chunk = c.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+            if mode != "drain" and buf.endswith(b"\n"):
+                break
+    except (socket.timeout, OSError):
+        pass
+    line = buf
+    if line:
+        break
+    c.close()  # a bare preflight probe; keep listening for the real request
+open(wire, "wb").write(line)
+if mode == "ok":
+    c.sendall(json.dumps({"id": "paste-1", "result": {}}).encode() + b"\n")
+elif mode == "err":
+    c.sendall(json.dumps({"id": "paste-1",
+                          "error": {"message": "no such pane"}}).encode() + b"\n")
+elif mode == "silent":
+    time.sleep(9)
+# mode "eof": close with no reply at all — the daemon may still have acted.
+c.close(); s.close()
+PY
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$HERDR_SOCKET_PATH.ready" ] && break
+    python3 -c "import time; time.sleep(0.05)"
+  done
+  rm -f "$HERDR_SOCKET_PATH.ready"
+}
+
+rm -f "$HERDR_SOCKET_PATH"
+python3 "$P" _rpc >/dev/null 2>&1
+eq "preflight: a missing socket exits 6, fast" 6 "$?"
+
+daemon ok; schema 21
+python3 "$P" _rpc >/dev/null 2>&1
+eq "protocol mismatch refuses to run, exits 5" 5 "$?"
+schema 19
+
+daemon ok
+python3 "$P" _rpc >/dev/null 2>&1
+eq "a success reply exits 0" 0 "$?"
+
+daemon err
+python3 "$P" _rpc >/dev/null 2>&1
+eq "an error reply exits 1" 1 "$?"
+
+daemon silent
+python3 "$P" _rpc --timeout 1 >/dev/null 2>&1
+eq "a silent daemon exits 3 (ambiguous, not error)" 3 "$?"
+
+# EOF after the write is NOT an error: the daemon may have acted before closing.
+# Reporting "not delivered" there would be the misreport exit 3 exists to stop.
+daemon eof
+python3 "$P" _rpc --timeout 2 >/dev/null 2>&1
+eq "EOF with no reply exits 3, not 1" 3 "$?"
+
+# --- encoding ----------------------------------------------------------------
+# The payload is attacker-supplied by construction. --raw-text bypasses
+# validation so the encoder is tested against inputs the validator refuses;
+# testing it through the validator would exercise a path production never takes.
+
+daemon ok
+python3 -c "import sys; sys.stdout.write('a\"b\\\\c' + chr(0x0A) + 'd')" |
+  python3 "$P" _rpc --raw-text >/dev/null 2>&1
+
+eq "hostile text still yields exactly one JSON line" 1 \
+   "$(wc -l < "$PASTE_WIRE" | tr -d ' ')"
+
+python3 - <<'PY' && ok "hostile text round-trips through json.dumps" \
+                 || ko "hostile text round-trips through json.dumps"
+import json, os, sys
+o = json.load(open(os.environ["PASTE_WIRE"]))
+want = 'a"b\\c' + chr(0x0A) + 'd'
+sys.exit(0 if o["params"]["text"] == want else 1)
+PY
+
+python3 - <<'PY' && ok "the request names pane.send_input with keys enter" \
+                 || ko "the request names pane.send_input with keys enter"
+import json, os, sys
+o = json.load(open(os.environ["PASTE_WIRE"]))
+sys.exit(0 if o["method"] == "pane.send_input"
+         and o["params"]["keys"] == ["enter"] else 1)
+PY
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
