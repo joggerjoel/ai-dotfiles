@@ -467,7 +467,23 @@ except Exception as e:
 PY2
 }
 
-r1=$(post 'pane_id=w3:p1&tab_id=w3:t1&value=SENTINEL-PAGE')
+# Drive the form the page actually renders: fetch it, take an option's value
+# verbatim, and post that. Hand-writing the field names here is what let a
+# form/handler mismatch pass unnoticed — the page sends one "target" field,
+# and a test that invents its own shape proves nothing about the real page.
+TARGET=$(python3 - <<'PY2'
+import os, re, sys, urllib.request
+url = "http://127.0.0.1:8781/" + os.environ["C2"]
+html = urllib.request.urlopen(url, timeout=5).read().decode()
+m = re.search(r'<option value="([^"]+)"', html)
+print(m.group(1) if m else "")
+PY2
+)
+[ -n "$TARGET" ] &&
+  ok "the page renders a selectable target" ||
+  ko "the page renders a selectable target" "no option in the form"
+
+r1=$(post "target=$TARGET&value=SENTINEL-PAGE")
 printf '%s' "$r1" | grep -q '^200' &&
   ok "the first POST is accepted" ||
   ko "the first POST is accepted" "$r1"

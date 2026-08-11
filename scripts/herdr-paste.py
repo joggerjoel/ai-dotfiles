@@ -514,9 +514,17 @@ def build_handler(capability, bind_host, port, state):
                 except Rejected as e:
                     self._html(400, "<p>refused: %s</p>" % html.escape(str(e)))
                     return
-                state["held"] = {"identity": (one("tab_id"), one("pane_id")),
-                                 "value": value}
-                self._html(200, state["render_confirm"](one("pane_id")))
+                # The picker submits one field, "target", holding
+                # "<tab_id>|<pane_id>" — the identity pair captured when the
+                # page was rendered. Reading two separate fields here would
+                # accept nothing the real form ever sends.
+                target = one("target")
+                tab_id, _, pane_id = target.partition("|")
+                if not pane_id:
+                    self._html(400, "<p>no target selected</p>")
+                    return
+                state["held"] = {"identity": (tab_id, pane_id), "value": value}
+                self._html(200, state["render_confirm"](pane_id))
             finally:
                 state["lock"].release()
 
