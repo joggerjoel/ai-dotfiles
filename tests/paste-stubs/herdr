@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Stub for the `herdr` CLI, serving canned JSON from $PASTE_FIXTURE.
+#
+# Every invocation's full command line is appended to $PASTE_CALLS. That is the
+# producer for the "the credential never reaches argv" assertion: the test
+# greps this file for a sentinel rather than trusting prose. A stub that only
+# returned data could not prove that property.
+printf '%s\n' "$*" >> "${PASTE_CALLS:-/dev/null}"
+
+case "$1 $2" in
+  "api schema")     cat "$PASTE_FIXTURE/schema.json" ;;
+  "workspace list") cat "$PASTE_FIXTURE/workspaces.json" ;;
+  "tab list")       cat "$PASTE_FIXTURE/tabs.json" ;;
+  "pane list")      cat "$PASTE_FIXTURE/panes.json" ;;
+  *) exit 0 ;;
+esac

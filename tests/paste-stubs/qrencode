@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Stub for `qrencode`. Records its argv so a test can prove the capability URL
+# was never passed as an argument — argv is world-readable through `ps`, and
+# the URL carries a bearer secret. The URL must arrive on stdin.
+printf 'qrencode %s\n' "$*" >> "${PASTE_CALLS:-/dev/null}"
+cat > /dev/null
+printf '[QR]\n'

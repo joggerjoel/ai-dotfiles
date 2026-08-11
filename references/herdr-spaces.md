@@ -111,6 +111,11 @@ broken forever.
   long-running named sessions is handled by `herdr-tmux.sh` — see
   `herdr-tmux-spaces.md`.
 
+- **Getting a credential into a pane is a separate concern.** Some login flows
+  hand a human a token that must be pasted back into a waiting prompt, on a
+  machine they are not typing at. `scripts/herdr-paste.py` does that and
+  nothing else — see `herdr-paste.md`.
+
 ## macOS: a launchd-started server needs Local Network permission
 
 Moving the herdr server under launchd makes it a **new subject** for the macOS

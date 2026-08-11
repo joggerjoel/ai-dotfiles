@@ -30,21 +30,53 @@ fi
 #   reading form  (cat LOG)        → serve whatever LOG holds
 #   foreground form                → print, then BLOCK, like the real one
 LOG="${HERDR_AUTH_CURSOR_LOG:-/tmp/herdr-auth-cursor-login.log}"
+CODEXLOG="${HERDR_AUTH_CODEX_LOG:-/tmp/herdr-auth-codex-login.log}"
+
+# An ordered journal of the calls that matter, so a test can assert SEQUENCE
+# rather than just occurrence. Serialisation is a property of ordering and is
+# invisible to any assertion that only checks a call happened.
+order() { printf '%s %s\n' "$1" "$host" >> "${HERDR_AUTH_ORDER:-/dev/null}"; }
 
 case "$cmd" in
   *nohup*"cursor-agent login"*)
     f="$HERDR_AUTH_FIXTURE/$host.cursorlogin"
     [ -f "$f" ] || { echo "no fixture: $f" >&2; exit 1; }
     cat "$f" > "$LOG"
+    order start
+    exit 0
+    ;;
+  # Answers plain `codex login` as readily as `--device-auth`, on purpose. Plain
+  # `codex login` calls back to localhost on the remote and dies silently when
+  # the browser is on another machine — but a stub that refused it would make a
+  # regressed script fail for want of a fixture, blaming the harness instead of
+  # naming the defect. Serve either, record which was actually run, and let the
+  # assertion be about the command.
+  *nohup*"codex login"*)
+    f="$HERDR_AUTH_FIXTURE/$host.codexlogin"
+    [ -f "$f" ] || { echo "no fixture: $f" >&2; exit 1; }
+    cat "$f" > "$CODEXLOG"
+    printf '%s\n' "$cmd" >> "${HERDR_AUTH_START_CMD:-/dev/null}"
+    order start
+    exit 0
+    ;;
+  *cat*herdr-auth-codex-login*|*cat*"$CODEXLOG"*)
+    [ -f "$CODEXLOG" ] && cat "$CODEXLOG"
     exit 0
     ;;
   *cat*herdr-auth-cursor-login*|*cat*"$LOG"*)
     [ -f "$LOG" ] && cat "$LOG"
     exit 0
     ;;
-  *pkill*"cursor-agent login"*)
+  # Match on `pkill` alone, never on the pattern the script happens to send. A
+  # stub that encodes the expected pattern agrees with the script by
+  # construction and so cannot catch a bad pattern — which is how a
+  # self-matching one survived a green suite. Record the command verbatim so a
+  # test can assert properties of the pattern itself.
+  *pkill*)
     printf '%s\n' "$host" >> "${HERDR_AUTH_CANCELLED:-/dev/null}"
-    rm -f "$LOG"
+    printf '%s\n' "$cmd" >> "${HERDR_AUTH_PKILL_CMD:-/dev/null}"
+    order cancel
+    rm -f "$LOG" "$CODEXLOG"
     exit 0
     ;;
 esac
