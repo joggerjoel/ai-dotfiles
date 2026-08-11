@@ -20,6 +20,14 @@ export HERDR_AUTH_OPENED="$TMP/opened"
 # a cancellation. Under $TMP so a run never touches the real /tmp path.
 export HERDR_AUTH_CURSOR_LOG="$TMP/cursor-login.log"
 export HERDR_AUTH_CANCELLED="$TMP/cancelled"
+# The verbatim remote command every cancellation sends, so the pkill pattern
+# can be tested as a string rather than trusted.
+export HERDR_AUTH_PKILL_CMD="$TMP/pkill-cmd"
+export HERDR_AUTH_CODEX_LOG="$TMP/codex-login.log"
+# An ordered journal of starts and cancels. Serialisation is a property of
+# sequence, so occurrence-only assertions cannot see it.
+export HERDR_AUTH_ORDER="$TMP/order"
+export HERDR_AUTH_START_CMD="$TMP/start-cmd"
 # How long the stub blocks in the foreground form. The elapsed-time assertion
 # uses this as the line between "read the URL live" and "waited for exit".
 export HERDR_AUTH_STUB_BLOCK=5
@@ -346,6 +354,227 @@ printf '%s' "$out" | grep -q 'host aorus4: logged in' \
   && ok "login wait: the one host with a started flow is still waited on" \
   || ko "login wait: the one host with a started flow is still waited on" "$out"
 unset HERDR_AUTH_POLL_INTERVAL HERDR_AUTH_POLL_CEILING
+
+# --- cancel_login: the kill pattern must not match its own command line -------
+#
+# `pkill -f` matches full command lines, and the remote shell's own argv holds
+# the pattern it was handed. Verified on a live host:
+#
+#     $ pgrep -af "cursor-agent login"
+#     931550 bash -lc pgrep -af "cursor-agent login"; ...
+#
+# A literal pattern therefore makes cancel signal its own shell, and the `rm -f`
+# that follows may never run — stranding a file holding a live login URL on the
+# host at exactly the moment the operator asked to cancel it.
+#
+# This is asserted as a property of the string the script sends, because the
+# defect lives in the pattern, not in any behaviour a stub could imitate.
+export HERDR_AUTH_POLL_INTERVAL=0
+export HERDR_AUTH_POLL_CEILING=1
+fixture aorus4.cursorlogin 'Open a browser and navigate to this link: https://cursor.com/loginDeepControl?challenge=SYNTHETIC_C&uuid=00000000-0000-0000-0000-00000000000c&mode=login&redirectTarget=cli'
+fixture aorus4.cursor 'Not logged in'
+: > "$HERDR_AUTH_PKILL_CMD"
+HERDR_AUTH_HOSTS="aorus4" bash "$A" login --cli cursor >/dev/null 2>&1
+pkcmd=$(cat "$HERDR_AUTH_PKILL_CMD")
+
+if [ -z "$pkcmd" ]; then
+  ko "cancel: a timed-out login sends a kill at all" "nothing recorded"
+  ko "cancel: the kill pattern must not match its own command line" "no command"
+  ko "cancel: the log is removed before the kill is attempted" "no command"
+else
+  ok "cancel: a timed-out login sends a kill at all"
+
+  # The pattern as the script actually wrote it, taken back out of the command.
+  pkpat=${pkcmd#*pkill -f \"}
+  pkpat=${pkpat%%\"*}
+  printf '%s' "$pkcmd" | grep -qE "$pkpat" \
+    && ko "cancel: the kill pattern must not match its own command line" "pattern '$pkpat' matches the command carrying it" \
+    || ok "cancel: the kill pattern must not match its own command line"
+
+  # The complement, and the reason the pair is meaningful: a pattern that
+  # matches nothing would satisfy the assertion above while killing nothing.
+  # `cursor-agent login` is the command line the real flow actually runs under.
+  printf 'cursor-agent login\n' | grep -qE "$pkpat" \
+    && ok "cancel: the kill pattern still matches the real login command" \
+    || ko "cancel: the kill pattern still matches the real login command" "pattern '$pkpat' matches nothing"
+
+  # Ordering is the guarantee: remove the credential first, so that even a kill
+  # that goes wrong cannot leave the login URL behind.
+  case "$pkcmd" in
+    *"rm -f"*pkill*) ok "cancel: the log is removed before the kill is attempted" ;;
+    *) ko "cancel: the log is removed before the kill is attempted" "$pkcmd" ;;
+  esac
+fi
+unset HERDR_AUTH_POLL_INTERVAL HERDR_AUTH_POLL_CEILING
+
+# --- codex: serial device-code flow -------------------------------------------
+#
+# Shaped from the real output captured on aorus8 under nohup, including the
+# static URL, so the extractor is exercised against prose it will actually meet.
+CODEXOUT='Welcome to Codex [v0.147.0]
+Follow these steps to sign in with ChatGPT using device code authorization:
+1. Open this link in your browser and sign in to your account
+   https://auth.openai.com/codex/device
+2. Enter this one-time code (expires in 15 minutes)
+   SYNTH-CODE1
+Continue only if you started this login in Codex.'
+
+export HERDR_AUTH_POLL_INTERVAL=0
+export HERDR_AUTH_POLL_CEILING=1
+fixture aorus4.codexlogin "$CODEXOUT"
+fixture aorus5.codexlogin "$CODEXOUT"
+# An earlier cursor case marked aorus5 unreachable, and reachability is a
+# fixture file rather than per-case state. Left in place it silently turns the
+# serialisation assertion below into a test of one host.
+rm -f "$HERDR_AUTH_FIXTURE/aorus5.unreachable"
+
+# An already-authed host must cost one probe, not a code the operator types.
+fixture aorus4.codex 'Logged in using ChatGPT'
+: > "$HERDR_AUTH_ORDER"
+out=$(HERDR_AUTH_HOSTS="aorus4" bash "$A" login --cli codex 2>&1)
+printf '%s' "$out" | grep -q 'already logged in, skipping' \
+  && ok "codex: an already-authed host is skipped" \
+  || ko "codex: an already-authed host is skipped" "$out"
+grep -q '^start ' "$HERDR_AUTH_ORDER" \
+  && ko "codex: skipping starts no flow" "a flow was started for an authed host" \
+  || ok "codex: skipping starts no flow"
+
+# The code reaches the operator, the static URL is opened, and the flag that
+# keeps the callback off the wrong localhost is the one actually used.
+fixture aorus4.codex 'Not logged in'
+: > "$HERDR_AUTH_ORDER"; : > "$HERDR_AUTH_START_CMD"; : > "$HERDR_AUTH_OPENED"
+out=$(HERDR_AUTH_HOSTS="aorus4" HERDR_AUTH_NO_WAIT=1 bash "$A" login --cli codex 2>&1)
+printf '%s' "$out" | grep -q 'enter code SYNTH-CODE1' \
+  && ok "codex: the one-time code is put in front of the operator" \
+  || ko "codex: the one-time code is put in front of the operator" "$out"
+grep -qF 'https://auth.openai.com/codex/device' "$HERDR_AUTH_OPENED" \
+  && ok "codex: the static device URL is opened" \
+  || ko "codex: the static device URL is opened" "$(cat "$HERDR_AUTH_OPENED")"
+grep -qF -- '--device-auth' "$HERDR_AUTH_START_CMD" \
+  && ok "codex: uses --device-auth, never the localhost-callback form" \
+  || ko "codex: uses --device-auth, never the localhost-callback form" "$(cat "$HERDR_AUTH_START_CMD")"
+
+# Serialisation, asserted as sequence. A parallel implementation would emit
+# start/start before either cancel, and every occurrence-only assertion above
+# would still pass — which is exactly why this one reads line numbers.
+fixture aorus5.codex 'Not logged in'
+: > "$HERDR_AUTH_ORDER"
+out=$(HERDR_AUTH_HOSTS="aorus4 aorus5" bash "$A" login --cli codex 2>&1)
+s5=$(grep -n '^start aorus5$' "$HERDR_AUTH_ORDER" | head -1 | cut -d: -f1)
+c4=$(grep -n '^cancel aorus4$' "$HERDR_AUTH_ORDER" | head -1 | cut -d: -f1)
+if [ -n "$s5" ] && [ -n "$c4" ] && [ "$s5" -gt "$c4" ]; then
+  ok "codex: host 2's flow does not start until host 1's has finished"
+else
+  ko "codex: host 2's flow does not start until host 1's has finished" "$(tr '\n' '/' < "$HERDR_AUTH_ORDER")"
+fi
+
+# A host that produces no code never got a flow going; say so, and clean up
+# rather than leaving a started process polling on the host.
+fixture aorus6.codex 'Not logged in'
+fixture aorus6.codexlogin 'some error, no code here'
+: > "$HERDR_AUTH_CANCELLED"
+out=$(HERDR_AUTH_HOSTS="aorus6" bash "$A" login --cli codex 2>&1)
+printf '%s' "$out" | grep -q 'host aorus6: no device code' \
+  && ok "codex: a host that yields no code is reported, not silently skipped" \
+  || ko "codex: a host that yields no code is reported, not silently skipped" "$out"
+grep -q '^aorus6$' "$HERDR_AUTH_CANCELLED" \
+  && ok "codex: a codeless host still gets its flow cancelled" \
+  || ko "codex: a codeless host still gets its flow cancelled" "$(cat "$HERDR_AUTH_CANCELLED")"
+
+# An unreachable host must not consume a code.
+: > "$HERDR_AUTH_FIXTURE/aorus7.unreachable"
+: > "$HERDR_AUTH_ORDER"
+out=$(HERDR_AUTH_HOSTS="aorus7" bash "$A" login --cli codex 2>&1)
+printf '%s' "$out" | grep -q 'host aorus7: unreachable' \
+  && ok "codex: an unreachable host is skipped before any flow starts" \
+  || ko "codex: an unreachable host is skipped before any flow starts" "$out"
+grep -q '^start aorus7$' "$HERDR_AUTH_ORDER" \
+  && ko "codex: no flow is started for an unreachable host" "started anyway" \
+  || ok "codex: no flow is started for an unreachable host"
+rm -f "$HERDR_AUTH_FIXTURE/aorus7.unreachable"
+unset HERDR_AUTH_POLL_INTERVAL HERDR_AUTH_POLL_CEILING
+
+# --- claude credential classifier ---------------------------------------------
+#
+# Exercised directly on stdin, with no ssh anywhere, because the defect it
+# replaces was a logic error and not a transport one.
+NOW_MS=$(( $(date +%s) * 1000 ))
+FUTURE=$(( NOW_MS + 30 * 24 * 3600 * 1000 ))   # +30d
+SOON=$((   NOW_MS +  8      * 3600 * 1000 ))   # +8h
+PAST=$((   NOW_MS - 20 * 24 * 3600 * 1000 ))   # -20d
+
+classify() { printf '%s' "$1" | HERDR_AUTH_WARN_HOURS="${2:-72}" bash "$A" _classify_creds; }
+
+# The production defect, in one assertion. This is aorus4's real file shape: the
+# supabase MCP plugin owns entries in the same store, so the file exists and
+# parses while holding no Claude login at all. The old probe called this authed.
+got=$(classify '{"mcpOAuth":{"plugin:supabase|abc":{"serverName":"supabase","accessToken":""}}}')
+[ "$got" = missing ] \
+  && ok "claude: a file with only mcpOAuth entries is not a Claude login" \
+  || ko "claude: a file with only mcpOAuth entries is not a Claude login" "got '$got'"
+
+got=$(classify "{\"claudeAiOauth\":{\"refreshToken\":\"r\",\"refreshTokenExpiresAt\":$FUTURE}}")
+[ "$got" = authed ] \
+  && ok "claude: a live refresh token is authed" \
+  || ko "claude: a live refresh token is authed" "got '$got'"
+
+# The semantic the fleet measurement established: the access token is reissued
+# every time claude starts, so its expiry says nothing about health. Only the
+# refresh token decides.
+got=$(classify "{\"claudeAiOauth\":{\"refreshToken\":\"r\",\"expiresAt\":$PAST,\"refreshTokenExpiresAt\":$FUTURE}}")
+[ "$got" = authed ] \
+  && ok "claude: an expired ACCESS token does not make a host missing" \
+  || ko "claude: an expired ACCESS token does not make a host missing" "got '$got'"
+
+# aorus6's real shape: block present, refresh token gone.
+got=$(classify "{\"claudeAiOauth\":{\"refreshTokenExpiresAt\":$FUTURE}}")
+[ "$got" = missing ] \
+  && ok "claude: a block with no refresh token is missing" \
+  || ko "claude: a block with no refresh token is missing" "got '$got'"
+
+got=$(classify "{\"claudeAiOauth\":{\"refreshToken\":\"r\",\"refreshTokenExpiresAt\":$PAST}}")
+[ "$got" = missing ] \
+  && ok "claude: a lapsed refresh token is missing, not authed" \
+  || ko "claude: a lapsed refresh token is missing, not authed" "got '$got'"
+
+got=$(classify "{\"claudeAiOauth\":{\"refreshToken\":\"r\",\"refreshTokenExpiresAt\":$SOON}}")
+case "$got" in
+  expiring:*) ok "claude: a refresh token inside the warning window reports expiring" ;;
+  *) ko "claude: a refresh token inside the warning window reports expiring" "got '$got'" ;;
+esac
+
+# The window is a threshold, not a constant: the same file reads healthy when
+# the caller cares about a shorter horizon.
+got=$(classify "{\"claudeAiOauth\":{\"refreshToken\":\"r\",\"refreshTokenExpiresAt\":$SOON}}" 4)
+[ "$got" = authed ] \
+  && ok "claude: the warning window is honoured, not hard-coded" \
+  || ko "claude: the warning window is honoured, not hard-coded" "got '$got'"
+
+got=$(classify 'not json at all')
+[ "$got" = missing ] \
+  && ok "claude: an unparseable credentials file is missing, never a crash" \
+  || ko "claude: an unparseable credentials file is missing, never a crash" "got '$got'"
+
+got=$(classify '')
+[ "$got" = missing ] \
+  && ok "claude: an absent credentials file is missing" \
+  || ko "claude: an absent credentials file is missing" "got '$got'"
+
+# A JSON true is an int in Python unless you exclude bool explicitly.
+got=$(classify '{"claudeAiOauth":{"refreshToken":"r","refreshTokenExpiresAt":true}}')
+[ "$got" = missing ] \
+  && ok "claude: a non-numeric expiry is missing, not a truthy timestamp" \
+  || ko "claude: a non-numeric expiry is missing, not a truthy timestamp" "got '$got'"
+
+# The classifier describes the credentials FILE. It must not be asked about a
+# host running on the fleet token: there the env var authenticates and the file
+# is irrelevant, so probe_claude checks the environment first and never reaches
+# here. Pinning that boundary keeps someone from "helpfully" teaching the
+# classifier about a variable it cannot see.
+got=$(CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-FAKE classify '{"mcpOAuth":{}}')
+[ "$got" = missing ] \
+  && ok "claude: the classifier judges the file, not the ambient environment" \
+  || ko "claude: the classifier judges the file, not the ambient environment" "got '$got'"
 
 printf '\n  %d passed, %d failed\n\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

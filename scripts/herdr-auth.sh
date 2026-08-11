@@ -61,12 +61,94 @@ probe_codex() {
   esac
 }
 
+# How close to the edge counts as `expiring`. Refresh tokens run ~30 days, so
+# three days is enough warning to act without the table crying wolf.
+CLAUDE_WARN_HOURS="${HERDR_AUTH_WARN_HOURS:-72}"
+
+# The classifier. Reads a credentials file on STDIN and prints a verdict — never
+# a token, never a URL, never anything that could be a secret. Keeping it
+# stdin-driven is what makes it testable against real JSON without any ssh.
+#
+# Why this is not `[ -f ~/.claude/.credentials.json ]`, which is what it used to
+# be: that file is a shared store. The supabase MCP plugin writes `mcpOAuth`
+# entries into it, so it exists on hosts that have never logged into Claude at
+# all. On 2026-08-11 the old probe called all six hosts authed while aorus4 had
+# no `claudeAiOauth` block whatsoever and aorus6's had expired a fortnight
+# earlier — a status table that reports the opposite of the truth is worse than
+# no status table.
+#
+# The verdict hangs on the REFRESH token, not the access token. The access token
+# lives ~12h and is reissued whenever claude starts, so it says nothing about
+# health. The refresh token runs from the original interactive login and is not
+# extended by use — measured across the fleet, four hosts refreshed in the same
+# second still held four different refresh windows. When it lapses, only a fresh
+# interactive login helps, and for claude that cannot be driven remotely.
+claude_state_program() {
+  cat <<'PY'
+import json
+import os
+import sys
+import time
+
+try:
+    warn = float(os.environ.get("HERDR_AUTH_WARN_HOURS") or 72)
+except ValueError:
+    warn = 72.0
+
+def verdict():
+    try:
+        data = json.load(sys.stdin)
+    except Exception:
+        return "missing"
+    if not isinstance(data, dict):
+        return "missing"
+    oauth = data.get("claudeAiOauth")
+    if not isinstance(oauth, dict):
+        return "missing"
+    if not oauth.get("refreshToken"):
+        return "missing"
+    expires = oauth.get("refreshTokenExpiresAt")
+    if not isinstance(expires, (int, float)) or isinstance(expires, bool):
+        return "missing"
+    hours = (expires / 1000.0 - time.time()) / 3600.0
+    if hours <= 0:
+        return "missing"
+    if hours < warn:
+        return "expiring:%d" % int(hours)
+    return "authed"
+
+sys.stdout.write(verdict())
+PY
+}
+
+# Run the classifier here, on stdin. Used by the tests, and by nothing else.
+classify_creds() {
+  local prog
+  prog="$(claude_state_program)"
+  HERDR_AUTH_WARN_HOURS="$CLAUDE_WARN_HOURS" python3 -c "$prog"
+}
+
 probe_claude() {
-  local out
-  out="$(remote "$1" '[ -f ~/.claude/.credentials.json ] && echo authed || echo missing')"
+  local prog b64 out
+  prog="$(claude_state_program)"
+  # base64 so the program crosses ssh without any quoting to get wrong, and is
+  # rebuilt into a VARIABLE on the far side — `python3 -c "$(...)"` would
+  # brace-expand it there exactly as it did here. See references/herdr-auth.md.
+  b64="$(printf '%s' "$prog" | base64 | tr -d '\n')"
+  # The env var is checked FIRST because it wins. Verified on aorus8: a host
+  # with a working stored credential answers `ok` normally and
+  # `401 OAuth access token is invalid` with a bogus CLAUDE_CODE_OAUTH_TOKEN
+  # set — so on a host carrying the fleet token, the credentials file is not
+  # what authenticates and reporting on it would describe the wrong thing.
+  #
+  # Read in a `bash -lc` shell, the same login-but-non-interactive shape herdr
+  # wires panes with, so this sees the token exactly when a pane would.
+  out="$(remote "$1" "bash -lc 'if [ -n \"\${CLAUDE_CODE_OAUTH_TOKEN:-}\" ]; then printf token; else P=\$(echo $b64 | base64 -d); HERDR_AUTH_WARN_HOURS=$CLAUDE_WARN_HOURS; export HERDR_AUTH_WARN_HOURS; cat ~/.claude/.credentials.json 2>/dev/null | python3 -c \"\$P\"; fi'")"
   case "$out" in
-    *authed*) echo authed ;;
-    *) echo missing ;;
+    token)      echo token ;;
+    authed)     echo authed ;;
+    expiring:*) echo "$out" ;;
+    *)          echo missing ;;
   esac
 }
 
@@ -96,7 +178,11 @@ extract_url() {
   # not fed to python3's own stdin: python3 with no script argument treats
   # its stdin as the program to execute, which would swallow the piped pane
   # text instead of leaving it for sys.stdin.read() below.
-  python3 -c "$(cat <<'PY'
+  # Built into a variable, not inlined into `python3 -c "$(...)"`: that form
+  # brace-expands the substituted text. Harmless here today because this regex
+  # has no braces, and a trap for the next person to add one — see extract_code.
+  local prog
+  prog=$(cat <<'PY'
 import re
 import sys
 
@@ -115,7 +201,8 @@ urls = re.findall(r"https://\S+", data)
 if urls:
     sys.stdout.write(urls[-1].rstrip(TRAILING))
 PY
-)"
+)
+  python3 -c "$prog"
 }
 
 # Strip credential-bearing parameter values. Everything this script prints
@@ -192,15 +279,39 @@ PY
 }
 
 cmd_status() {
-  local host cli state a=0 m=0 u=0
+  local host cli state a=0 m=0 u=0 soon=""
   printf '%-10s %-10s %-10s %-10s\n' HOST CURSOR CODEX CLAUDE
   for host in $HOSTS_STR; do
     printf '%-10s' "$host"
     if host_reachable "$host"; then
       for cli in cursor codex claude; do
         state="$(probe "$cli" "$host")"
-        printf ' %-10s' "$state"
-        if [ "$state" = authed ]; then a=$((a + 1)); else m=$((m + 1)); fi
+        case "$state" in
+          # Still logged in, so it counts as authed — but it is the one state
+          # that needs an action booked before it becomes `missing`, and a
+          # count alone would hide that.
+          expiring:*)
+            printf ' %-10s' "exp ${state#expiring:}h"
+            a=$((a + 1))
+            soon="$soon $host/$cli(${state#expiring:}h)"
+            ;;
+          # Distinguished from `authed` on purpose: it says the host runs on the
+          # fleet token rather than its own login, which is what you need to
+          # know when one revoked token would take every `token` host down at
+          # once. A bare "authed" would hide that shared fate.
+          token)
+            printf ' %-10s' token
+            a=$((a + 1))
+            ;;
+          authed)
+            printf ' %-10s' authed
+            a=$((a + 1))
+            ;;
+          *)
+            printf ' %-10s' "$state"
+            m=$((m + 1))
+            ;;
+        esac
       done
     else
       for cli in cursor codex claude; do
@@ -211,6 +322,9 @@ cmd_status() {
     printf '\n'
   done
   printf '\n%d authed, %d missing, %d unreachable\n' "$a" "$m" "$u"
+  # Named, with hours, because "expiring" without a deadline is not actionable.
+  [ -n "$soon" ] && printf 'expiring within %sh:%s\n' "$CLAUDE_WARN_HOURS" "$soon"
+  return 0
 }
 
 open_url() {
@@ -257,9 +371,105 @@ login_cursor() {
 # Stop a login flow that never completed. Without this the detached process
 # outlives the run and sits on the host polling forever — one had to be killed
 # by hand after the first live attempt.
+#
+# Two things here are load-bearing and neither is obvious.
+#
+# The log is removed FIRST. It holds a live login URL, and cancelling is
+# exactly when that must not be left behind; ordering it after the kill makes
+# the cleanup contingent on the kill going well.
+#
+# The pattern must not match the command line carrying it. `pkill -f` matches
+# full command lines, and the remote shell's own argv contains whatever pattern
+# it was handed — so a literal "cursor-agent login" makes this signal itself.
+# Verified on a live host:
+#
+#     $ pgrep -af "cursor-agent login"
+#     931550 bash -lc pgrep -af "cursor-agent login"; ...
+#
+# `[ ]` encodes a space that the argv text does not literally contain: the
+# regex needs a space between the words, and this command line has a bracket
+# there, so it matches the real `cursor-agent login` and not itself.
 cancel_login() {
   local host="$1"
-  remote "$host" "bash -lc 'pkill -f \"cursor-agent login\" >/dev/null 2>&1; rm -f $CURSOR_LOG'" >/dev/null 2>&1 || true
+  remote "$host" "bash -lc 'rm -f $CURSOR_LOG; pkill -f \"cursor-agent[ ]login\" >/dev/null 2>&1'" >/dev/null 2>&1 || true
+}
+
+# codex prints its device URL and one-time code to a plain pipe with no TTY —
+# verified on aorus8 under nohup, which also disproves this file's original
+# claim that codex "produces nothing without a controlling terminal". So it is
+# driven exactly like cursor, with one inversion that changes the whole design:
+# the value travels OUTWARD. The operator reads the code off this terminal and
+# types it into the browser; nothing is ever delivered back into the pane, and
+# the CLI polls until the human half completes.
+#
+# `--device-auth` is not a preference. Plain `codex login` calls back to
+# localhost on the machine running codex, so a URL opened on your Mac hits the
+# wrong localhost and the flow dies silently.
+CODEX_LOG="${HERDR_AUTH_CODEX_LOG:-/tmp/herdr-auth-codex-login.log}"
+# Static, carries no per-run secret — unlike cursor's URL, this one is safe to
+# print. The secret in this flow is the code, not the link.
+CODEX_DEVICE_URL="https://auth.openai.com/codex/device"
+
+# Pull the one-time device code out of captured CLI output. Anchored on the
+# code's own shape rather than on the prose around it: "Enter this one-time
+# code" is vendor copy that can be reworded, while the code's form is part of
+# the protocol. Last match wins, for the same reason as extract_url — a retry
+# prints a fresh code below the stale one.
+#
+# The program is built into a VARIABLE first, then passed as "$prog". Inlining
+# it as `python3 -c "$(cat <<'PY' ... PY)"` — the form extract_url uses — leaks
+# brace expansion onto the substituted text: `{4,8}` becomes the cross product
+# `4 8`, python takes the first variant as the program and the rest as argv,
+# and the quantifier silently degrades to a single digit:
+#
+#     PATTERN: '\b[A-Z0-9]4-[A-Z0-9]4\b'     # not what was written
+#
+# extract_url never exposed this because its regex contains no braces. A
+# variable assignment undergoes no brace expansion, so this form is safe for
+# any program text.
+extract_code() {
+  local prog
+  prog=$(cat <<'PY'
+import re
+import sys
+
+ANSI_RE = re.compile(
+    r"\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[@-_])"
+)
+data = ANSI_RE.sub("", sys.stdin.read())
+codes = re.findall(r"\b[A-Z0-9]{4,8}-[A-Z0-9]{4,8}\b", data)
+if codes:
+    sys.stdout.write(codes[-1])
+PY
+)
+  python3 -c "$prog"
+}
+
+# Same detached-then-poll shape as login_cursor, and for the same reason: the
+# process does not exit until the login lands, so command substitution would
+# wait forever and never hand back the code.
+login_codex() {
+  local host="$1" code="" waited=0
+  local ceiling="${HERDR_AUTH_URL_TIMEOUT:-20}"
+  local interval="${HERDR_AUTH_URL_INTERVAL:-1}"
+
+  remote "$host" "bash -lc 'rm -f $CODEX_LOG; nohup codex login --device-auth >$CODEX_LOG 2>&1 &'" >/dev/null 2>&1
+
+  while :; do
+    code="$(remote "$host" "bash -lc 'cat $CODEX_LOG 2>/dev/null'" | extract_code)"
+    [ -n "$code" ] && break
+    [ "$waited" -ge "$ceiling" ] && break
+    sleep "$interval"
+    waited=$((waited + 1))
+  done
+  printf '%s' "$code"
+}
+
+# Log removed first, and a pattern that cannot match this command line — see
+# cancel_login above for why both matter.
+cancel_codex_login() {
+  local host="$1"
+  remote "$host" "bash -lc 'rm -f $CODEX_LOG; pkill -f \"codex[ ]login\" >/dev/null 2>&1'" >/dev/null 2>&1 || true
 }
 
 # Poll until the CLI reports itself logged in, or give up at the ceiling.
@@ -286,7 +496,7 @@ wait_for_login() {
 }
 
 cmd_login() {
-  local cli="$1" host url opened=0
+  local cli="$1" host url code opened=0
   # Space-separated accumulator, not an array — bash 3.2 has no arrays.
   # Only hosts a flow actually started for belong here: a host skipped as
   # unreachable, or one that produced no login URL, never got a login
@@ -325,6 +535,48 @@ cmd_login() {
         done
       fi
       ;;
+    codex)
+      # Serial, one host at a time — the opposite of cursor's single pass, and
+      # deliberately so. The operator enters codes one at a time at a single
+      # page, and each lives 15 minutes; starting six at once means the last is
+      # most of the way through its TTL before anyone reaches it.
+      #
+      # The probe-and-skip is what makes a re-run cheap: an already-authed host
+      # costs one probe instead of a code the operator has to type.
+      for host in $HOSTS_STR; do
+        if ! host_reachable "$host"; then
+          echo "  host $host: unreachable, skipping — a login fired at a dead host wastes a device code"
+          continue
+        fi
+        if [ "$(probe codex "$host")" = authed ]; then
+          echo "  host $host: already logged in, skipping"
+          continue
+        fi
+        code="$(login_codex "$host")"
+        if [ -z "$code" ]; then
+          echo "  host $host: no device code — flow did not start"
+          cancel_codex_login "$host"
+          continue
+        fi
+        open_url "$CODEX_DEVICE_URL"
+        # Printed on purpose. This is the one credential the script must put in
+        # front of the operator — the flow cannot complete otherwise — and it
+        # is the reason redact() does not govern this branch. It reaches the
+        # terminal and nothing else: never a file, never a log, never argv.
+        printf '  host %s: enter code %s at %s\n' "$host" "$code" "$CODEX_DEVICE_URL"
+        opened=$((opened + 1))
+        [ "$HERDR_AUTH_NO_WAIT" != 0 ] && continue
+        # Waiting here, inside the loop, IS the serialisation. Moving this to a
+        # second pass would mint every code up front and reintroduce the TTL
+        # problem this ordering exists to avoid.
+        case "$(wait_for_login codex "$host")" in
+          ok) echo "  host $host: logged in" ;;
+          *)  echo "  host $host: still not logged in after ${HERDR_AUTH_POLL_CEILING:-$POLL_CEILING_DEFAULT}s — cancelling the flow" >&2
+              cancel_codex_login "$host" ;;
+        esac
+      done
+      echo "$opened device code(s) issued."
+      ;;
     *)
       echo "unknown or unimplemented cli: $cli" >&2; exit 2 ;;
   esac
@@ -350,6 +602,8 @@ main() {
     _probe) probe "$@" ;;
     _wait) wait_for_login "$@" ;;
     _extract_url) extract_url ;;
+    _extract_code) extract_code ;;
+    _classify_creds) classify_creds ;;
     _redact) redact ;;
     *) echo "usage: herdr-auth.sh status | login --cli <cli> [--host H]" >&2; exit 2 ;;
   esac
