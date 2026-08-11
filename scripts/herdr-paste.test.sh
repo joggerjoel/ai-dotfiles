@@ -9,6 +9,7 @@
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
 P="$HERE/herdr-paste.py"
+export P   # the python probes below resolve the program through the environment
 pass=0 fail=0
 
 TMP=$(mktemp -d -t herdrpaste-test) || exit 1
@@ -208,6 +209,76 @@ o = json.load(open(os.environ["PASTE_WIRE"]))
 sys.exit(0 if o["method"] == "pane.send_input"
          and o["params"]["keys"] == ["enter"] else 1)
 PY
+
+# --- listing and label sanitisation -------------------------------------------
+# `list` runs the preflight and protocol gates like every other verb — no
+# daemon means no panes — so it needs one listening. It never writes, so a
+# daemon that only ever accepts is enough.
+daemon ok
+
+# Tab titles and tmux session names are set by whatever runs inside a pane —
+# remote ssh peers, CI output. They are untrusted input rendered into the
+# operator's terminal, so the fixtures below carry real attacks.
+
+cat > "$PASTE_FIXTURE/workspaces.json" <<'J'
+{"result":{"workspaces":[{"workspace_id":"w3","label":"aorus4"},
+{"workspace_id":"w9","label":"aorus8-tmux"}]}}
+J
+cat > "$PASTE_FIXTURE/panes.json" <<'J'
+{"result":{"panes":[{"pane_id":"w3:p1","workspace_id":"w3","tab_id":"w3:t1"},
+{"pane_id":"w9:p2","workspace_id":"w9","tab_id":"w9:t2"}]}}
+J
+
+# A benign tab, and one whose name carries an OSC title-set sequence, a bidi
+# override, and a zero-width joiner.
+python3 - <<'PY2'
+import json, os
+tabs = {"result": {"tabs": [
+    {"tab_id": "w3:t1", "workspace_id": "w3", "label": "claude"},
+    {"tab_id": "w9:t2", "workspace_id": "w9",
+     "label": chr(0x1B) + "]0;pwned" + chr(0x07) + "07-dice"
+              + chr(0x202E) + "evil" + chr(0x200D)},
+]}}
+json.dump(tabs, open(os.environ["PASTE_FIXTURE"] + "/tabs.json", "w"))
+PY2
+
+out=$(python3 "$P" list)
+
+printf '%s' "$out" | grep -q "aorus4" &&
+  ok "list: joins workspace, tab and pane" ||
+  ko "list: joins workspace, tab and pane"
+
+printf '%s' "$out" | grep -q "w9:p2" &&
+  ok "list: includes a -tmux space" ||
+  ko "list: includes a -tmux space"
+
+printf '%s' "$out" | grep -q "07-dice" &&
+  ok "list: keeps the printable part of a hostile label" ||
+  ko "list: keeps the printable part of a hostile label"
+
+python3 - <<'PY2' && ok "list: strips escape, bidi and zero-width from labels" \
+                  || ko "list: strips escape, bidi and zero-width from labels"
+import subprocess, sys, os
+out = subprocess.run(["python3", os.environ["P"], "list"],
+                     capture_output=True, text=True).stdout
+# Newline is the output's own line separator, not label content — counting it
+# as a control character would fail this assertion on every multi-line listing.
+bad = [c for c in out if c != chr(0x0A) and (
+       ord(c) < 0x20 or ord(c) == 0x7F
+       or 0x80 <= ord(c) <= 0x9F or c in (chr(0x202E), chr(0x200D)))]
+sys.exit(1 if bad else 0)
+PY2
+
+python3 "$P" list --json | python3 -c "
+import json, sys
+r = json.load(sys.stdin)
+sys.exit(0 if r[0]['tab_id'] == 'w3:t1' and r[1]['pane_id'] == 'w9:p2' else 1)" &&
+  ok "list --json emits tab_id, the producer for --expect-tab" ||
+  ko "list --json emits tab_id, the producer for --expect-tab"
+
+python3 "$P" list --json | grep -q $'\033' &&
+  ko "list --json escapes labels too" "raw ESC in json" ||
+  ok "list --json escapes labels too"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

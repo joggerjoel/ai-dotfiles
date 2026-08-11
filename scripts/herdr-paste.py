@@ -195,6 +195,78 @@ def cmd_validate(_args):
     return EXIT_OK
 
 
+def clean_label(s):
+    """Make an untrusted label safe to print.
+
+    Labels are tab titles and tmux session names, set by whatever runs inside
+    the pane — remote ssh peers, CI output. They reach two hostile sinks: the
+    operator's terminal, and the page holding the credential field.
+
+    Strips C0/C1 controls AND every category-Cf format character. Controls
+    alone are not enough: a bidi override (U+202E) or a zero-width joiner can
+    visually reorder or forge a label at exactly the moment a human is asked to
+    approve a credential delivery, which reopens the threat model at the
+    display layer after closing it for matching.
+
+    By codepoint, not byte — stripping raw 0x80..0x9F would mangle any
+    multibyte character that happens to contain those bytes.
+    """
+    out = []
+    for ch in s:
+        o = ord(ch)
+        if o < 0x20 or o == 0x7F or 0x80 <= o <= 0x9F:
+            continue
+        if unicodedata.category(ch) == "Cf":
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
+def _herdr_json(*args):
+    out = subprocess.run(["herdr"] + list(args),
+                         capture_output=True, text=True).stdout
+    return json.loads(out)["result"]
+
+
+def list_panes():
+    """Join workspaces, tabs and panes into one addressable list.
+
+    Every label is sanitised on the way out, so no caller can forget to. The
+    ids are daemon-assigned and pass through untouched: they are the identity,
+    and the label is display only.
+    """
+    ws = {w["workspace_id"]: w.get("label", "?")
+          for w in _herdr_json("workspace", "list")["workspaces"]}
+    tabs = {t["tab_id"]: t for t in _herdr_json("tab", "list")["tabs"]}
+
+    rows = []
+    for i, p in enumerate(_herdr_json("pane", "list")["panes"], 1):
+        tab = tabs.get(p.get("tab_id"), {})
+        rows.append({
+            "n": i,
+            "workspace": clean_label(ws.get(p.get("workspace_id"), "?")),
+            "tab_id": p.get("tab_id"),
+            "pane_id": p["pane_id"],
+            "label": clean_label(tab.get("label", "?")),
+        })
+    return rows
+
+
+def cmd_list(args):
+    preflight()
+    protocol_check()
+    rows = list_panes()
+    if args.json:
+        # The producer for --expect-tab: a scripted caller needs tab_id, and
+        # the human-readable form leaves it out as noise.
+        print(json.dumps(rows, indent=2))
+        return EXIT_OK
+    for r in rows:
+        print("%3d  %-14s / %-24s %s"
+              % (r["n"], r["workspace"], r["label"], r["pane_id"]))
+    return EXIT_OK
+
+
 def cmd_rpc(args):
     """Internal verb: drive one write end to end, for the transport tests.
 
@@ -218,7 +290,9 @@ def build_parser():
         prog="herdr-paste.py",
         description="Relay a credential into a herdr pane.")
     sub = ap.add_subparsers(dest="verb")
-    sub.add_parser("list", help="panes you can paste into (read-only)")
+    p_list = sub.add_parser("list", help="panes you can paste into (read-only)")
+    p_list.add_argument("--json", action="store_true",
+                        help="full records including tab_id, for scripted callers")
     sub.add_parser("send", help="pick, paste, confirm, deliver")
     sub.add_parser("serve", help="the phone-friendly page; tailnet only")
     sub.add_parser("_validate", help=argparse.SUPPRESS)
@@ -237,7 +311,7 @@ def main(argv=None):
         ap.print_usage(sys.stderr)
         return EXIT_USAGE
 
-    handlers = {"_validate": cmd_validate, "_rpc": cmd_rpc}
+    handlers = {"_validate": cmd_validate, "_rpc": cmd_rpc, "list": cmd_list}
     handler = handlers.get(args.verb)
     if handler is None:
         print("not implemented yet: %s" % args.verb, file=sys.stderr)
