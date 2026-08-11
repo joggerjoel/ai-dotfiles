@@ -280,5 +280,59 @@ python3 "$P" list --json | grep -q $'\033' &&
   ko "list --json escapes labels too" "raw ESC in json" ||
   ok "list --json escapes labels too"
 
+# --- send ---------------------------------------------------------------------
+
+daemon ok
+python3 "$P" send --pane w3:p1 --stdin --yes </dev/null >/dev/null 2>&1
+eq "--pane without --expect-tab is a usage error" 2 "$?"
+
+daemon ok
+printf '%s' 'tok-123' |
+  python3 "$P" send --pane w3:p1 --expect-tab w3:t1 --stdin --yes >/dev/null 2>&1
+eq "a scripted send with matching identity delivers" 0 "$?"
+
+# The recycled-id case: the pane_id is still present in a fresh listing, but it
+# now sits under a different tab. A presence check would wave this through.
+daemon ok
+printf '%s' 'tok-123' |
+  python3 "$P" send --pane w3:p1 --expect-tab w9:t2 --stdin --yes >/dev/null 2>&1
+eq "identity mismatch aborts with exit 4" 4 "$?"
+
+[ -s "$PASTE_WIRE" ] &&
+  ko "a mismatch writes nothing to the socket" "the wire has content" ||
+  ok "a mismatch writes nothing to the socket"
+
+daemon ok
+printf '%s' 'tok-123' |
+  python3 "$P" send --pane w9:p9 --expect-tab w9:t2 --stdin --yes >/dev/null 2>&1
+eq "a pane absent from a fresh listing aborts with exit 4" 4 "$?"
+
+# The credential must not reach any stream, nor any command line. The herdr
+# stub records its own argv, which is what makes the second assertion real.
+: > "$PASTE_CALLS"
+daemon ok
+out=$(printf '%s' 'SENTINEL-XYZ' |
+  python3 "$P" send --pane w3:p1 --expect-tab w3:t1 --stdin --yes 2>&1)
+
+printf '%s' "$out" | grep -q 'SENTINEL-XYZ' &&
+  ko "the value never reaches stdout or stderr" "leaked" ||
+  ok "the value never reaches stdout or stderr"
+
+grep -q 'SENTINEL-XYZ' "$PASTE_CALLS" &&
+  ko "the value never reaches argv" "found in a recorded command line" ||
+  ok "the value never reaches argv"
+
+# It did reach the socket, though — otherwise the two assertions above would
+# pass for a program that simply never sends anything.
+grep -q 'SENTINEL-XYZ' "$PASTE_WIRE" &&
+  ok "the value does reach the socket" ||
+  ko "the value does reach the socket" "nothing delivered"
+
+# Validation binds the send path, not just the internal verb.
+daemon ok
+python3 -c "import sys; sys.stdout.write('bad' + chr(0x0A))" |
+  python3 "$P" send --pane w3:p1 --expect-tab w3:t1 --stdin --yes >/dev/null 2>&1
+eq "an invalid payload is refused before any write" 1 "$?"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

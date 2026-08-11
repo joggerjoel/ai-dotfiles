@@ -267,6 +267,101 @@ def cmd_list(args):
     return EXIT_OK
 
 
+def send_input(identity, value, timeout=5.0):
+    """Deliver a value to a pane. The whole guarded tail, in one place.
+
+    `identity` is the (tab_id, pane_id) pair captured when the target was
+    chosen. Everything here runs after the human has answered, because
+    confirmation waits on a human and the world moves while it waits.
+
+    The re-verify lives here rather than in each front-end because it is the
+    check most worth not duplicating — and the pair, not a bare pane id,
+    because a recycled id IS present in a fresh listing, attached to a
+    different pane. Checking presence alone would wave through exactly the
+    delivery this is meant to stop.
+
+    It narrows the window rather than closing it: the wire call carries only
+    pane_id, and the socket API has no compare-and-send, so a recycle between
+    this check and the write still lands in the wrong pane. What goes away is
+    the human-scale window — the minutes spent authenticating in a browser.
+    """
+    tab_id, pane_id = identity
+    validate(value)       # re-assert: the write is unreachable unvalidated
+    protocol_check()      # re-check: a daemon may have restarted while we waited
+
+    for row in list_panes():
+        if row["pane_id"] == pane_id:
+            if row["tab_id"] != tab_id:
+                raise Fatal(EXIT_MISMATCH,
+                            "pane %s now belongs to tab %s, not %s — refusing "
+                            "to deliver" % (pane_id, row["tab_id"], tab_id))
+            break
+    else:
+        raise Fatal(EXIT_MISMATCH,
+                    "pane %s is no longer present — refusing to deliver" % pane_id)
+
+    rpc("pane.send_input",
+        {"pane_id": pane_id, "text": value, "keys": ["enter"]}, timeout=timeout)
+
+
+def read_value(use_stdin):
+    """Get the credential without letting it touch the screen or history.
+
+    getpass reads from the controlling TTY without echo and without trimming;
+    piping requires --stdin so the non-interactive path is a deliberate choice
+    rather than the obvious one.
+    """
+    if use_stdin:
+        return sys.stdin.read()
+    import getpass
+    return getpass.getpass("paste the value (input hidden): ")
+
+
+def cmd_send(args):
+    preflight()
+    protocol_check()
+
+    if args.pane or args.expect_tab:
+        if not (args.pane and args.expect_tab):
+            raise Fatal(EXIT_USAGE,
+                        "--pane requires --expect-tab: a bare pane id can only "
+                        "support a presence check, which a recycled id passes")
+        identity = (args.expect_tab, args.pane)
+        label = None
+    else:
+        rows = list_panes()
+        if not rows:
+            raise Fatal(EXIT_ERR, "no panes to paste into")
+        for r in rows:
+            print("%3d  %-14s / %-24s %s"
+                  % (r["n"], r["workspace"], r["label"], r["pane_id"]))
+        try:
+            pick = int(input("target: "))
+        except (ValueError, EOFError):
+            raise Fatal(EXIT_USAGE, "not a number")
+        chosen = next((r for r in rows if r["n"] == pick), None)
+        if chosen is None:
+            raise Fatal(EXIT_USAGE, "no such entry")
+        identity = (chosen["tab_id"], chosen["pane_id"])
+        label = chosen["label"]
+
+    value = read_value(args.stdin)
+    validate(value)
+
+    if not args.yes:
+        # The pane_id is printed beside the label deliberately: the label is
+        # attacker-controlled, and homoglyphs survive sanitisation. The
+        # daemon-assigned id is the part no pane can rewrite.
+        print("deliver to %s  (%s)" % (label or identity[1], identity[1]))
+        if input("confirm [y/N]: ").strip().lower() != "y":
+            print("cancelled; nothing was sent", file=sys.stderr)
+            return EXIT_ERR
+
+    send_input(identity, value)
+    print("delivered to %s" % identity[1])
+    return EXIT_OK
+
+
 def cmd_rpc(args):
     """Internal verb: drive one write end to end, for the transport tests.
 
@@ -293,7 +388,14 @@ def build_parser():
     p_list = sub.add_parser("list", help="panes you can paste into (read-only)")
     p_list.add_argument("--json", action="store_true",
                         help="full records including tab_id, for scripted callers")
-    sub.add_parser("send", help="pick, paste, confirm, deliver")
+    p_send = sub.add_parser("send", help="pick, paste, confirm, deliver")
+    p_send.add_argument("--pane", help="target pane id (requires --expect-tab)")
+    p_send.add_argument("--expect-tab", dest="expect_tab",
+                        help="tab_id the pane must still belong to")
+    p_send.add_argument("--stdin", action="store_true",
+                        help="read the value from stdin instead of the TTY")
+    p_send.add_argument("--yes", action="store_true",
+                        help="skip the confirmation prompt (scripted use)")
     sub.add_parser("serve", help="the phone-friendly page; tailnet only")
     sub.add_parser("_validate", help=argparse.SUPPRESS)
     p_rpc = sub.add_parser("_rpc", help=argparse.SUPPRESS)
@@ -311,7 +413,8 @@ def main(argv=None):
         ap.print_usage(sys.stderr)
         return EXIT_USAGE
 
-    handlers = {"_validate": cmd_validate, "_rpc": cmd_rpc, "list": cmd_list}
+    handlers = {"_validate": cmd_validate, "_rpc": cmd_rpc,
+                "list": cmd_list, "send": cmd_send}
     handler = handlers.get(args.verb)
     if handler is None:
         print("not implemented yet: %s" % args.verb, file=sys.stderr)
