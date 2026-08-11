@@ -566,6 +566,37 @@ got=$(classify '{"claudeAiOauth":{"refreshToken":"r","refreshTokenExpiresAt":tru
   && ok "claude: a non-numeric expiry is missing, not a truthy timestamp" \
   || ko "claude: a non-numeric expiry is missing, not a truthy timestamp" "got '$got'"
 
+# --- codex: the SUCCESS path --------------------------------------------------
+#
+# Previously uncovered. Every codex case above exercises skip, failure, or
+# ordering, so the one path a real run actually takes had no test — and it was
+# leaking. A live fleet run left /tmp/herdr-auth-codex-login.log, which holds
+# the device code, on five hosts at mode 644. Cleanup existed only in the cancel
+# path, so the failure case was tidy and the happy case was not.
+export HERDR_AUTH_POLL_INTERVAL=0
+export HERDR_AUTH_POLL_CEILING=1
+fixture aorus.codexlogin "$CODEXOUT"
+fixture aorus.codex 'Not logged in'
+fixture aorus.codex2 'Logged in using ChatGPT'   # the state reached once the code is entered
+rm -f "$HERDR_AUTH_FIXTURE/aorus.started"
+: > "$HERDR_AUTH_ORDER"
+out=$(HERDR_AUTH_HOSTS="aorus" bash "$A" login --cli codex 2>&1)
+
+printf '%s' "$out" | grep -q 'host aorus: logged in' \
+  && ok "codex: a completed login is reported as logged in" \
+  || ko "codex: a completed login is reported as logged in" "$out"
+
+[ -f "$HERDR_AUTH_CODEX_LOG" ] \
+  && ko "codex: a successful login removes the log holding the device code" "log still present" \
+  || ok "codex: a successful login removes the log holding the device code"
+
+# And it must not get there by killing a flow that already worked.
+grep -q '^cancel aorus$' "$HERDR_AUTH_ORDER" \
+  && ko "codex: a successful login is not cancelled in order to clean up" "cancel was issued" \
+  || ok "codex: a successful login is not cancelled in order to clean up"
+rm -f "$HERDR_AUTH_FIXTURE/aorus.started" "$HERDR_AUTH_FIXTURE/aorus.codex2"
+unset HERDR_AUTH_POLL_INTERVAL HERDR_AUTH_POLL_CEILING
+
 # The classifier describes the credentials FILE. It must not be asked about a
 # host running on the fleet token: there the env var authenticates and the file
 # is irrelevant, so probe_claude checks the environment first and never reaches

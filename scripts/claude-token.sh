@@ -31,10 +31,32 @@ die() { printf '%s\n' "$*" >&2; exit 1; }
 # The value of CLAUDE_CODE_OAUTH_TOKEN in $ENV_FILE, or empty. Deliberately
 # returns the VALUE and not a yes/no: "the key is present" is exactly the
 # question whose wrong answer caused this script to exist.
+#
+# awk, and no `\t`/`\r` escapes anywhere. This was a sed one-liner until a real
+# token exposed the bug: BSD sed (macOS) does not interpret `\t` or `\r` inside
+# a bracket expression, so `[^"'\r]` excluded the LITERAL characters `\` and
+# `r`, and `[ \t]` matched `t`. A 108-character token containing an `r` parsed
+# as empty. The unit tests all passed because the fake value they used —
+# `sk-ant-oat-FAKE-000` — happens to contain no `r`.
+#
+# Split on the first `=` and trim by hand instead: no character classes to get
+# wrong, and identical behaviour on BSD and GNU awk. `\047` is an apostrophe,
+# written octal so this survives the surrounding shell quoting.
 token_from_env_file() {
   [ -r "$ENV_FILE" ] || return 0
-  sed -nE 's/^[ \t]*(export[ \t]+)?CLAUDE_CODE_OAUTH_TOKEN[ \t]*=[ \t]*"?'"'"'?([^"'"'"'\r]*[^"'"'"'\r \t])[ \t]*"?'"'"'?[ \t]*$/\2/p' \
-    "$ENV_FILE" | tail -1
+  awk '
+    /^[[:blank:]]*(export[[:blank:]]+)?CLAUDE_CODE_OAUTH_TOKEN[[:blank:]]*=/ {
+      v = substr($0, index($0, "=") + 1)
+      gsub(/\r/, "", v)
+      sub(/^[[:blank:]]+/, "", v); sub(/[[:blank:]]+$/, "", v)
+      if (v ~ /^".*"$/ || v ~ /^\047.*\047$/) v = substr(v, 2, length(v) - 2)
+      sub(/^[[:blank:]]+/, "", v); sub(/[[:blank:]]+$/, "", v)
+      # Later wins: this file is appended to, so a real value must override an
+      # earlier broken one rather than the scan stopping at the first match.
+      if (length(v) > 0) last = v
+    }
+    END { if (length(last) > 0) print last }
+  ' "$ENV_FILE"
 }
 
 # Does this token actually authenticate? Set in the environment on purpose:
@@ -92,13 +114,29 @@ ensure_token() {
 # hosts and no IPs, usernames, or jump hosts are written down. A half-filled
 # inventory.local.yml would quietly misconfigure every OTHER playbook, so this
 # never creates one.
+# The ansible flags for a given check value, and the single place that decision
+# is made. It was inline as `${check:+--check --diff}`, which expands whenever
+# the variable is NON-EMPTY — and "0" is non-empty, so --check went on every
+# run. Ansible then printed `changed:` for three tasks, showed a diff, reported
+# no failures, and wrote nothing: a dry run wearing a deploy's clothes.
+ansible_flags() {
+  [ "${1:-0}" = 1 ] && printf '%s' "--check --diff"
+  return 0
+}
+
 inventory_for() {
-  local hosts="$1" tmp h
+  local hosts="$1" tmpd tmp h
   if [ -r "$REAL_INVENTORY" ]; then
     printf '%s' "$REAL_INVENTORY"
     return 0
   fi
-  tmp="$(mktemp -t claude-token-inv)" || die "could not create a temp inventory"
+  # A DIRECTORY, so the file inside can be named `inventory.yml`. ansible picks
+  # its parser from the FILENAME: `mktemp -t claude-token-inv` yields a random
+  # suffix and no extension, so ansible tried its INI plugin on YAML and
+  # reported `Invalid host pattern 'aorus_ai:'` — an error about the content
+  # that was really about the name.
+  tmpd="$(mktemp -d -t claude-token-inv)" || die "could not create a temp inventory"
+  tmp="$tmpd/inventory.yml"
   {
     printf 'aorus_ai:\n  hosts:\n'
     for h in $hosts; do printf '    %s: {}\n' "$h"; done
@@ -131,12 +169,22 @@ main() {
   printf '\ndeploying to: %s%s\n\n' "$limit" "$([ "$check" = 1 ] && printf ' (dry run)')" >&2
   # The token reaches ansible through the environment, by name — never on the
   # command line, where `ps` would show it to every user on this machine.
-  CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_TOKEN_VALUE" \
-    ansible-playbook -i "$inv" "$PLAYBOOK" --limit "$limit" \
-      ${check:+--check --diff}
+  #
+  # Spelled out rather than `${check:+--check --diff}`. That form tests for a
+  # NON-EMPTY value, and "0" is non-empty — so --check was passed on every run,
+  # including the ones meant to write. Ansible then reported `changed:` for
+  # three tasks and wrote nothing, which reads exactly like a successful deploy.
+  if [ "$(ansible_flags "$check")" = "--check --diff" ]; then
+    CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_TOKEN_VALUE" \
+      ansible-playbook -i "$inv" "$PLAYBOOK" --limit "$limit" --check --diff
+  else
+    CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_TOKEN_VALUE" \
+      ansible-playbook -i "$inv" "$PLAYBOOK" --limit "$limit"
+  fi
   rc=$?
 
-  case "$inv" in /*claude-token-inv*) rm -f "$inv" ;; esac
+  # Remove the whole temp DIRECTORY, not just the file inside it.
+  case "$inv" in */claude-token-inv*/inventory.yml) rm -rf "$(dirname "$inv")" ;; esac
 
   if [ "$rc" -eq 0 ] && [ "$check" = 0 ]; then
     printf '\nverify with:  just auth-status\n' >&2
@@ -147,5 +195,13 @@ main() {
 
 case "${1:-}" in
   _token_from_env_file) shift; token_from_env_file ;;
+  # Prints the path to a generated inventory. The caller owns cleanup; used by
+  # the tests to hand a real file to `ansible-inventory` and prove it parses.
+  _inventory_for) shift; inventory_for "$*" ;;
+  # Prints the ansible flags a given check value produces. Exists so a test can
+  # assert that check=0 yields NOTHING: `${check:+...}` expanded on "0" because
+  # that string is non-empty, so every run was a dry run and no deploy could
+  # ever have written anything.
+  _ansible_flags) shift; ansible_flags "${1:-0}" ;;
   *) main "$@" ;;
 esac

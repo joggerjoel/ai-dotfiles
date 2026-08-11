@@ -201,9 +201,18 @@ auth-status:
 # because each code expires in 15 minutes. `claude` exits 2 and stays that way:
 # its flow cannot be driven per-host at all, so it is a token-distribution
 # problem instead. See references/herdr-auth.md.
-# [herdr] log a CLI in across the fleet: `just auth-login cursor|codex`
-auth-login CLI:
-    @bash {{dotfiles}}/scripts/herdr-auth.sh login --cli {{CLI}}
+# Naming hosts narrows the run, which is how you shake out a flow on one box
+# before committing to five rounds of typing device codes.
+#   just auth-login codex              # every host that needs it
+#   just auth-login codex aorus8       # just this one
+# [herdr] log a CLI in across the fleet: `just auth-login cursor|codex [host...]`
+auth-login CLI *HOSTS:
+    #!/usr/bin/env bash
+    if [ -n "{{HOSTS}}" ]; then
+      bash {{dotfiles}}/scripts/herdr-auth.sh login --cli {{CLI}} --host "{{HOSTS}}"
+    else
+      bash {{dotfiles}}/scripts/herdr-auth.sh login --cli {{CLI}}
+    fi
 
 # [herdr] list panes you can paste a credential into (read-only)
 paste-list:

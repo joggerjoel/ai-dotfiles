@@ -167,12 +167,19 @@
 
     # The real check: not "did the file land" but "does a pane-shaped shell see
     # it". Compares against the control node's value without printing either.
+    #
+    # Skipped under --check, and deliberately NOT `check_mode: false`. An earlier
+    # version ran it in check mode against a host where nothing had been written;
+    # it dutifully reported `ok`, the assert below skipped, and a dry run came out
+    # looking exactly like a successful deploy — three `changed:` lines, a diff,
+    # and no failures. Verification that runs when there is nothing to verify is
+    # worse than no verification.
     - name: Verify a pane-shaped shell resolves the token
       ansible.builtin.shell:
         cmd: bash -lc 'printf "%s" "${CLAUDE_CODE_OAUTH_TOKEN:-}" | sha256sum | cut -c1-12'
       register: claude_token_check
       changed_when: false
-      check_mode: false
+      when: not ansible_check_mode
 
     - name: Fail if the pane-shaped shell resolved nothing or the wrong value
       ansible.builtin.assert:
@@ -186,10 +193,14 @@
         success_msg: "{{ inventory_hostname }}: pane-shaped shell resolves the token"
       when: not ansible_check_mode
 
-    - name: What to check next
+    # Says which of the two things just happened. The previous wording claimed
+    # "Token distributed" in both cases.
+    - name: What happened, and what to check next
       ansible.builtin.debug:
         msg: >-
-          Token distributed. Confirm the fleet reads healthy with `just auth-status`
-          — claude should report authed everywhere, and the probe now reflects the
-          refresh token rather than the mere existence of a credentials file.
+          {{
+            'DRY RUN — nothing was written and nothing was verified. Re-run without --check to deploy.'
+            if ansible_check_mode else
+            'Token distributed and verified in a pane-shaped shell. Confirm with `just auth-status`: hosts on the fleet token report `token`.'
+          }}
       run_once: true

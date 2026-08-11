@@ -465,6 +465,15 @@ login_codex() {
   printf '%s' "$code"
 }
 
+# The log holds the device code and lands world-readable — observed at mode 644,
+# group ticket-demo, on aorus8. It must not outlive the flow on ANY path.
+# Cleanup used to exist only in the cancel path, so a login that SUCCEEDED left
+# the file behind: the failure case was tidy and the happy case leaked, which is
+# the wrong way round. A real fleet run left one on five hosts.
+clear_codex_log() {
+  remote "$1" "bash -lc 'rm -f $CODEX_LOG'" >/dev/null 2>&1 || true
+}
+
 # Log removed first, and a pattern that cannot match this command line — see
 # cancel_login above for why both matter.
 cancel_codex_login() {
@@ -570,7 +579,10 @@ cmd_login() {
         # second pass would mint every code up front and reintroduce the TTL
         # problem this ordering exists to avoid.
         case "$(wait_for_login codex "$host")" in
-          ok) echo "  host $host: logged in" ;;
+          # Success cleans up too. The log holds the device code, and a flow that
+          # worked has no more use for it than one that failed.
+          ok) echo "  host $host: logged in"
+              clear_codex_log "$host" ;;
           *)  echo "  host $host: still not logged in after ${HERDR_AUTH_POLL_CEILING:-$POLL_CEILING_DEFAULT}s — cancelling the flow" >&2
               cancel_codex_login "$host" ;;
         esac

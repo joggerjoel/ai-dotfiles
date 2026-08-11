@@ -56,6 +56,11 @@ case "$cmd" in
     [ -f "$f" ] || { echo "no fixture: $f" >&2; exit 1; }
     cat "$f" > "$CODEXLOG"
     printf '%s\n' "$cmd" >> "${HERDR_AUTH_START_CMD:-/dev/null}"
+    # Marks that a flow began, so the probe can answer differently afterwards.
+    # Without this the fixtures are static and no test can express "the human
+    # entered the code and the login completed" — which left the entire success
+    # path uncovered, and a credential-bearing log leaking on it.
+    : > "$HERDR_AUTH_FIXTURE/$host.started"
     order start
     exit 0
     ;;
@@ -79,6 +84,19 @@ case "$cmd" in
     rm -f "$LOG" "$CODEXLOG"
     exit 0
     ;;
+  # A bare `rm -f` of the codex log — the cleanup a SUCCESSFUL login performs,
+  # modelled separately because the leak was that ONLY cancel cleaned up: on the
+  # happy path a real fleet run left a world-readable file holding the device
+  # code on five hosts.
+  #
+  # Ordered AFTER *pkill* deliberately. The cancel command is
+  # `rm -f LOG; pkill ...` and contains both, so a first-wins case with this
+  # branch above would swallow every cancellation — which it did, breaking the
+  # serialisation and codeless-host tests the moment it was added.
+  *"rm -f"*herdr-auth-codex-login*|*"rm -f"*"$CODEXLOG"*)
+    rm -f "$CODEXLOG"
+    exit 0
+    ;;
 esac
 
 case "$cmd" in
@@ -90,6 +108,16 @@ case "$cmd" in
 esac
 
 f="$HERDR_AUTH_FIXTURE/$host.$probe"
+
+# Once a codex flow has started, serve <host>.codex2 when it exists — the state
+# the CLI reaches after the human enters the device code. Keeps $probe as codex
+# so the stderr modelling below still applies.
+if [ "$probe" = codex ] \
+   && [ -f "$HERDR_AUTH_FIXTURE/$host.started" ] \
+   && [ -f "$HERDR_AUTH_FIXTURE/$host.codex2" ]; then
+  f="$HERDR_AUTH_FIXTURE/$host.codex2"
+fi
+
 [ -f "$f" ] || { echo "no fixture: $f" >&2; exit 1; }
 
 # The foreground form is the bug under guard: serve the fixture, then hang.
