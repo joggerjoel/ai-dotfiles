@@ -404,7 +404,10 @@ wait "$SERVE_PID" 2>/dev/null
 
 # The capability is a bearer secret: it may reach the operator's own terminal,
 # and nothing else. stdlib's default request logger would put it on stderr.
-grep -q "$CAP_PATH" "$TMP/serve.out" &&
+# `grep -qF --` matters: secrets.token_urlsafe can start with a dash (~1% of
+# tokens), and without the terminator grep parses the capability as options and
+# this assertion fails at random. A flaky security test is worse than none.
+grep -qF -- "$CAP_PATH" "$TMP/serve.out" &&
   ok "the capability appears in serve's own output (that is its purpose)" ||
   ko "the capability appears in serve's own output (that is its purpose)"
 
