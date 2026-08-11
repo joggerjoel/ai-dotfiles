@@ -397,6 +397,7 @@ def resolve_bind_address():
 def build_handler(capability, bind_host, port, state):
     """The request handler, closed over this run's capability and address."""
     import html
+    import urllib.parse
     from http.server import BaseHTTPRequestHandler
 
     expected_host = "%s:%d" % (bind_host, port)
@@ -454,13 +455,110 @@ def build_handler(capability, bind_host, port, state):
         def do_POST(self):
             if not self._authorized("POST"):
                 return
-            self._deny(501, "not implemented yet")
+
+            length = int(self.headers.get("Content-Length") or 0)
+            fields = urllib.parse.parse_qs(
+                self.rfile.read(length).decode("utf-8", "replace"))
+
+            def one(k):
+                return (fields.get(k) or [""])[0]
+
+            # Single-flight. A double-tap on a phone, or a resubmit while the
+            # first is in the air, would otherwise fire two writes — and
+            # resending a single-use code can invalidate the login server-side.
+            if not state["lock"].acquire(blocking=False):
+                self._html(429, "<p>a submission is already in flight</p>")
+                return
+            try:
+                if one("cancel"):
+                    state["held"] = None
+                    self._html(200, "<p>cancelled; nothing was sent</p>")
+                    return
+
+                if one("confirm"):
+                    held = state["held"]
+                    if not held:
+                        self._html(400, "<p>nothing pending</p>")
+                        return
+                    try:
+                        send_input(held["identity"], held["value"])
+                    except Ambiguous as e:
+                        # Keep the capability and the value: the human decides
+                        # whether to retry, because the write may have landed.
+                        state["outcome"] = "ambiguous"
+                        self._html(200,
+                                   "<p><b>ambiguous</b>: %s.</p><p>Do not "
+                                   "resend without checking — a single-use "
+                                   "code can be invalidated by a second "
+                                   "submission.</p>" % html.escape(str(e)))
+                        return
+                    except (RpcError, Fatal) as e:
+                        msg = e.msg if isinstance(e, Fatal) else str(e)
+                        state["outcome"] = "error"
+                        self._html(200, "<p>not delivered: %s</p>"
+                                   % html.escape(msg))
+                        return
+                    # Delivered. The value dies here, and so does the page.
+                    state["held"] = None
+                    state["outcome"] = "delivered"
+                    self._html(200, "<p>delivered. You can close this.</p>")
+                    state["shutdown"]()
+                    return
+
+                # First POST: hold the value in memory and render a confirm
+                # view. The value is NEVER round-tripped through the form —
+                # that would place a credential in a response body.
+                value = one("value")
+                try:
+                    validate(value)
+                except Rejected as e:
+                    self._html(400, "<p>refused: %s</p>" % html.escape(str(e)))
+                    return
+                state["held"] = {"identity": (one("tab_id"), one("pane_id")),
+                                 "value": value}
+                self._html(200, state["render_confirm"](one("pane_id")))
+            finally:
+                state["lock"].release()
+
+        def _html(self, code, body):
+            page = ("<!doctype html><meta charset=utf-8>"
+                    "<title>herdr-paste</title>" + body).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(page)))
+            self.end_headers()
+            self.wfile.write(page)
 
     return Handler
 
 
+def render_qr(url):
+    """Show the URL as a QR code so a phone can reach it without retyping.
+
+    The URL goes on STDIN, never argv: it carries the capability, which is a
+    bearer secret, and argv is world-readable through `ps`. Written as a
+    subprocess call rather than a shell pipeline for the same reason this
+    program is not a shell script.
+
+    The stdlib has no QR encoder and neither vendoring one nor adding a
+    dependency is worth it for a convenience — so when qrencode is absent the
+    fallback is stated out loud rather than left as a silent nothing.
+    """
+    try:
+        r = subprocess.run(["qrencode", "-t", "ANSIUTF8"],
+                           input=url.encode(), capture_output=True, timeout=10)
+        if r.returncode == 0 and r.stdout:
+            sys.stdout.write(r.stdout.decode("utf-8", "replace"))
+            return
+    except (OSError, subprocess.SubprocessError):
+        pass
+    print("(no QR code: `qrencode` is not on PATH — copy the URL above)")
+
+
 def cmd_serve(args):
     import secrets
+    import threading
     from http.server import HTTPServer
 
     preflight()
@@ -470,8 +568,42 @@ def cmd_serve(args):
     port = args.port
     capability = secrets.token_urlsafe(32)
 
-    state = {"render": lambda: "<!doctype html><title>herdr-paste</title>"
-                               "<p>pane picker goes here</p>"}
+    import html as _html
+
+    def render_picker():
+        rows = list_panes()
+        opts = "".join(
+            '<option value="%s|%s">%s / %s (%s)</option>'
+            % (_html.escape(r["tab_id"] or ""), _html.escape(r["pane_id"]),
+               _html.escape(r["workspace"]), _html.escape(r["label"]),
+               _html.escape(r["pane_id"]))
+            for r in rows)
+        # type=password so the value is not on screen in public;
+        # autocomplete=one-time-code because browsers do not offer to save
+        # those, which keeps a phone keychain from persisting the token.
+        return (
+            "<h1>herdr-paste</h1>"
+            "<p style='font-size:smaller'>Your browser may call this "
+            "&ldquo;not secure&rdquo;: it is plain HTTP. The connection is "
+            "encrypted by Tailscale, and this page is unreachable off the "
+            "tailnet. A self-signed certificate would only train you to click "
+            "through certificate warnings.</p>"
+            "<form method=post>"
+            "<p><select name=target>%s</select></p>"
+            "<p><input name=value type=password autocomplete=one-time-code "
+            "placeholder='paste the value' size=48></p>"
+            "<p><button type=submit>continue</button></p>"
+            "</form>" % opts)
+
+    def render_confirm(pane_id):
+        return ("<h1>confirm</h1><p>deliver to <b>%s</b>?</p>"
+                "<form method=post>"
+                "<button name=confirm value=yes>deliver</button> "
+                "<button name=cancel value=yes>cancel</button>"
+                "</form>" % _html.escape(pane_id))
+
+    state = {"render": render_picker, "render_confirm": render_confirm,
+             "held": None, "outcome": None, "lock": threading.Lock()}
 
     try:
         httpd = HTTPServer((host, port), build_handler(capability, host, port, state))
@@ -480,19 +612,42 @@ def cmd_serve(args):
                     "cannot bind %s:%d (%s). Not falling back to another port: "
                     "the port is what an ACL names." % (host, port, e))
 
+    state["shutdown"] = lambda: threading.Thread(
+        target=httpd.shutdown, daemon=True).start()
+
     url = "http://%s:%d/%s" % (host, port, capability)
     print(url)
     print("open this on a device joined to this tailnet; the page is not "
-          "reachable from anywhere else")
+          "reachable from anywhere else, so the phone must be on it too")
+    render_qr(url)
     sys.stdout.flush()
+
+    # serve_forever() will not stop on its own, so the window gets a watchdog.
+    # Ten minutes sits under the ~15-minute device-code TTLs these flows use:
+    # long enough to authenticate on a phone, short enough that the surface
+    # closes well before the credential it exists to carry does.
+    watchdog = threading.Timer(args.timeout, lambda: state["shutdown"]())
+    watchdog.daemon = True
+    watchdog.start()
 
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        watchdog.cancel()
+        state["held"] = None      # the value never outlives the page
         httpd.server_close()
-    return EXIT_OK
+
+    # The exit code must not claim more than it knows. An ambiguous send may
+    # have landed, so reporting "timed out with no send" for it would be false.
+    if state["outcome"] == "delivered":
+        return EXIT_OK
+    if state["outcome"] == "ambiguous":
+        return EXIT_AMBIGUOUS
+    if state["outcome"] == "error":
+        return EXIT_ERR
+    return EXIT_TIMEOUT
 
 
 def cmd_rpc(args):

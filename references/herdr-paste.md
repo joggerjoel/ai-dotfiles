@@ -439,6 +439,36 @@ injects text into live terminals should exist while you are using it and not
 otherwise. If that is ever traded for a launchd agent, the trade belongs here in
 writing.
 
+## Three decisions the review left open
+
+**`serve` reports ambiguity without swallowing it.** Its exit table was 0
+(landed) and 7 (timed out), so a page-initiated write that went ambiguous while
+the operator walked away would exit 7 — "timed out with no send" — which is
+false about a write that may have landed. `serve` now tracks the last outcome
+and exits **3** if that outcome was ambiguous, 0 if a send landed, 7 only if
+nothing was ever sent. It does not exit *at* the ambiguous result: the
+capability stays alive so the human can decide whether to retry, which is the
+whole reason ambiguity is a distinct outcome. The window keeps its purpose and
+the exit code stops lying.
+
+**The value field stays `type="password"`, with `autocomplete="one-time-code"`.**
+Plain text would put a credential on a phone screen in public, which is the
+likelier harm. The cost of a password field is that mobile browsers offer to
+save it to a keychain — disk persistence outside this program's control and
+outside its "never written to disk" rule, which governs only what this program
+writes. `one-time-code` is the correct semantic hint for a value used once, and
+browsers do not offer to save those. This mitigates rather than eliminates: a
+determined password manager can still be told to save anything, and that is
+stated here rather than pretended away.
+
+**Plain HTTP stays, and the page explains its own warning.** Tailscale encrypts
+the transport, and a self-signed certificate would train exactly the reflex —
+clicking through certificate errors — that makes people paste credentials into
+the wrong places. The cost is a browser "Not secure" badge at the moment of
+pasting a token, which is alarming precisely when calm judgment matters. The
+page therefore carries a line saying why the badge is there and what actually
+protects the connection, rather than leaving the operator to resolve it alone.
+
 ## Testing
 
 `herdr`, `tailscale` and the socket are stubbed on `PATH`, as in

@@ -417,5 +417,97 @@ cap = os.environ["CAP_PATH"]
 sys.exit(0 if out.count(cap) <= 1 else 1)
 PY2
 
+# --- serve: the two-step flow, QR, and lifecycle -------------------------------
+
+grep -q 'qrencode ' "$PASTE_CALLS" &&
+  ok "serve renders a QR code when qrencode is present" ||
+  ko "serve renders a QR code when qrencode is present"
+
+python3 - <<'PY2' && ok "the capability URL never reaches qrencode's argv" \
+                  || ko "the capability URL never reaches qrencode's argv"
+import os, sys
+calls = open(os.environ["PASTE_CALLS"]).read()
+qr = [ln for ln in calls.splitlines() if ln.startswith("qrencode ")]
+cap = os.environ["CAP_PATH"]
+sys.exit(1 if any(cap in ln or "http" in ln for ln in qr) else 0)
+PY2
+
+# The flow: GET renders the picker, the first POST renders a confirmation view
+# and writes nothing, and only the second POST delivers.
+daemon ok
+: > "$PASTE_CALLS"
+python3 "$P" serve --port 8781 --timeout 30 > "$TMP/serve2.out" 2>&1 &
+S2=$!
+export S2
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  grep -q 'http://' "$TMP/serve2.out" 2>/dev/null && break
+  python3 -c "import time; time.sleep(0.25)"
+done
+C2=$(grep -o 'http://[^ ]*' "$TMP/serve2.out" | head -1); C2=${C2##*/}
+export C2
+
+post() {  # <body> -> "status|body"
+  python3 - "$1" <<'PY2'
+import os, sys, urllib.error, urllib.request
+body = sys.argv[1].encode()
+req = urllib.request.Request(
+    "http://127.0.0.1:8781/" + os.environ["C2"], data=body, method="POST")
+req.add_header("Origin", "http://127.0.0.1:8781")
+req.add_header("Content-Type", "application/x-www-form-urlencoded")
+try:
+    r = urllib.request.urlopen(req, timeout=5)
+    print("%s|%s" % (r.status, r.read().decode("utf-8", "replace")))
+except urllib.error.HTTPError as e:
+    print("%s|%s" % (e.code, e.read().decode("utf-8", "replace")))
+except Exception as e:
+    print("ERR|%s" % e)
+PY2
+}
+
+r1=$(post 'pane_id=w3:p1&tab_id=w3:t1&value=SENTINEL-PAGE')
+printf '%s' "$r1" | grep -q '^200' &&
+  ok "the first POST is accepted" ||
+  ko "the first POST is accepted" "$r1"
+
+printf '%s' "$r1" | grep -qi 'confirm' &&
+  ok "the first POST renders a confirmation view" ||
+  ko "the first POST renders a confirmation view"
+
+[ -s "$PASTE_WIRE" ] &&
+  ko "the first POST writes nothing to the socket" "the wire has content" ||
+  ok "the first POST writes nothing to the socket"
+
+printf '%s' "$r1" | grep -q 'SENTINEL-PAGE' &&
+  ko "the value never appears in a response body" "echoed back" ||
+  ok "the value never appears in a response body"
+
+r2=$(post 'confirm=yes')
+printf '%s' "$r2" | grep -q '^200' &&
+  ok "the second POST delivers" ||
+  ko "the second POST delivers" "$r2"
+
+grep -q 'SENTINEL-PAGE' "$PASTE_WIRE" &&
+  ok "the value reaches the socket only on the second POST" ||
+  ko "the value reaches the socket only on the second POST"
+
+# Bounded wait, never `wait` outright: before the watchdog exists a serve that
+# does not shut itself down would hang the suite instead of failing it.
+S2_CODE=$(python3 - <<'PY2'
+import os, subprocess, sys, time
+pid = os.environ["S2"]
+for _ in range(40):
+    if subprocess.run(["kill", "-0", pid], capture_output=True).returncode != 0:
+        print("exited"); sys.exit(0)
+    time.sleep(0.25)
+print("still-running"); sys.exit(0)
+PY2
+)
+if [ "$S2_CODE" = exited ]; then
+  wait "$S2"; eq "serve exits 0 after a delivered send" 0 "$?"
+else
+  ko "serve exits 0 after a delivered send" "still running after 10s"
+  kill "$S2" 2>/dev/null; wait "$S2" 2>/dev/null
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
