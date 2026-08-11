@@ -157,3 +157,17 @@
 # Widen with:  -e flock_hosts=aorus_ai      Skip with:  --skip-tags flock
 - import_playbook: provision-herdr-flock.yml
   tags: [flock]
+
+# ── 8. Claude OAuth token (aorus_ai) ────────────────────────────────────────
+# Re-asserts the long-lived token on every fleet host. This is the step that
+# retires the auth countdown rather than monitoring it: a per-host claude login
+# cannot be driven remotely at all (random loopback port, and the URL never
+# reaches a pipe), while the refresh token expires ~30 days from the original
+# interactive login and is NOT extended by use. A one-year minted token,
+# re-asserted here, is the only path that does not eventually require sitting
+# at each machine.
+# Needs CLAUDE_CODE_OAUTH_TOKEN in ~/.claude/.env on the control node; the run
+# fails loudly if it is absent rather than installing an empty export.
+# Skip with:  ansible-playbook update.yml --skip-tags claude-token
+- import_playbook: deploy-claude-token.yml
+  tags: [claude-token]

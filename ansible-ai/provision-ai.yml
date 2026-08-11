@@ -341,3 +341,14 @@
           claude: {{ claude_ver.stdout | default('MISSING', true) }} |
           {{ sibling_clis.stdout | default('codex=? cursor=?', true) }} |
           dotfiles: {{ 'configured' if (install_dotfiles | bool) else 'skipped' }}
+
+# ── Claude OAuth token ───────────────────────────────────────────────────────
+# A freshly provisioned host has the claude BINARY but no credential, and it
+# cannot get one on its own: claude's login binds a random loopback port on the
+# machine running it, so a browser anywhere else cannot complete it. Without
+# this step a new worker is installed and unauthenticated, and the only fix is
+# physically sitting at it.
+# Needs CLAUDE_CODE_OAUTH_TOKEN in ~/.claude/.env on the control node.
+# Skip with:  ansible-playbook provision-ai.yml --skip-tags claude-token
+- import_playbook: deploy-claude-token.yml
+  tags: [claude-token]

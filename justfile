@@ -196,9 +196,12 @@ cache-test:
 auth-status:
     @bash {{dotfiles}}/scripts/herdr-auth.sh status
 
-# Only `cursor` is implemented. codex and claude need a PTY-driven flow that is
-# not built yet; they exit 2 with "unknown or unimplemented cli".
-# [herdr] log a CLI in across the fleet: `just auth-login cursor`
+# `cursor` runs the fleet in one parallel pass. `codex` runs one host at a time
+# and prints a device code per host for you to enter at auth.openai.com — serial
+# because each code expires in 15 minutes. `claude` exits 2 and stays that way:
+# its flow cannot be driven per-host at all, so it is a token-distribution
+# problem instead. See references/herdr-auth.md.
+# [herdr] log a CLI in across the fleet: `just auth-login cursor|codex`
 auth-login CLI:
     @bash {{dotfiles}}/scripts/herdr-auth.sh login --cli {{CLI}}
 
@@ -222,9 +225,28 @@ paste-serve:
 paste-test:
     @bash {{dotfiles}}/scripts/herdr-paste.test.sh
 
+# One command: prompt for the token if it is missing, prove it authenticates
+# BEFORE writing anything, store it 0600, then deploy to the fleet. Prompting
+# and writing happen in the same process — a `read` in one shell and a `printf`
+# in another produced an empty CLAUDE_CODE_OAUTH_TOKEN= line that passed every
+# "is it set?" check and authenticated nothing.
+# Needs no inventory: hosts resolve through ~/.ssh/config unless
+# ansible-ai/inventory.local.yml exists, which is preferred when it does.
+# [herdr] put the Claude fleet token in place: `just claude-token [host...]`
+claude-token *HOSTS:
+    @bash {{dotfiles}}/scripts/claude-token.sh {{HOSTS}}
+
+# [herdr] same, but write nothing — proves the token works and shows the diff
+claude-token-check *HOSTS:
+    @bash {{dotfiles}}/scripts/claude-token.sh --check {{HOSTS}}
+
 # [local] herdr-auth: unit tests (scripts/herdr-auth.test.sh)
 auth-test:
     @bash {{dotfiles}}/scripts/herdr-auth.test.sh
+
+# [local] claude-token: unit tests (scripts/claude-token.test.sh)
+claude-token-test:
+    @bash {{dotfiles}}/scripts/claude-token.test.sh
 
 # [local] per-session cache/token report via ccusage (on demand — never in the statusline)
 cache-report *ARGS:

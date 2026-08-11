@@ -18,7 +18,12 @@ set -euo pipefail
 #   6. Prune old backups (last 7 days + first-of-month snapshots).
 #   7. With --all: propagate to the fleet servers via
 #      ansible-ai/update.yml --limit aorus_ai (this machine was already
-#      updated by steps 1-6, so the playbook skips it).
+#      updated by steps 1-6, so the playbook skips it). That playbook also
+#      re-asserts the Claude OAuth token on every server
+#      (ansible-ai/deploy-claude-token.yml) — the step that keeps the fleet
+#      authenticated, since a per-host claude login cannot be driven remotely.
+#      It needs CLAUDE_CODE_OAUTH_TOKEN in ~/.claude/.env and fails loudly
+#      without it. Skip with --skip-tags claude-token.
 #
 # Flags:
 #   --all          After the local update, run the fleet playbook so every
