@@ -67,10 +67,10 @@ got=$(HERDR_AUTH_HOSTS="aorus" bash "$A" _probe claude aorus)
 [ "$got" = missing ] && ok "claude: no credentials file -> missing" \
                      || ko "claude: no credentials file -> missing" "got '$got'"
 
-fixture aorus.claude 'authed'
+fixture aorus.claude 'authed:720'
 got=$(HERDR_AUTH_HOSTS="aorus" bash "$A" _probe claude aorus)
-[ "$got" = authed ] && ok "claude: credentials file -> authed" \
-                    || ko "claude: credentials file -> authed" "got '$got'"
+[ "$got" = authed:720 ] && ok "claude: credentials file -> authed" \
+                        || ko "claude: credentials file -> authed" "got '$got'"
 
 # --- status table -----------------------------------------------------------
 
@@ -79,7 +79,7 @@ fixture aorus.codex  'Not logged in'
 fixture aorus.claude 'missing'
 fixture aorus4.cursor 'Not logged in'
 fixture aorus4.codex  'Not logged in'
-fixture aorus4.claude 'authed'
+fixture aorus4.claude 'authed:720'
 
 out=$(HERDR_AUTH_HOSTS="aorus aorus4" bash "$A" status)
 printf '%s' "$out" | grep -q 'aorus4' \
@@ -88,7 +88,7 @@ printf '%s' "$out" | grep -q 'aorus4' \
 # Pin the COLUMN, not just the row: aorus4 is missing/missing/authed, so
 # `authed` must be the third state on the line. A permissive `aorus4.*authed`
 # would pass even if authed landed in the cursor or codex column.
-printf '%s' "$out" | grep -qE '^aorus4 +missing +missing +authed' \
+printf '%s' "$out" | grep -qE '^aorus4 +missing +missing +authed/30d' \
   && ok "status: reports aorus4 claude as authed" \
   || ko "status: reports aorus4 claude as authed" "$(printf '%s' "$out" | grep aorus4)"
 # aorus contributes 0 authed / 3 missing; aorus4 contributes 1 authed (claude)
@@ -514,17 +514,28 @@ got=$(classify '{"mcpOAuth":{"plugin:supabase|abc":{"serverName":"supabase","acc
   || ko "claude: a file with only mcpOAuth entries is not a Claude login" "got '$got'"
 
 got=$(classify "{\"claudeAiOauth\":{\"refreshToken\":\"r\",\"refreshTokenExpiresAt\":$FUTURE}}")
-[ "$got" = authed ] \
-  && ok "claude: a live refresh token is authed" \
-  || ko "claude: a live refresh token is authed" "got '$got'"
+case "$got" in
+  authed:*) ok "claude: a live refresh token is authed" ;;
+  *) ko "claude: a live refresh token is authed" "got '$got'" ;;
+esac
+
+# The hours must be the REAL remaining time, not a placeholder. A verdict that
+# always said `authed:0` would satisfy the pattern above while making the
+# countdown in `status` a lie. +30d is 720h; allow an hour of slack for the
+# clock moving between fixture and assertion.
+hrs=${got#authed:}
+[ "$hrs" -ge 719 ] && [ "$hrs" -le 720 ] \
+  && ok "claude: the authed verdict carries the real hours remaining" \
+  || ko "claude: the authed verdict carries the real hours remaining" "got '$got', wanted ~720"
 
 # The semantic the fleet measurement established: the access token is reissued
 # every time claude starts, so its expiry says nothing about health. Only the
 # refresh token decides.
 got=$(classify "{\"claudeAiOauth\":{\"refreshToken\":\"r\",\"expiresAt\":$PAST,\"refreshTokenExpiresAt\":$FUTURE}}")
-[ "$got" = authed ] \
-  && ok "claude: an expired ACCESS token does not make a host missing" \
-  || ko "claude: an expired ACCESS token does not make a host missing" "got '$got'"
+case "$got" in
+  authed:*) ok "claude: an expired ACCESS token does not make a host missing" ;;
+  *) ko "claude: an expired ACCESS token does not make a host missing" "got '$got'" ;;
+esac
 
 # aorus6's real shape: block present, refresh token gone.
 got=$(classify "{\"claudeAiOauth\":{\"refreshTokenExpiresAt\":$FUTURE}}")
@@ -546,9 +557,10 @@ esac
 # The window is a threshold, not a constant: the same file reads healthy when
 # the caller cares about a shorter horizon.
 got=$(classify "{\"claudeAiOauth\":{\"refreshToken\":\"r\",\"refreshTokenExpiresAt\":$SOON}}" 4)
-[ "$got" = authed ] \
-  && ok "claude: the warning window is honoured, not hard-coded" \
-  || ko "claude: the warning window is honoured, not hard-coded" "got '$got'"
+case "$got" in
+  authed:*) ok "claude: the warning window is honoured, not hard-coded" ;;
+  *) ko "claude: the warning window is honoured, not hard-coded" "got '$got'" ;;
+esac
 
 got=$(classify 'not json at all')
 [ "$got" = missing ] \
@@ -565,6 +577,73 @@ got=$(classify '{"claudeAiOauth":{"refreshToken":"r","refreshTokenExpiresAt":tru
 [ "$got" = missing ] \
   && ok "claude: a non-numeric expiry is missing, not a truthy timestamp" \
   || ko "claude: a non-numeric expiry is missing, not a truthy timestamp" "got '$got'"
+
+# --- status: the countdown suffix ---------------------------------------------
+#
+# `token` on its own is a dead end for an operator: it says the host runs on the
+# fleet token and nothing about whether anything remains underneath it. Every
+# host on the fleet reads `token`, so the table went uniform on 2026-08-12 and
+# stopped distinguishing a host with a month of stored credential left from one
+# whose credential had already blanked. The suffix restores that.
+fixture aorus.cursor  'Not logged in'
+fixture aorus.codex   'Not logged in'
+fixture aorus4.cursor 'Not logged in'
+fixture aorus4.codex  'Not logged in'
+
+fixture aorus.claude  'token/authed:648'    # 27d of stored credential left
+fixture aorus4.claude 'token/missing'       # stored credential blanked or absent
+out=$(HERDR_AUTH_HOSTS="aorus aorus4" bash "$A" status)
+
+printf '%s' "$out" | grep -qE '^aorus +missing +missing +token/27d' \
+  && ok "status: a token host shows what is left of its stored credential" \
+  || ko "status: a token host shows what is left of its stored credential" \
+        "$(printf '%s' "$out" | grep '^aorus ')"
+
+printf '%s' "$out" | grep -qE '^aorus4 +missing +missing +token/--' \
+  && ok "status: a token host with no stored credential shows --" \
+  || ko "status: a token host with no stored credential shows --" \
+        "$(printf '%s' "$out" | grep aorus4)"
+
+# The suffix is information, never a verdict. A host on the fleet token is
+# working, whatever is or is not left underneath, so `token/--` must still tally
+# as authed. Counting it missing would report a healthy fleet as broken — which
+# is the failure this whole table exists to avoid.
+printf '%s' "$out" | grep -q '2 authed, 4 missing, 0 unreachable' \
+  && ok "status: token/-- still counts as authed, not missing" \
+  || ko "status: token/-- still counts as authed, not missing" \
+        "$(printf '%s' "$out" | tail -1)"
+
+# Days are useless at the sharp end. Under two days the suffix switches to
+# hours, so the last day before a credential dies is legible rather than `0d`.
+fixture aorus.claude 'token/expiring:41'
+out=$(HERDR_AUTH_HOSTS="aorus" bash "$A" status)
+printf '%s' "$out" | grep -qE '^aorus +missing +missing +token/41h' \
+  && ok "status: under 48h the suffix is hours, not a rounded-down 0d" \
+  || ko "status: under 48h the suffix is hours, not a rounded-down 0d" \
+        "$(printf '%s' "$out" | grep '^aorus ')"
+
+# A host NOT on the fleet token is the case where the countdown actually governs
+# — it is the only credential it has — so it must be booked in the expiring
+# summary, with the deadline named.
+fixture aorus.claude 'expiring:41'
+out=$(HERDR_AUTH_HOSTS="aorus" bash "$A" status)
+printf '%s' "$out" | grep -qE '^aorus +missing +missing +exp/41h' \
+  && ok "status: a host on its own lapsing credential reads exp/41h" \
+  || ko "status: a host on its own lapsing credential reads exp/41h" \
+        "$(printf '%s' "$out" | grep '^aorus ')"
+printf '%s' "$out" | grep -q 'expiring within .*aorus/claude(41h)' \
+  && ok "status: an expiring host is still named in the summary line" \
+  || ko "status: an expiring host is still named in the summary line" "$out"
+
+# A token host inside the warning window must NOT be booked for action: the
+# fleet token is what authenticates it, and the stored credential lapsing
+# changes nothing. Booking it would send an operator to perform a login that is
+# both unnecessary and, for claude, impossible.
+fixture aorus.claude 'token/expiring:41'
+out=$(HERDR_AUTH_HOSTS="aorus" bash "$A" status)
+printf '%s' "$out" | grep -q 'expiring within' \
+  && ko "status: a token host is not booked as expiring work" "$out" \
+  || ok "status: a token host is not booked as expiring work"
 
 # --- codex: the SUCCESS path --------------------------------------------------
 #

@@ -115,7 +115,10 @@ def verdict():
         return "missing"
     if hours < warn:
         return "expiring:%d" % int(hours)
-    return "authed"
+    # Carries the hours even when healthy. The caller renders a countdown from
+    # it, and a bare `authed` left the status table unable to say how much of a
+    # credential was left — which is the whole point of reading this field.
+    return "authed:%d" % int(hours)
 
 sys.stdout.write(verdict())
 PY
@@ -135,20 +138,28 @@ probe_claude() {
   # rebuilt into a VARIABLE on the far side — `python3 -c "$(...)"` would
   # brace-expand it there exactly as it did here. See references/herdr-auth.md.
   b64="$(printf '%s' "$prog" | base64 | tr -d '\n')"
-  # The env var is checked FIRST because it wins. Verified on aorus8: a host
-  # with a working stored credential answers `ok` normally and
-  # `401 OAuth access token is invalid` with a bogus CLAUDE_CODE_OAUTH_TOKEN
-  # set — so on a host carrying the fleet token, the credentials file is not
-  # what authenticates and reporting on it would describe the wrong thing.
+  # Reports BOTH facts, always: which credential is in force, and what is left
+  # of the stored one underneath it.
+  #
+  # The env var wins where they disagree — verified on aorus8, which answers
+  # `ok` normally and `401 OAuth access token is invalid` with a bogus
+  # CLAUDE_CODE_OAUTH_TOKEN set. An earlier version took that to mean the file
+  # was not worth reading on a token host and returned a bare `token`. Once the
+  # whole fleet carried the token every row read `token` and the table went
+  # uniform, unable to tell a host with a month of credential left from one that
+  # had already blanked. So the file is read either way and the env var only
+  # decides the prefix.
   #
   # Read in a `bash -lc` shell, the same login-but-non-interactive shape herdr
   # wires panes with, so this sees the token exactly when a pane would.
-  out="$(remote "$1" "bash -lc 'if [ -n \"\${CLAUDE_CODE_OAUTH_TOKEN:-}\" ]; then printf token; else P=\$(echo $b64 | base64 -d); HERDR_AUTH_WARN_HOURS=$CLAUDE_WARN_HOURS; export HERDR_AUTH_WARN_HOURS; cat ~/.claude/.credentials.json 2>/dev/null | python3 -c \"\$P\"; fi'")"
+  out="$(remote "$1" "bash -lc 'P=\$(echo $b64 | base64 -d); HERDR_AUTH_WARN_HOURS=$CLAUDE_WARN_HOURS; export HERDR_AUTH_WARN_HOURS; S=\$(cat ~/.claude/.credentials.json 2>/dev/null | python3 -c \"\$P\"); if [ -n \"\${CLAUDE_CODE_OAUTH_TOKEN:-}\" ]; then printf token/; fi; printf %s \"\${S:-missing}\"'")"
   case "$out" in
-    token)      echo token ;;
-    authed)     echo authed ;;
-    expiring:*) echo "$out" ;;
-    *)          echo missing ;;
+    token/authed:*|token/expiring:*) echo "$out" ;;
+    authed:*|expiring:*)             echo "$out" ;;
+    # Anything else from a token host still means the host works — only the
+    # stored credential is unreadable. Degrade the suffix, never the verdict.
+    token|token/*)                   echo token/missing ;;
+    *)                               echo missing ;;
   esac
 }
 
@@ -278,8 +289,19 @@ PY
 )"
 }
 
+# Hours -> a short suffix for the status table. Days once past two days, hours
+# below that: `0d` on the last day before a credential dies is exactly when the
+# number needs to be legible. A non-numeric input renders `--` rather than
+# propagating garbage into the table.
+remaining_label() {
+  case "${1:-}" in
+    ''|*[!0-9]*) printf -- '--'; return 0 ;;
+  esac
+  if [ "$1" -ge 48 ]; then printf '%dd' $(( $1 / 24 )); else printf '%dh' "$1"; fi
+}
+
 cmd_status() {
-  local host cli state a=0 m=0 u=0 soon=""
+  local host cli state rest cell a=0 m=0 u=0 soon=""
   printf '%-10s %-10s %-10s %-10s\n' HOST CURSOR CODEX CLAUDE
   for host in $HOSTS_STR; do
     printf '%-10s' "$host"
@@ -287,22 +309,38 @@ cmd_status() {
       for cli in cursor codex claude; do
         state="$(probe "$cli" "$host")"
         case "$state" in
-          # Still logged in, so it counts as authed — but it is the one state
-          # that needs an action booked before it becomes `missing`, and a
-          # count alone would hide that.
-          expiring:*)
-            printf ' %-10s' "exp ${state#expiring:}h"
-            a=$((a + 1))
-            soon="$soon $host/$cli(${state#expiring:}h)"
-            ;;
           # Distinguished from `authed` on purpose: it says the host runs on the
           # fleet token rather than its own login, which is what you need to
           # know when one revoked token would take every `token` host down at
           # once. A bare "authed" would hide that shared fate.
-          token)
-            printf ' %-10s' token
+          #
+          # The suffix is what remains of the stored credential underneath, and
+          # it is information only — NOT booked into `soon`. The fleet token is
+          # what authenticates these hosts, so a lapsing stored credential
+          # requires nothing, and for claude the login it would send you to
+          # perform cannot be driven remotely anyway.
+          token/*)
+            rest=${state#token/}
+            case "$rest" in
+              authed:*|expiring:*) cell="token/$(remaining_label "${rest#*:}")" ;;
+              *)                   cell="token/--" ;;
+            esac
+            printf ' %-10s' "$cell"
             a=$((a + 1))
             ;;
+          # Still logged in, so it counts as authed — but it is the one state
+          # that needs an action booked before it becomes `missing`, and a
+          # count alone would hide that.
+          expiring:*)
+            printf ' %-10s' "exp/$(remaining_label "${state#expiring:}")"
+            a=$((a + 1))
+            soon="$soon $host/$cli(${state#expiring:}h)"
+            ;;
+          authed:*)
+            printf ' %-10s' "authed/$(remaining_label "${state#authed:}")"
+            a=$((a + 1))
+            ;;
+          # cursor and codex report no expiry, so they stay bare.
           authed)
             printf ' %-10s' authed
             a=$((a + 1))
