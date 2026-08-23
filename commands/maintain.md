@@ -25,7 +25,7 @@ restarts, file edits). Read-only checks never need confirmation.
    - dotfiles checkout: `git -C <repo> status --porcelain` + `git log --oneline -1`
      vs `origin/main` — is this host running stale or dirty config?
    - on a node (if `~/Library/LaunchAgents/dev.herdr.node.plist` exists):
-     `scripts/herdr-node.sh status` — server running, exactly one default session,
+     `~/Developer/herdr/scripts/herdr-node.sh status` — server running, exactly one default session,
      bridge listening?
 3. **Judgment layer.** For each `fail` in the log, decide: transient (note it),
    config drift (propose the fix), or real breakage (diagnose root cause before
@@ -52,7 +52,7 @@ restarts, file edits). Read-only checks never need confirmation.
   calling anything broken.
 - **Problem:** `herdr server stop` seems ignored (server right back up).
   **Solution:** that is launchd KeepAlive doing its job; use
-  `scripts/herdr-node.sh down` (or `service uninstall`) rather than raw stops.
+  `~/Developer/herdr/scripts/herdr-node.sh down` (or `service uninstall`) rather than raw stops.
 - **Problem:** subagent processes accumulating.
   **Solution:** `scripts/cleanup-subagents.sh` (already in the deterministic stage);
   verify count after.
