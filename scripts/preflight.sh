@@ -5,8 +5,14 @@
 # continue and report rather than abort on the first broken asset.
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DOTFILES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# -P: physical/resolved. _probe_one_link resolves relative link targets the
+# same way (pwd -P); a plain `pwd` here would preserve a symlinked ancestor
+# (symlinked $HOME, symlinked /Users, a bind mount) in DOTFILES_DIR while a
+# repo-owned link's target is always an absolute, resolved path — the two
+# would then never prefix-match and every healthy link would misreport as
+# "stale but resolving".
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+DOTFILES_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 # shellcheck source=lib/integrations.sh
 source "$DOTFILES_DIR/lib/integrations.sh"
 

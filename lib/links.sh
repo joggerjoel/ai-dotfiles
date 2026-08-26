@@ -184,7 +184,12 @@ relink_all() {
 
   local summary
   summary="$LINK_CHANGED changed, $LINK_OK verified, $LINK_SKIPPED skipped, $LINK_FAILED failed"
-  [ -n "$LINKS_DRY_RUN" ] && summary="$summary  (dry run)"
+  # `if`, not `&&`: with `&&` this would be the last statement executed
+  # whenever LINKS_DRY_RUN is unset, so the function's implicit return would
+  # carry the failed test's exit status and kill the caller under `set -e`.
+  if [ -n "$LINKS_DRY_RUN" ]; then
+    summary="$summary  (dry run)"
+  fi
   if [ "$LINK_CHANGED" -gt 0 ] || [ "$LINK_FAILED" -gt 0 ]; then
     warn "$summary"
   else

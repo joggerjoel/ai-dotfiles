@@ -768,6 +768,47 @@ else
   report fail "links probe fails the run when drift is present" "got rc=$rc"
 fi
 
+# preflight.sh:9 computes its own DOTFILES_DIR (which PREFLIGHT_DOTFILES_DIR
+# defaults to) via a plain `cd .. && pwd` — logical, not physical. Every test
+# above bypasses that by overriding PREFLIGHT_DOTFILES_DIR directly, so none
+# of them exercise line 9's own resolution. On a host whose checkout is
+# reached through a symlinked parent (symlinked $HOME, symlinked /Users, a
+# bind mount), a plain `pwd` after `cd` through that symlink preserves the
+# symlinked text instead of resolving it, while a real repo-owned link's
+# target is an absolute, fully-resolved path. The two would then fail to
+# prefix-match and every healthy link would misclassify as "stale but
+# resolving" — a healthy node reported as total drift.
+#
+# Reproduce that without touching the real machine: symlink a temp dir at an
+# ancestor of the real checkout, invoke the real preflight.sh via that
+# symlinked route (no PREFLIGHT_DOTFILES_DIR override — line 9 must compute
+# it), and point a fixture link at a REAL, resolved path inside the actual
+# checkout (what a correctly-resolved repo-owned link looks like). Under the
+# bug, DOTFILES_DIR resolves to the symlinked route and never prefix-matches
+# the link's real-path target.
+SYMROOT=$(mktemp -d)
+add_cleanup_dir "$SYMROOT"
+REPO_REAL="$(cd "$REPO_DIR" && pwd -P)"
+ln -s "$REPO_REAL" "$SYMROOT/repo-symlink"
+mkdir -p "$SYMROOT/home/.claude/scripts"
+ln -sfn "$REPO_REAL/scripts/preflight.sh" "$SYMROOT/home/.claude/scripts/self.sh"
+
+symlink_out=$(PATH="$TESTS_DIR/stubs:$PATH" \
+  PREFLIGHT_CLAUDE_JSON="$TESTS_DIR/fixtures/healthy/claude.json" \
+  PREFLIGHT_SETTINGS_JSON="$TESTS_DIR/fixtures/healthy/settings.json" \
+  PREFLIGHT_ENV_FILE="$TESTS_DIR/fixtures/healthy/env" \
+  PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/healthy/skills" \
+  PREFLIGHT_LINK_DIRS="$SYMROOT/home/.claude/scripts" \
+  PREFLIGHT_LINK_FILES="" \
+  bash "$SYMROOT/repo-symlink/scripts/preflight.sh" --json 2>/dev/null)
+
+if grep -q "^pass current checkout$" \
+   <<<"$(jq -r '.assets[] | select(.class=="link" and .name=="self.sh") | "\(.verdict) \(.detail)"' <<<"$symlink_out")"; then
+  report pass "links probe resolves DOTFILES_DIR through a symlinked parent"
+else
+  report fail "links probe resolves DOTFILES_DIR through a symlinked parent" "$symlink_out"
+fi
+
 # The probe is read-only. Any write to the fixture is a defect.
 links_tree_hash() {
   # names + link targets + sizes: catches a created, deleted, retargeted, or
@@ -1053,28 +1094,50 @@ links_case relink_reset _t_relink_reset
 
 # 11. AGENTS.md failures are counted, not erased by the reset. This was the
 # review's broadest finding: called BEFORE relink_all, they printed under
-# "0 failed".
+# "0 failed". A success-only run can't exercise that claim, so force an
+# actual failure: $HOME/.gemini exists but is read-only, so link_file's
+# `ln -sfn` into it fails and increments LINK_FAILED. Assert the count is
+# non-zero AFTER relink_all returns (i.e. the reset didn't erase it) and
+# that a non-zero number is in the printed summary, not just the word
+# "failed" (which the summary contains even at zero).
 _t_agents_counted() {
   echo 'x' > "$CLAUDE_DIR/CLAUDE.md"
+  mkdir -p "$HOME/.gemini"
+  chmod 555 "$HOME/.gemini"
+  LINKS_OUT=""
   relink_all
-  if [ -L "$HOME/AGENTS.md" ]; then
-    report pass "relink_all links AGENTS.md and counts it"
+  chmod 755 "$HOME/.gemini"
+  if [ "$LINK_FAILED" -ge 1 ] \
+     && printf '%s' "$LINKS_OUT" | grep -qE '[1-9][0-9]* failed' \
+     && [ -L "$HOME/AGENTS.md" ]; then
+    report pass "relink_all links AGENTS.md and counts a failure, not erasing it"
   else
-    report fail "relink_all links AGENTS.md and counts it" "$LINKS_OUT"
+    report fail "relink_all links AGENTS.md and counts a failure, not erasing it" \
+      "failed=$LINK_FAILED out=$LINKS_OUT"
   fi
 }
 links_case agents_counted _t_agents_counted
 
-# 12. the four counters account for every link attempted
+# 12. the four counters account for every link attempted. Fixture is fully
+# controlled, so the expected total is derived, not guessed:
+#   1  statusline.sh          — always present (links_fixture_setup)
+# + 1  scripts/g.sh           — seeded below
+# + 1  hooks/h.sh             — seeded below
+# + 0  bin/*                  — empty in the fixture, untouched here
+# + 0  codex/prompts/*.md     — empty in the fixture, untouched here
+# + 0  link_agent_instructions — fixture ships no CLAUDE_DIR/CLAUDE.md, so
+#      link_agent_instructions warns and returns before calling link_file
+# = 3 link_file calls, each landing in exactly one counter.
 _t_counter_sum() {
   echo 'x' > "$DOTFILES_DIR/scripts/g.sh"
   echo 'x' > "$DOTFILES_DIR/hooks/h.sh"
   relink_all
   total=$(( LINK_CHANGED + LINK_OK + LINK_SKIPPED + LINK_FAILED ))
-  if [ "$total" -gt 0 ]; then
-    report pass "relink_all counters sum to the links attempted"
+  if [ "$total" -eq 3 ]; then
+    report pass "relink_all counters sum to exactly the 3 links attempted"
   else
-    report fail "relink_all counters sum to the links attempted" "total=$total"
+    report fail "relink_all counters sum to exactly the 3 links attempted" \
+      "total=$total (changed=$LINK_CHANGED ok=$LINK_OK skipped=$LINK_SKIPPED failed=$LINK_FAILED)"
   fi
 }
 links_case counter_sum _t_counter_sum
