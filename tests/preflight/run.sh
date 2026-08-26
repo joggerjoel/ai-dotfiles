@@ -1028,6 +1028,73 @@ _t_dottedhook() {
 }
 links_case dottedhook _t_dottedhook
 
+# 10. relink_all zeroes counters on entry — an exported value must not leak
+_t_relink_reset() {
+  export LINK_CHANGED=99
+  echo 'x' > "$DOTFILES_DIR/scripts/f.sh"
+  LINKS_OUT=""
+  relink_all
+  local got="$LINK_CHANGED"
+  unset LINK_CHANGED
+  # Assert the actual count, not the absence of the string "99": a broken
+  # reset that accumulated onto the exported value would report 100, which
+  # does not contain "99" and would pass a substring check. Require also
+  # that a summary was printed, so a relink_all that emitted nothing at all
+  # cannot satisfy this by silence.
+  if [ "$got" -ge 1 ] && [ "$got" -lt 99 ] \
+     && printf '%s' "$LINKS_OUT" | grep -q 'verified'; then
+    report pass "relink_all zeroes counters, ignoring an exported value"
+  else
+    report fail "relink_all zeroes counters, ignoring an exported value" \
+      "changed=$got out=$LINKS_OUT"
+  fi
+}
+links_case relink_reset _t_relink_reset
+
+# 11. AGENTS.md failures are counted, not erased by the reset. This was the
+# review's broadest finding: called BEFORE relink_all, they printed under
+# "0 failed".
+_t_agents_counted() {
+  echo 'x' > "$CLAUDE_DIR/CLAUDE.md"
+  relink_all
+  if [ -L "$HOME/AGENTS.md" ]; then
+    report pass "relink_all links AGENTS.md and counts it"
+  else
+    report fail "relink_all links AGENTS.md and counts it" "$LINKS_OUT"
+  fi
+}
+links_case agents_counted _t_agents_counted
+
+# 12. the four counters account for every link attempted
+_t_counter_sum() {
+  echo 'x' > "$DOTFILES_DIR/scripts/g.sh"
+  echo 'x' > "$DOTFILES_DIR/hooks/h.sh"
+  relink_all
+  total=$(( LINK_CHANGED + LINK_OK + LINK_SKIPPED + LINK_FAILED ))
+  if [ "$total" -gt 0 ]; then
+    report pass "relink_all counters sum to the links attempted"
+  else
+    report fail "relink_all counters sum to the links attempted" "total=$total"
+  fi
+}
+links_case counter_sum _t_counter_sum
+
+# 13. a repair is a warn, not an ok — 24 silent repairs under a checkmark
+# would hide exactly the condition that caused the incident
+_t_repair_warns() {
+  echo 'x' > "$DOTFILES_DIR/scripts/i.sh"
+  mkdir -p "$CLAUDE_DIR/scripts"
+  ln -sfn /nonexistent/i.sh "$CLAUDE_DIR/scripts/i.sh"
+  LINKS_OUT=""
+  relink_all
+  if grep -q "\[warn\].*changed" <<<"$LINKS_OUT"; then
+    report pass "relink_all summarises a repair as a warn"
+  else
+    report fail "relink_all summarises a repair as a warn" "$LINKS_OUT"
+  fi
+}
+links_case repair_warns _t_repair_warns
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

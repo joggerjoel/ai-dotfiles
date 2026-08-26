@@ -156,3 +156,39 @@ link_agent_instructions() {
   link_file "$canonical" "$HOME/AGENTS.md"
   return 0
 }
+
+# The single entry point. Every call site calls this and nothing else.
+#
+# link_agent_instructions runs INSIDE this function rather than before it: if
+# it ran first, its link_file failures would increment LINK_FAILED and then be
+# erased by the reset below, so a failed AGENTS.md link would print under
+# "0 failed". Inside, every link is counted once and update.sh gains the
+# ability to repair those four links, which it otherwise could not reach.
+relink_all() {
+  : "${DOTFILES_DIR:?relink_all requires DOTFILES_DIR}"
+  : "${CLAUDE_DIR:?relink_all requires CLAUDE_DIR}"
+
+  # Assigned, not defaulted: ${VAR:-0} does not stop an exported value
+  # leaking in — `LINK_CHANGED=7 bash -c 'echo ${LINK_CHANGED:-0}'` prints 7.
+  LINK_CHANGED=0
+  LINK_OK=0
+  LINK_SKIPPED=0
+  LINK_FAILED=0
+
+  link_statusline
+  link_repo_scripts
+  link_claude_hooks
+  link_bin_tools
+  link_codex_prompts
+  link_agent_instructions
+
+  local summary
+  summary="$LINK_CHANGED changed, $LINK_OK verified, $LINK_SKIPPED skipped, $LINK_FAILED failed"
+  [ -n "$LINKS_DRY_RUN" ] && summary="$summary  (dry run)"
+  if [ "$LINK_CHANGED" -gt 0 ] || [ "$LINK_FAILED" -gt 0 ]; then
+    warn "$summary"
+  else
+    ok "$summary"
+  fi
+  return 0
+}
