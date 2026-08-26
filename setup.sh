@@ -31,6 +31,8 @@ fi
 # ── Asset registry ───────────────────────────────────────────────
 # shellcheck source=lib/integrations.sh
 source "$DOTFILES_DIR/lib/integrations.sh"
+# shellcheck source=lib/links.sh
+source "$DOTFILES_DIR/lib/links.sh"
 
 # Postgres MCP package for self-hosted ("internal") Supabase. The old reference
 # server @modelcontextprotocol/server-postgres is deprecated; this one is
@@ -585,28 +587,6 @@ remove_mcp_server() {
   echo "$tmp" > "$CLAUDE_JSON"
 }
 
-link_file() {
-  local src="$1" dst="$2"
-  local dst_dir
-  dst_dir=$(dirname "$dst")
-  mkdir -p "$dst_dir"
-
-  if [ -L "$dst" ]; then
-    rm "$dst"
-  elif [ -f "$dst" ]; then
-    # Backup existing file
-    local backup_dir
-    backup_dir="$CLAUDE_DIR/.backups/setup-$(date +%Y%m%d_%H%M%S)"
-    mkdir -p "$backup_dir"
-    cp "$dst" "$backup_dir/$(basename "$dst")"
-    warn "Backed up existing $(basename "$dst") to $backup_dir/"
-    rm "$dst"
-  fi
-
-  ln -s "$src" "$dst"
-  ok "$(basename "$dst") -> $(basename "$src")"
-}
-
 # ── Settings installation ────────────────────────────────────────
 # Claude Code refuses to read feature flags when any of DISABLE_TELEMETRY,
 # DO_NOT_TRACK, or CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is set, which
@@ -765,73 +745,6 @@ POLICY
   ok "CLAUDE.md assembled (base + $profile$([ -f "$local_md" ] && echo " + local"))"
 }
 
-# ── Unify agent instructions: AGENTS.md -> CLAUDE.md ─────────────
-# Single source of truth for the agent CLIs we run alongside Claude Code
-# (codex-cli, cursor-cli, opencode, gemini-cli). Claude and Cursor read CLAUDE.md
-# natively; Codex and opencode read AGENTS.md; Gemini reads GEMINI.md. Symlinking
-# each tool's global instructions file to CLAUDE.md shares the one assembled file
-# with no duplication.
-#   ~/.codex/AGENTS.md            Codex global instructions
-#   ~/.config/opencode/AGENTS.md  opencode global instructions
-#   ~/.gemini/GEMINI.md           Gemini global instructions
-#   ~/AGENTS.md                   home-level file Cursor resolves when run near $HOME
-# link_file backs up any existing real file to ~/.claude/.backups/ before linking
-# and is idempotent (a stale symlink is replaced, not nested).
-link_agent_instructions() {
-  local canonical="$CLAUDE_DIR/CLAUDE.md"
-  [ -f "$canonical" ] || { warn "CLAUDE.md not found; skipping agent-instruction symlinks"; return 0; }
-  link_file "$canonical" "$HOME/.codex/AGENTS.md"
-  link_file "$canonical" "$HOME/.config/opencode/AGENTS.md"
-  link_file "$canonical" "$HOME/.gemini/GEMINI.md"
-  link_file "$canonical" "$HOME/AGENTS.md"
-  link_codex_prompts
-  link_claude_hooks
-  link_bin_tools
-}
-
-# Repo CLI helpers (bin/* -> ~/.local/bin/<name>). Symlinked so a repo pull
-# updates the live tools. Current roster: isolate (clean-room single-shot
-# model call for cold-eyes reviews).
-link_bin_tools() {
-  [ -d "$DOTFILES_DIR/bin" ] || return 0
-  local f
-  for f in "$DOTFILES_DIR"/bin/*; do
-    [ -f "$f" ] || continue
-    chmod +x "$f"
-    link_file "$f" "$HOME/.local/bin/$(basename "$f")"
-  done
-}
-
-# Claude Code hooks (hooks/*.{sh,py} -> ~/.claude/hooks/<name>). The shared
-# profile settings.json references these by $HOME path, so a machine that
-# skips this step gets a "No such file or directory" PreToolUse error on
-# every Bash call. Symlinked so a repo pull updates the live hooks.
-# Both extensions are linked: the glob was .sh-only until injection-guard.py
-# arrived, which meant a registered .py hook silently never got installed.
-link_claude_hooks() {
-  [ -d "$DOTFILES_DIR/hooks" ] || return 0
-  local f
-  for f in "$DOTFILES_DIR"/hooks/*.sh "$DOTFILES_DIR"/hooks/*.py; do
-    [ -f "$f" ] || continue
-    # A real hook is <name>.<ext>. Anything with a dotted stem (foo.test.sh,
-    # foo.backtest.py) is a repo-side helper and must not be linked as a hook.
-    case "$(basename "$f")" in *.*.*) continue ;; esac
-    link_file "$f" "$CLAUDE_DIR/hooks/$(basename "$f")"
-  done
-}
-
-# Codex custom prompts (codex/prompts/*.md -> ~/.codex/prompts/<name>.md,
-# typed as /<name> in the Codex TUI). Symlinked, not copied, so a repo pull
-# updates the live prompts — the Claude-side equivalents live in skills/.
-link_codex_prompts() {
-  [ -d "$DOTFILES_DIR/codex/prompts" ] || return 0
-  local f
-  for f in "$DOTFILES_DIR"/codex/prompts/*.md; do
-    [ -f "$f" ] || continue
-    link_file "$f" "$HOME/.codex/prompts/$(basename "$f")"
-  done
-}
-
 # ── Supabase: Cloud vs internal (self-hosted) ────────────────────
 # Cloud uses the `supabase` plugin's own hosted MCP (mcp.supabase.com, OAuth) —
 # nothing for us to wire. Internal can't use that (it's Cloud-only), so we
@@ -982,22 +895,11 @@ cmd_setup() {
   # Assemble CLAUDE.md from layers
   assemble_claude_md "$profile" "$github_user" "$hide_ai"
 
-  # Point Codex/Cursor at the same instructions (AGENTS.md -> CLAUDE.md)
-  link_agent_instructions
-
   # Install profile-specific settings.json (symlink, or stripped copy for Remote Control)
   install_settings "$profile" "$remote_control"
 
-  # Link statusline
-  link_file "$DOTFILES_DIR/statusline.sh" "$CLAUDE_DIR/statusline.sh"
-  chmod +x "$CLAUDE_DIR/statusline.sh"
-
-  # Link scripts
-  for script in "$DOTFILES_DIR"/scripts/*.sh; do
-    [ -f "$script" ] || continue
-    link_file "$script" "$CLAUDE_DIR/scripts/$(basename "$script")"
-    chmod +x "$CLAUDE_DIR/scripts/$(basename "$script")"
-  done
+  # Every repo-owned link, from one definition
+  relink_all
 
   # ── Create .env if missing ──
   if [ ! -f "$CLAUDE_DIR/.env" ]; then
@@ -1437,19 +1339,11 @@ cmd_update() {
   # Reassemble CLAUDE.md
   assemble_claude_md "$profile" "$github_user" "$hide_ai"
 
-  # Refresh the Codex/Cursor instruction symlinks (AGENTS.md -> CLAUDE.md)
-  link_agent_instructions
-
-  # Re-install settings (honors saved Remote Control choice) and re-link scripts
+  # Re-install settings (honors saved Remote Control choice) and re-link everything
   install_settings "$profile" "$remote_control"
-  link_file "$DOTFILES_DIR/statusline.sh" "$CLAUDE_DIR/statusline.sh"
-  chmod +x "$CLAUDE_DIR/statusline.sh"
 
-  for script in "$DOTFILES_DIR"/scripts/*.sh; do
-    [ -f "$script" ] || continue
-    link_file "$script" "$CLAUDE_DIR/scripts/$(basename "$script")"
-    chmod +x "$CLAUDE_DIR/scripts/$(basename "$script")"
-  done
+  # Every repo-owned link, from one definition
+  relink_all
 
   # Re-apply the saved Supabase fork (cloud/internal). Preserves the stored
   # connection string, so this stays non-interactive on update.
