@@ -772,19 +772,47 @@ fi
 links_tree_hash() {
   # names + link targets + sizes: catches a created, deleted, retargeted, or
   # rewritten file. `md5sum` on Linux, `md5` on macOS.
+  # A dangling link has no size to read — `wc -c <"$p"` opens the redirect
+  # before its own `2>/dev/null` takes effect, so the shell's "No such file
+  # or directory" bypasses that redirect and lands on the suite's stderr.
+  # Guard the read instead of relying on the command's own redirect.
   find "$links_fixture" | sort | while IFS= read -r p; do
-    printf '%s|%s|%s\n' "$p" "$(readlink "$p" 2>/dev/null)" "$(wc -c <"$p" 2>/dev/null)"
+    if [ -e "$p" ]; then
+      printf '%s|%s|%s\n' "$p" "$(readlink "$p" 2>/dev/null)" "$(wc -c <"$p" 2>/dev/null)"
+    else
+      printf '%s|%s|%s\n' "$p" "$(readlink "$p" 2>/dev/null)" "-"
+    fi
   done | { md5sum 2>/dev/null || md5; }
 }
 before=$(links_tree_hash)
-PREFLIGHT_LINK_DIRS="$links_fixture/home/.claude/scripts" \
-PREFLIGHT_DOTFILES_DIR="$links_fixture/checkout" \
-  bash "$REPO_DIR/scripts/preflight.sh" >/dev/null 2>&1
+# Same overrides as the JSON-assertion invocation above — omitting them
+# (as the original brief's example did) let this probe the developer's
+# real ~/.claude.json, real MCP servers, and real ~/.claude/statusline.sh,
+# and on a machine without `claude`/`jq` on the real PATH, check_preconditions
+# fails and main exits 2 before probe_links ever runs — the before/after
+# hashes would then match trivially and this assertion would pass having
+# proven nothing. Capture the output too, so that silent-exit-2 case fails
+# the "did it actually run" check below instead of going unnoticed.
+write_check_out=$(PATH="$TESTS_DIR/stubs:$PATH" \
+  PREFLIGHT_CLAUDE_JSON="$TESTS_DIR/fixtures/healthy/claude.json" \
+  PREFLIGHT_SETTINGS_JSON="$TESTS_DIR/fixtures/healthy/settings.json" \
+  PREFLIGHT_ENV_FILE="$TESTS_DIR/fixtures/healthy/env" \
+  PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/healthy/skills" \
+  PREFLIGHT_LINK_DIRS="$links_fixture/home/.claude/scripts" \
+  PREFLIGHT_LINK_FILES="" \
+  PREFLIGHT_DOTFILES_DIR="$links_fixture/checkout" \
+  bash "$REPO_DIR/scripts/preflight.sh" --json 2>/dev/null)
 after=$(links_tree_hash)
 if [ "$before" = "$after" ]; then
   report pass "links probe writes nothing"
 else
   report fail "links probe writes nothing" "fixture tree changed"
+fi
+
+if jq -e '[.assets[] | select(.class=="link")] | length >= 4' <<<"$write_check_out" >/dev/null 2>&1; then
+  report pass "links probe writes-nothing check actually ran probe_links"
+else
+  report fail "links probe writes-nothing check actually ran probe_links" "$write_check_out"
 fi
 
 # decoy.sh is wired up dynamically for this test only — it targets a mktemp
