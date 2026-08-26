@@ -10,6 +10,21 @@
 # which has no --dry-run, cannot trip `set -u`.
 LINKS_DRY_RUN="${LINKS_DRY_RUN:-}"
 
+# Assigned, not defaulted: ${VAR:-0} does not stop an exported value leaking
+# in — `LINK_CHANGED=7 bash -c 'echo ${LINK_CHANGED:-0}'` prints 7.
+#
+# Extracted so a caller can zero the counters right after sourcing this file,
+# before calling link_file directly (e.g. install_settings) — link_file
+# always increments one of these on every call, and under `set -u` an unset
+# counter is fatal. relink_all also calls this itself, so each relink_all run
+# starts from zero regardless of what ran before it in the same shell.
+links_reset_counters() {
+  LINK_CHANGED=0
+  LINK_OK=0
+  LINK_SKIPPED=0
+  LINK_FAILED=0
+}
+
 # Always returns 0: a non-zero return would abort the caller at every bare
 # call site under `set -e`. Callers learn what happened from the counters.
 link_file() {
@@ -74,7 +89,15 @@ link_bin_tools() {
   local f
   for f in "$DOTFILES_DIR"/bin/*; do
     [ -f "$f" ] || continue
-    chmod +x "$f"
+    # Below the dry-run check, not above it: this chmod writes to the repo's
+    # own file (git tracks the mode bit), so a dry run must not touch it.
+    # `|| true`: unlike link_file, a bare chmod can return non-zero (e.g. a
+    # read-only or root-owned bin/*), and under `set -u`+`set -e` in the
+    # caller that would abort update.sh mid-run — a failure mode it never had
+    # before this file existed.
+    if [ -z "$LINKS_DRY_RUN" ]; then
+      chmod +x "$f" 2>/dev/null || true
+    fi
     link_file "$f" "$HOME/.local/bin/$(basename "$f")"
   done
   return 0
@@ -121,7 +144,9 @@ link_repo_scripts() {
     # `&&`, so the iteration's exit status never carries the test's outcome.
     if [ -z "$LINKS_DRY_RUN" ] \
        && [ "$(readlink "$CLAUDE_DIR/scripts/$name" 2>/dev/null)" = "$f" ]; then
-      chmod +x "$CLAUDE_DIR/scripts/$name"
+      # `|| true`: chmod, unlike link_file, can return non-zero (e.g. EACCES
+      # on a read-only $CLAUDE_DIR/scripts) and must not abort the caller.
+      chmod +x "$CLAUDE_DIR/scripts/$name" 2>/dev/null || true
     fi
   done
   return 0
@@ -138,7 +163,9 @@ link_statusline() {
   link_file "$DOTFILES_DIR/statusline.sh" "$CLAUDE_DIR/statusline.sh"
   if [ -z "$LINKS_DRY_RUN" ] \
      && [ "$(readlink "$CLAUDE_DIR/statusline.sh" 2>/dev/null)" = "$DOTFILES_DIR/statusline.sh" ]; then
-    chmod +x "$CLAUDE_DIR/statusline.sh"
+    # `|| true`: chmod, unlike link_file, can return non-zero (e.g. EACCES
+    # on a read-only $CLAUDE_DIR) and must not abort the caller.
+    chmod +x "$CLAUDE_DIR/statusline.sh" 2>/dev/null || true
   fi
   return 0
 }
@@ -168,12 +195,7 @@ relink_all() {
   : "${DOTFILES_DIR:?relink_all requires DOTFILES_DIR}"
   : "${CLAUDE_DIR:?relink_all requires CLAUDE_DIR}"
 
-  # Assigned, not defaulted: ${VAR:-0} does not stop an exported value
-  # leaking in — `LINK_CHANGED=7 bash -c 'echo ${LINK_CHANGED:-0}'` prints 7.
-  LINK_CHANGED=0
-  LINK_OK=0
-  LINK_SKIPPED=0
-  LINK_FAILED=0
+  links_reset_counters
 
   link_statusline
   link_repo_scripts

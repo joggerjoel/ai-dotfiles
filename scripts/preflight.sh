@@ -26,7 +26,10 @@ MCP_TIMEOUT="${PREFLIGHT_MCP_TIMEOUT:-180}"
 
 # Managed link locations. Overridable so tests never read the real $HOME.
 PREFLIGHT_LINK_DIRS="${PREFLIGHT_LINK_DIRS-$HOME/.claude/scripts:$HOME/.claude/hooks:$HOME/.local/bin:$HOME/.codex/prompts}"
-PREFLIGHT_LINK_FILES="${PREFLIGHT_LINK_FILES-$HOME/.claude/statusline.sh}"
+# Non-symlinks are skipped by probe_links (it only probes paths that are
+# `-L`), so a stripped-copy settings.json (the Remote Control case — see
+# install_settings in setup.sh) is harmless here.
+PREFLIGHT_LINK_FILES="${PREFLIGHT_LINK_FILES-$HOME/.claude/statusline.sh:$HOME/.claude/settings.json:$HOME/AGENTS.md:$HOME/.codex/AGENTS.md:$HOME/.config/opencode/AGENTS.md:$HOME/.gemini/GEMINI.md}"
 PREFLIGHT_DOTFILES_DIR="${PREFLIGHT_DOTFILES_DIR:-$DOTFILES_DIR}"
 
 OPT_JSON=0
@@ -293,9 +296,14 @@ probe_skills() {
 probe_links() {
   local dir path
   local IFS_SAVE="$IFS"
+  # set -f around both splits: an unquoted `set --` glob-expands any `*`,
+  # `?`, or `[...]` character in a configured path, which a colon-split list
+  # has no other way to suppress.
+  set -f
   IFS=':'
   set -- $PREFLIGHT_LINK_DIRS
   IFS="$IFS_SAVE"
+  set +f
   for dir in "$@"; do
     [ -n "$dir" ] || continue
     [ -d "$dir" ] || continue
@@ -304,9 +312,11 @@ probe_links() {
       _probe_one_link "$path"
     done
   done
+  set -f
   IFS=':'
   set -- $PREFLIGHT_LINK_FILES
   IFS="$IFS_SAVE"
+  set +f
   for path in "$@"; do
     [ -n "$path" ] || continue
     [ -L "$path" ] || continue
@@ -316,20 +326,32 @@ probe_links() {
 
 _probe_one_link() {
   local path="$1" target name abs
-  name=$(basename "$path")
+  # <parent-dir>/<name>, not a bare basename: hooks/x.sh and scripts/x.sh
+  # would otherwise collide under one label, silently hiding one of the two
+  # from the report.
+  name="$(basename "$(dirname "$path")")/$(basename "$path")"
   target=$(readlink "$path")
   if [ ! -e "$path" ]; then
     add_finding link "$name" fail "dangling -> $target" no
     return
   fi
-  # Classify the RESOLVED target, not the literal link text: a relative
-  # target like ../../checkout/scripts/x.sh never string-matches
-  # $PREFLIGHT_DOTFILES_DIR (an absolute path), so it must be resolved
-  # against the link's own directory first. The `cd` is safe here — a
-  # dangling link already returned above, so the target's directory exists.
+  # Classify the RESOLVED target, not the literal link text. Both branches
+  # normalize through `pwd -P`, not just the relative one: setup.sh/update.sh
+  # write absolute targets via logical `pwd`, so on a host reached through a
+  # symlinked ancestor (symlinked $HOME, a mounted /Users, /tmp -> /private/tmp)
+  # a literal absolute target would carry that symlinked text while
+  # $PREFLIGHT_DOTFILES_DIR (from this script's own `pwd -P`) is fully
+  # resolved — the two would then never prefix-match and every healthy
+  # absolute link would misreport as "stale but resolving". A relative target
+  # like ../../checkout/scripts/x.sh additionally never string-matches an
+  # absolute path at all, so it must be resolved against the link's own
+  # directory first. The `cd` is safe here — a dangling link already returned
+  # above, so the target's directory exists. CDPATH= keeps `cd` from printing
+  # an unexpected path or matching a directory outside the intended tree when
+  # the caller's environment has CDPATH set.
   case "$target" in
-    /*) abs="$target" ;;
-    *)  abs="$(cd "$(dirname "$path")" && cd "$(dirname "$target")" && pwd -P)/$(basename "$target")" ;;
+    /*) abs="$(CDPATH= cd "$(dirname "$target")" && pwd -P)/$(basename "$target")" ;;
+    *)  abs="$(CDPATH= cd "$(dirname "$path")" && CDPATH= cd "$(dirname "$target")" && pwd -P)/$(basename "$target")" ;;
   esac
   case "$abs" in
     "$PREFLIGHT_DOTFILES_DIR"|"$PREFLIGHT_DOTFILES_DIR"/*)

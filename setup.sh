@@ -33,6 +33,10 @@ fi
 source "$DOTFILES_DIR/lib/integrations.sh"
 # shellcheck source=lib/links.sh
 source "$DOTFILES_DIR/lib/links.sh"
+# install_settings calls link_file directly, before relink_all ever runs —
+# every link_file call increments a counter, so it must not be left unbound
+# under `set -u`.
+links_reset_counters
 
 # Postgres MCP package for self-hosted ("internal") Supabase. The old reference
 # server @modelcontextprotocol/server-postgres is deprecated; this one is

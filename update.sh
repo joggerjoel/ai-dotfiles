@@ -45,6 +45,10 @@ header() { echo -e "\n${BOLD}$1${RESET}"; }
 DOTFILES_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/links.sh
 source "$DOTFILES_DIR/lib/links.sh"
+# Counters are only initialized here, not at source time — a caller that
+# calls link_file directly before relink_all ever runs would otherwise hit
+# an unbound variable under `set -u`.
+links_reset_counters
 CLAUDE_DIR="$HOME/.claude"
 CLAUDE_JSON="$HOME/.claude.json"
 BACKUP_ROOT="$DOTFILES_DIR/backup"

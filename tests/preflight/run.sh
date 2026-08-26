@@ -738,28 +738,30 @@ link_detail() {
   jq -r --arg n "$1" '.assets[] | select(.class=="link" and .name==$n) | "\(.verdict) \(.detail)"' <<<"$out"
 }
 
-if grep -q "^pass current checkout$" <<<"$(link_detail healthy.sh)"; then
+# Labels are now "<parent-dir>/<name>", not a bare basename (see
+# _probe_one_link) — all the fixture links here live in .../scripts/.
+if grep -q "^pass current checkout$" <<<"$(link_detail scripts/healthy.sh)"; then
   report pass "links probe passes a correct link as 'current checkout'"
 else
-  report fail "links probe passes a correct link as 'current checkout'" "$(link_detail healthy.sh)"
+  report fail "links probe passes a correct link as 'current checkout'" "$(link_detail scripts/healthy.sh)"
 fi
 
-if grep -q "^fail dangling -> " <<<"$(link_detail dangling.sh)"; then
+if grep -q "^fail dangling -> " <<<"$(link_detail scripts/dangling.sh)"; then
   report pass "links probe reports a dangling link as 'dangling'"
 else
-  report fail "links probe reports a dangling link as 'dangling'" "$(link_detail dangling.sh)"
+  report fail "links probe reports a dangling link as 'dangling'" "$(link_detail scripts/dangling.sh)"
 fi
 
-if grep -q "^fail stale but resolving -> " <<<"$(link_detail stale.sh)"; then
+if grep -q "^fail stale but resolving -> " <<<"$(link_detail scripts/stale.sh)"; then
   report pass "links probe reports a stale-but-resolving link as 'stale but resolving'"
 else
-  report fail "links probe reports a stale-but-resolving link as 'stale but resolving'" "$(link_detail stale.sh)"
+  report fail "links probe reports a stale-but-resolving link as 'stale but resolving'" "$(link_detail scripts/stale.sh)"
 fi
 
-if grep -q "^pass not repo-owned$" <<<"$(link_detail decoy.sh)"; then
+if grep -q "^pass not repo-owned$" <<<"$(link_detail scripts/decoy.sh)"; then
   report pass "links probe passes a lookalike directory name as 'not repo-owned'"
 else
-  report fail "links probe passes a lookalike directory name as 'not repo-owned'" "$(link_detail decoy.sh)"
+  report fail "links probe passes a lookalike directory name as 'not repo-owned'" "$(link_detail scripts/decoy.sh)"
 fi
 
 if [ "$rc" -eq 1 ]; then
@@ -803,7 +805,7 @@ symlink_out=$(PATH="$TESTS_DIR/stubs:$PATH" \
   bash "$SYMROOT/repo-symlink/scripts/preflight.sh" --json 2>/dev/null)
 
 if grep -q "^pass current checkout$" \
-   <<<"$(jq -r '.assets[] | select(.class=="link" and .name=="self.sh") | "\(.verdict) \(.detail)"' <<<"$symlink_out")"; then
+   <<<"$(jq -r '.assets[] | select(.class=="link" and .name=="scripts/self.sh") | "\(.verdict) \(.detail)"' <<<"$symlink_out")"; then
   report pass "links probe resolves DOTFILES_DIR through a symlinked parent"
 else
   report fail "links probe resolves DOTFILES_DIR through a symlinked parent" "$symlink_out"
@@ -1129,6 +1131,7 @@ links_case agents_counted _t_agents_counted
 #      link_agent_instructions warns and returns before calling link_file
 # = 3 link_file calls, each landing in exactly one counter.
 _t_counter_sum() {
+  local total
   echo 'x' > "$DOTFILES_DIR/scripts/g.sh"
   echo 'x' > "$DOTFILES_DIR/hooks/h.sh"
   relink_all
@@ -1170,6 +1173,59 @@ if grep -q 'source .*lib/links\.sh' "$REPO_DIR/update.sh" && grep -q 'relink_all
   report pass "update.sh sources lib/links.sh and calls relink_all"
 else
   report fail "update.sh sources lib/links.sh and calls relink_all" "missing one or both"
+fi
+
+# 14b. the wiring checks above only grep for strings — they'd pass even if
+# both strings sat in a comment or a dead branch. Actually RUN the sequence
+# install_settings performs: source lib/links.sh, call link_file directly
+# (no relink_all first), then call relink_all. This is a real `bash -c`
+# subshell under `set -euo pipefail` — this test runner itself only sets
+# `set -uo pipefail` (see the top of this file), so a false pass here can't
+# be explained by inheriting `-e` from the harness; the crash this reproduces
+# (an unbound LINK_CHANGED under `set -u`) doesn't even need `-e` to abort.
+EXEC_TMP=$(mktemp -d)
+add_cleanup_dir "$EXEC_TMP"
+EXEC_DOTFILES="$EXEC_TMP/checkout"
+EXEC_HOME="$EXEC_TMP/home"
+mkdir -p "$EXEC_DOTFILES/scripts" "$EXEC_DOTFILES/hooks" "$EXEC_DOTFILES/bin" \
+         "$EXEC_DOTFILES/codex/prompts" "$EXEC_HOME/.claude" "$EXEC_HOME/.local/bin"
+echo '#!/bin/bash' > "$EXEC_DOTFILES/statusline.sh"
+echo '{}' > "$EXEC_DOTFILES/settings-src.json"
+
+exec_out=$(DOTFILES_DIR="$EXEC_DOTFILES" CLAUDE_DIR="$EXEC_HOME/.claude" HOME="$EXEC_HOME" \
+  bash -c '
+    set -euo pipefail
+    ok()   { LINKS_OUT="${LINKS_OUT:-}[ok] $1"$'"'"'\n'"'"'; }
+    warn() { LINKS_OUT="${LINKS_OUT:-}[warn] $1"$'"'"'\n'"'"'; }
+    skip() { LINKS_OUT="${LINKS_OUT:-}[skip] $1"$'"'"'\n'"'"'; }
+    source "$1"
+    links_reset_counters
+    # install_settings'"'"' exact sequence: link_file, called directly,
+    # BEFORE relink_all ever runs in this shell.
+    link_file "$DOTFILES_DIR/settings-src.json" "$CLAUDE_DIR/settings.json"
+    echo "LINK_FILE_SURVIVED"
+    relink_all
+    echo "RELINK_ALL_SURVIVED"
+    printf '"'"'%s'"'"' "$LINKS_OUT"
+  ' exec-wiring-test "$REPO_DIR/lib/links.sh" 2>&1); exec_rc=$?
+
+if [ "$exec_rc" -eq 0 ] && grep -q 'LINK_FILE_SURVIVED' <<<"$exec_out"; then
+  report pass "link_file called directly, before relink_all, does not abort under set -euo pipefail"
+else
+  report fail "link_file called directly, before relink_all, does not abort under set -euo pipefail" "rc=$exec_rc: $exec_out"
+fi
+
+if [ -L "$EXEC_HOME/.claude/settings.json" ]; then
+  report pass "the direct link_file call actually created the settings.json symlink"
+else
+  report fail "the direct link_file call actually created the settings.json symlink" "$exec_out"
+fi
+
+if grep -q 'RELINK_ALL_SURVIVED' <<<"$exec_out" \
+   && grep -qE '[0-9]+ changed, [0-9]+ verified, [0-9]+ skipped, [0-9]+ failed' <<<"$exec_out"; then
+  report pass "relink_all runs after a direct link_file call and prints its summary"
+else
+  report fail "relink_all runs after a direct link_file call and prints its summary" "$exec_out"
 fi
 
 # 15. the moved definitions exist in exactly one place
