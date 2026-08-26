@@ -1158,14 +1158,18 @@ _t_repair_warns() {
 }
 links_case repair_warns _t_repair_warns
 
-# 14. setup.sh sources lib/links.sh and calls relink_all instead of
-# open-coding the statusline/scripts install. (update.sh in the repo root is
-# an unrelated script — CLI-version upgrades, not repo-owned symlinks — so it
-# is not part of this contract.)
+# 14. setup.sh and update.sh source lib/links.sh and call relink_all instead
+# of open-coding the statusline/scripts install.
 if grep -q 'source .*lib/links\.sh' "$REPO_DIR/setup.sh" && grep -q 'relink_all' "$REPO_DIR/setup.sh"; then
   report pass "setup.sh sources lib/links.sh and calls relink_all"
 else
   report fail "setup.sh sources lib/links.sh and calls relink_all" "missing one or both"
+fi
+
+if grep -q 'source .*lib/links\.sh' "$REPO_DIR/update.sh" && grep -q 'relink_all' "$REPO_DIR/update.sh"; then
+  report pass "update.sh sources lib/links.sh and calls relink_all"
+else
+  report fail "update.sh sources lib/links.sh and calls relink_all" "missing one or both"
 fi
 
 # 15. the moved definitions exist in exactly one place

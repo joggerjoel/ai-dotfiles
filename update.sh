@@ -43,6 +43,8 @@ fail()   { echo -e "  ${RED}✗${RESET} $1"; }
 header() { echo -e "\n${BOLD}$1${RESET}"; }
 
 DOTFILES_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/links.sh
+source "$DOTFILES_DIR/lib/links.sh"
 CLAUDE_DIR="$HOME/.claude"
 CLAUDE_JSON="$HOME/.claude.json"
 BACKUP_ROOT="$DOTFILES_DIR/backup"
@@ -52,7 +54,7 @@ DRY_RUN="no"; RUN_PRUNE="yes"; RUN_AGENTS="yes"; RUN_FLEET="no"
 for arg in "$@"; do
   case "$arg" in
     --all)         RUN_FLEET="yes" ;;
-    --dry-run)     DRY_RUN="yes" ;;
+    --dry-run)     DRY_RUN="yes"; export LINKS_DRY_RUN=1 ;;
     --claude-only) RUN_AGENTS="no" ;;
     --no-prune)    RUN_PRUNE="no" ;;
     -h|--help)
@@ -156,6 +158,15 @@ ROLLBACK
 chmod +x "$BACKUP_DIR/rollback.sh"
 
 ok "Backup: backup/$TS/  ${DIM}(config + rollback.sh)${RESET}"
+
+# ── 1b. Repo links ───────────────────────────────────────────────
+# After the backup so a repair is recoverable; before the upgrade so the
+# links are correct for the rest of the run and the next session — which is
+# when hooks actually fire. update.sh performs no git pull, so no linkable
+# content arrives after this point (step 4 vendors into skills/, which is
+# copied, not linked).
+header "Repo links"
+relink_all
 
 # ── 2. Upgrade ───────────────────────────────────────────────────
 if [ "$DRY_RUN" = "yes" ]; then
