@@ -922,6 +922,54 @@ _t_exported() {
 }
 links_case exported _t_exported
 
+# 7. link_statusline does not chmod through a link it did not create, and its
+# dry-run report matches link_file's dry-run contract: counted, marked
+# "(dry run)", and the fixture tree left byte-for-byte untouched.
+_t_statusline_dryrun() {
+  local before after
+  before=$(find "$LINKS_TMP" | sort)
+  LINKS_DRY_RUN=1
+  LINKS_OUT=""
+  link_statusline
+  unset LINKS_DRY_RUN
+  after=$(find "$LINKS_TMP" | sort)
+  if [ ! -e "$CLAUDE_DIR/statusline.sh" ] \
+     && [ "$LINK_CHANGED" -eq 1 ] \
+     && printf '%s' "$LINKS_OUT" | grep -q '(dry run)' \
+     && [ "$before" = "$after" ]; then
+    report pass "link_statusline makes no link, no chmod, and reports dry-run intent"
+  else
+    report fail "link_statusline makes no link, no chmod, and reports dry-run intent" \
+      "changed=$LINK_CHANGED out=$LINKS_OUT tree_changed=$([ "$before" = "$after" ] && echo no || echo yes)"
+  fi
+}
+links_case statusline_dryrun _t_statusline_dryrun
+
+# 8. a missing source directory is skipped, not failed
+_t_nobindir() {
+  rmdir "$DOTFILES_DIR/bin"
+  link_bin_tools
+  if [ "$LINK_FAILED" -eq 0 ]; then
+    report pass "link_bin_tools skips a missing bin/ without failing"
+  else
+    report fail "link_bin_tools skips a missing bin/ without failing" "failed=$LINK_FAILED"
+  fi
+}
+links_case nobindir _t_nobindir
+
+# 9. hooks with a dotted stem are repo-side helpers, never linked as hooks
+_t_dottedhook() {
+  echo 'x' > "$DOTFILES_DIR/hooks/real.sh"
+  echo 'x' > "$DOTFILES_DIR/hooks/helper.test.sh"
+  link_claude_hooks
+  if [ -L "$CLAUDE_DIR/hooks/real.sh" ] && [ ! -e "$CLAUDE_DIR/hooks/helper.test.sh" ]; then
+    report pass "link_claude_hooks skips dotted-stem helpers"
+  else
+    report fail "link_claude_hooks skips dotted-stem helpers" "$(ls "$CLAUDE_DIR/hooks" 2>&1)"
+  fi
+}
+links_case dottedhook _t_dottedhook
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

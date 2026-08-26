@@ -66,3 +66,81 @@ link_file() {
   fi
   return 0
 }
+
+# Repo CLI helpers (bin/* -> ~/.local/bin/<name>). Symlinked so a repo pull
+# updates the live tools.
+link_bin_tools() {
+  [ -d "$DOTFILES_DIR/bin" ] || { skip "no bin/ in this checkout"; return 0; }
+  local f
+  for f in "$DOTFILES_DIR"/bin/*; do
+    [ -f "$f" ] || continue
+    chmod +x "$f"
+    link_file "$f" "$HOME/.local/bin/$(basename "$f")"
+  done
+  return 0
+}
+
+# Claude Code hooks. The shared profile settings.json references these by
+# $HOME path, so a machine that skips this step gets a "No such file or
+# directory" error on every hook fire.
+link_claude_hooks() {
+  [ -d "$DOTFILES_DIR/hooks" ] || { skip "no hooks/ in this checkout"; return 0; }
+  local f
+  for f in "$DOTFILES_DIR"/hooks/*.sh "$DOTFILES_DIR"/hooks/*.py; do
+    [ -f "$f" ] || continue
+    # A real hook is <name>.<ext>. A dotted stem (foo.test.sh) is a repo-side
+    # helper and must not be installed as a hook.
+    case "$(basename "$f")" in *.*.*) continue ;; esac
+    link_file "$f" "$CLAUDE_DIR/hooks/$(basename "$f")"
+  done
+  return 0
+}
+
+# Codex custom prompts, typed as /<name> in the Codex TUI.
+link_codex_prompts() {
+  [ -d "$DOTFILES_DIR/codex/prompts" ] || { skip "no codex/prompts/ in this checkout"; return 0; }
+  local f
+  for f in "$DOTFILES_DIR"/codex/prompts/*.md; do
+    [ -f "$f" ] || continue
+    link_file "$f" "$HOME/.codex/prompts/$(basename "$f")"
+  done
+  return 0
+}
+
+link_repo_scripts() {
+  [ -d "$DOTFILES_DIR/scripts" ] || { skip "no scripts/ in this checkout"; return 0; }
+  local f name
+  for f in "$DOTFILES_DIR"/scripts/*.sh; do
+    [ -f "$f" ] || continue
+    name=$(basename "$f")
+    link_file "$f" "$CLAUDE_DIR/scripts/$name"
+    [ -L "$CLAUDE_DIR/scripts/$name" ] && chmod +x "$CLAUDE_DIR/scripts/$name"
+  done
+  return 0
+}
+
+# The chmod follows the symlink onto the checkout's own file, which is what
+# git tracks. Guarded on the link actually existing: under dry run there is
+# no link, and chmod through a dangling link fails and would abort `set -e`.
+link_statusline() {
+  link_file "$DOTFILES_DIR/statusline.sh" "$CLAUDE_DIR/statusline.sh"
+  if [ -z "$LINKS_DRY_RUN" ] && [ -L "$CLAUDE_DIR/statusline.sh" ] \
+     && [ -e "$CLAUDE_DIR/statusline.sh" ]; then
+    chmod +x "$CLAUDE_DIR/statusline.sh"
+  fi
+  return 0
+}
+
+# AGENTS.md/GEMINI.md all point at the assembled CLAUDE.md. The guard is
+# correct for these four links and gates ONLY them — the hook, bin, and
+# codex linkers moved out to relink_all, so hook installation no longer
+# depends on a file unrelated to hooks.
+link_agent_instructions() {
+  local canonical="$CLAUDE_DIR/CLAUDE.md"
+  [ -f "$canonical" ] || { warn "CLAUDE.md not found; skipping agent-instruction symlinks"; return 0; }
+  link_file "$canonical" "$HOME/.codex/AGENTS.md"
+  link_file "$canonical" "$HOME/.config/opencode/AGENTS.md"
+  link_file "$canonical" "$HOME/.gemini/GEMINI.md"
+  link_file "$canonical" "$HOME/AGENTS.md"
+  return 0
+}
