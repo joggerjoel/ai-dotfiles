@@ -957,6 +957,52 @@ _t_statusline_dryrun() {
 }
 links_case statusline_dryrun _t_statusline_dryrun
 
+# 7b. the readlink-mismatch half of the guard blocks the chmod even when a
+# link already exists at dst — but does NOT prove the dry-run half does
+# anything, since a pre-existing CORRECT link satisfies the readlink
+# comparison regardless of LINKS_DRY_RUN. That is the one arrangement a
+# readlink-only guard would get wrong: source seeded non-executable, dst
+# already a correct link, called under dry run — the source's mode must be
+# untouched.
+_t_statusline_dryrun_correct() {
+  chmod 644 "$DOTFILES_DIR/statusline.sh"
+  ln -sfn "$DOTFILES_DIR/statusline.sh" "$CLAUDE_DIR/statusline.sh"
+  LINKS_DRY_RUN=1
+  link_statusline
+  unset LINKS_DRY_RUN
+  if [ ! -x "$DOTFILES_DIR/statusline.sh" ]; then
+    report pass "link_statusline does not chmod the source through an already-correct link under dry run"
+  else
+    report fail "link_statusline does not chmod the source through an already-correct link under dry run" \
+      "source_exec=$([ -x "$DOTFILES_DIR/statusline.sh" ] && echo yes || echo no)"
+  fi
+}
+links_case statusline_dryrun_correct _t_statusline_dryrun_correct
+
+# 7c. link_repo_scripts carries the identical guard as link_statusline (a
+# stale/foreign symlink at dst must not get chmod'd, dry run or not) — cover
+# it the same way: a wrong pre-existing link, called under dry run.
+_t_reposcripts_dryrun_foreign() {
+  local wrong_target
+  echo 'x' > "$DOTFILES_DIR/scripts/foo.sh"
+  wrong_target="$DOTFILES_DIR/not-foo.sh"
+  echo 'not it' > "$wrong_target"
+  chmod 644 "$wrong_target"
+  mkdir -p "$CLAUDE_DIR/scripts"
+  ln -sfn "$wrong_target" "$CLAUDE_DIR/scripts/foo.sh"
+  LINKS_DRY_RUN=1
+  link_repo_scripts
+  unset LINKS_DRY_RUN
+  if [ "$(readlink "$CLAUDE_DIR/scripts/foo.sh")" = "$wrong_target" ] \
+     && [ ! -x "$wrong_target" ]; then
+    report pass "link_repo_scripts leaves a foreign link and its target's mode alone under dry run"
+  else
+    report fail "link_repo_scripts leaves a foreign link and its target's mode alone under dry run" \
+      "dst=$(readlink "$CLAUDE_DIR/scripts/foo.sh" 2>&1) wrong_target_exec=$([ -x "$wrong_target" ] && echo yes || echo no)"
+  fi
+}
+links_case reposcripts_dryrun_foreign _t_reposcripts_dryrun_foreign
+
 # 8. a missing source directory is skipped, not failed
 _t_nobindir() {
   rmdir "$DOTFILES_DIR/bin"

@@ -114,7 +114,15 @@ link_repo_scripts() {
     [ -f "$f" ] || continue
     name=$(basename "$f")
     link_file "$f" "$CLAUDE_DIR/scripts/$name"
-    [ -L "$CLAUDE_DIR/scripts/$name" ] && chmod +x "$CLAUDE_DIR/scripts/$name"
+    # Same guard as link_statusline: skip entirely under dry run (chmod is a
+    # write link_file never performed), and require the link to actually
+    # point at this iteration's source, not merely be a symlink — a stale
+    # link left by a failed ln must not get chmod'd through. An `if`, not
+    # `&&`, so the iteration's exit status never carries the test's outcome.
+    if [ -z "$LINKS_DRY_RUN" ] \
+       && [ "$(readlink "$CLAUDE_DIR/scripts/$name" 2>/dev/null)" = "$f" ]; then
+      chmod +x "$CLAUDE_DIR/scripts/$name"
+    fi
   done
   return 0
 }
