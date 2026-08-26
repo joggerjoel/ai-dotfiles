@@ -120,12 +120,16 @@ link_repo_scripts() {
 }
 
 # The chmod follows the symlink onto the checkout's own file, which is what
-# git tracks. Guarded on the link actually existing: under dry run there is
-# no link, and chmod through a dangling link fails and would abort `set -e`.
+# git tracks. Guarded on the link actually pointing at our source — not
+# merely existing — so a stale link left in place by a failed ln (e.g.
+# EACCES on $CLAUDE_DIR itself) never gets chmod'd through. Also guarded on
+# dry run explicitly: chmod is itself a write, and a correct link that
+# already existed before this call would satisfy the readlink match even
+# though link_file made no change — dry run must not touch the filesystem.
 link_statusline() {
   link_file "$DOTFILES_DIR/statusline.sh" "$CLAUDE_DIR/statusline.sh"
-  if [ -z "$LINKS_DRY_RUN" ] && [ -L "$CLAUDE_DIR/statusline.sh" ] \
-     && [ -e "$CLAUDE_DIR/statusline.sh" ]; then
+  if [ -z "$LINKS_DRY_RUN" ] \
+     && [ "$(readlink "$CLAUDE_DIR/statusline.sh" 2>/dev/null)" = "$DOTFILES_DIR/statusline.sh" ]; then
     chmod +x "$CLAUDE_DIR/statusline.sh"
   fi
   return 0

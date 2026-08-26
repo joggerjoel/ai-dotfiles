@@ -925,22 +925,34 @@ links_case exported _t_exported
 # 7. link_statusline does not chmod through a link it did not create, and its
 # dry-run report matches link_file's dry-run contract: counted, marked
 # "(dry run)", and the fixture tree left byte-for-byte untouched.
+#
+# A destination that is absent under dry run proves nothing: link_file never
+# touches an absent destination anyway, dry run or not, so `[ ! -e dst ]`
+# alone would pass even with the dry-run clause deleted entirely. The guard
+# needs a link that already exists and is WRONG — pointing somewhere other
+# than our statusline.sh — so a leaked chmod has a real, checkable victim:
+# the wrong target's own mode bit.
 _t_statusline_dryrun() {
-  local before after
+  local before after wrong_target
+  wrong_target="$DOTFILES_DIR/not-the-statusline.sh"
+  echo 'not it' > "$wrong_target"
+  chmod 644 "$wrong_target"
+  ln -sfn "$wrong_target" "$CLAUDE_DIR/statusline.sh"
   before=$(find "$LINKS_TMP" | sort)
   LINKS_DRY_RUN=1
   LINKS_OUT=""
   link_statusline
   unset LINKS_DRY_RUN
   after=$(find "$LINKS_TMP" | sort)
-  if [ ! -e "$CLAUDE_DIR/statusline.sh" ] \
+  if [ "$(readlink "$CLAUDE_DIR/statusline.sh")" = "$wrong_target" ] \
+     && [ ! -x "$wrong_target" ] \
      && [ "$LINK_CHANGED" -eq 1 ] \
      && printf '%s' "$LINKS_OUT" | grep -q '(dry run)' \
      && [ "$before" = "$after" ]; then
-    report pass "link_statusline makes no link, no chmod, and reports dry-run intent"
+    report pass "link_statusline leaves a foreign link and its target's mode alone under dry run"
   else
-    report fail "link_statusline makes no link, no chmod, and reports dry-run intent" \
-      "changed=$LINK_CHANGED out=$LINKS_OUT tree_changed=$([ "$before" = "$after" ] && echo no || echo yes)"
+    report fail "link_statusline leaves a foreign link and its target's mode alone under dry run" \
+      "dst=$(readlink "$CLAUDE_DIR/statusline.sh" 2>&1) wrong_target_exec=$([ -x "$wrong_target" ] && echo yes || echo no) changed=$LINK_CHANGED out=$LINKS_OUT tree_changed=$([ "$before" = "$after" ] && echo no || echo yes)"
   fi
 }
 links_case statusline_dryrun _t_statusline_dryrun
