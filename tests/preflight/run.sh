@@ -820,6 +820,108 @@ fi
 # fixture tree, so it must not linger as an untracked file afterward.
 rm -f "$links_fixture/home/.claude/scripts/decoy.sh"
 
+# --- lib/links.sh ----------------------------------------------------------
+source "$REPO_DIR/tests/preflight/links_fixture.sh"
+
+links_case() {  # links_case <name> <body-fn>
+  local name="$1" body="$2"
+  # Called directly, not `tmp=$(links_fixture_setup)`: the latter forks a
+  # subshell, so DOTFILES_DIR/CLAUDE_DIR/HOME set inside the function would
+  # vanish the instant the substitution closes, leaving them unbound here.
+  links_fixture_setup >/dev/null
+  add_cleanup_dir "$LINKS_TMP"
+  source "$REPO_DIR/lib/links.sh"
+  LINK_CHANGED=0; LINK_OK=0; LINK_SKIPPED=0; LINK_FAILED=0
+  "$body"
+}
+
+# 1. a dangling link is repointed at the current checkout
+_t_repoint() {
+  echo 'x' > "$DOTFILES_DIR/scripts/a.sh"
+  mkdir -p "$CLAUDE_DIR/scripts"
+  ln -sfn "/nonexistent/a.sh" "$CLAUDE_DIR/scripts/a.sh"
+  link_file "$DOTFILES_DIR/scripts/a.sh" "$CLAUDE_DIR/scripts/a.sh"
+  if [ "$(readlink "$CLAUDE_DIR/scripts/a.sh")" = "$DOTFILES_DIR/scripts/a.sh" ] \
+     && [ "$LINK_CHANGED" -eq 1 ]; then
+    report pass "link_file repoints a dangling link"
+  else
+    report fail "link_file repoints a dangling link" "changed=$LINK_CHANGED"
+  fi
+}
+links_case repoint _t_repoint
+
+# 2. a correct link is untouched and silent
+_t_verified() {
+  echo 'x' > "$DOTFILES_DIR/scripts/b.sh"
+  mkdir -p "$CLAUDE_DIR/scripts"
+  ln -sfn "$DOTFILES_DIR/scripts/b.sh" "$CLAUDE_DIR/scripts/b.sh"
+  LINKS_OUT=""
+  link_file "$DOTFILES_DIR/scripts/b.sh" "$CLAUDE_DIR/scripts/b.sh"
+  if [ "$LINK_OK" -eq 1 ] && [ -z "$LINKS_OUT" ]; then
+    report pass "link_file leaves a correct link untouched and silent"
+  else
+    report fail "link_file leaves a correct link untouched and silent" "ok=$LINK_OK out=$LINKS_OUT"
+  fi
+}
+links_case verified _t_verified
+
+# 3. dst is a directory -> refused, directory survives
+_t_dstdir() {
+  echo 'x' > "$DOTFILES_DIR/scripts/c.sh"
+  mkdir -p "$CLAUDE_DIR/scripts/c.sh"
+  link_file "$DOTFILES_DIR/scripts/c.sh" "$CLAUDE_DIR/scripts/c.sh"
+  if [ -d "$CLAUDE_DIR/scripts/c.sh" ] && [ "$LINK_FAILED" -eq 1 ]; then
+    report pass "link_file refuses a directory destination"
+  else
+    report fail "link_file refuses a directory destination" "failed=$LINK_FAILED"
+  fi
+}
+links_case dstdir _t_dstdir
+
+# 4. dst is a regular file -> backed up, then replaced
+_t_dstfile() {
+  echo 'new' > "$DOTFILES_DIR/scripts/d.sh"
+  mkdir -p "$CLAUDE_DIR/scripts"
+  echo 'original' > "$CLAUDE_DIR/scripts/d.sh"
+  link_file "$DOTFILES_DIR/scripts/d.sh" "$CLAUDE_DIR/scripts/d.sh"
+  if [ -L "$CLAUDE_DIR/scripts/d.sh" ] \
+     && grep -rq original "$CLAUDE_DIR/.backups" 2>/dev/null; then
+    report pass "link_file backs up a regular file before replacing it"
+  else
+    report fail "link_file backs up a regular file before replacing it" "$(ls -R "$CLAUDE_DIR" 2>&1)"
+  fi
+}
+links_case dstfile _t_dstfile
+
+# 5. src missing -> skip, no link created
+_t_srcmissing() {
+  mkdir -p "$CLAUDE_DIR/scripts"
+  link_file "$DOTFILES_DIR/scripts/nope.sh" "$CLAUDE_DIR/scripts/nope.sh"
+  if [ ! -e "$CLAUDE_DIR/scripts/nope.sh" ] && [ ! -L "$CLAUDE_DIR/scripts/nope.sh" ] \
+     && [ "$LINK_SKIPPED" -eq 1 ]; then
+    report pass "link_file skips a missing source"
+  else
+    report fail "link_file skips a missing source" "skipped=$LINK_SKIPPED"
+  fi
+}
+links_case srcmissing _t_srcmissing
+
+# 6. an exported counter does not leak into the run
+_t_exported() {
+  echo 'x' > "$DOTFILES_DIR/scripts/e.sh"
+  export LINK_CHANGED=7
+  LINK_CHANGED=0; LINK_OK=0; LINK_SKIPPED=0; LINK_FAILED=0
+  link_file "$DOTFILES_DIR/scripts/e.sh" "$CLAUDE_DIR/scripts/e.sh"
+  local got="$LINK_CHANGED"
+  unset LINK_CHANGED
+  if [ "$got" -eq 1 ]; then
+    report pass "an exported counter does not survive explicit assignment"
+  else
+    report fail "an exported counter does not survive explicit assignment" "got $got, want 1"
+  fi
+}
+links_case exported _t_exported
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
