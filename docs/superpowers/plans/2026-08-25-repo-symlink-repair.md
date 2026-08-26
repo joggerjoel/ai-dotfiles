@@ -119,8 +119,18 @@ else
 fi
 
 # The probe is read-only. Any write to the fixture is a defect.
-before=$(find "$links_fixture" | sort | md5 2>/dev/null || find "$links_fixture" | sort | md5sum)
-after=$(find "$links_fixture" | sort | md5 2>/dev/null || find "$links_fixture" | sort | md5sum)
+links_tree_hash() {
+  # names + link targets + sizes: catches a created, deleted, retargeted, or
+  # rewritten file. `md5sum` on Linux, `md5` on macOS.
+  find "$links_fixture" | sort | while IFS= read -r p; do
+    printf '%s|%s|%s\n' "$p" "$(readlink "$p" 2>/dev/null)" "$(wc -c <"$p" 2>/dev/null)"
+  done | { md5sum 2>/dev/null || md5; }
+}
+before=$(links_tree_hash)
+PREFLIGHT_LINK_DIRS="$links_fixture/home/.claude/scripts" \
+PREFLIGHT_DOTFILES_DIR="$links_fixture/checkout" \
+  bash "$REPO_DIR/scripts/preflight.sh" >/dev/null 2>&1
+after=$(links_tree_hash)
 if [ "$before" = "$after" ]; then
   report pass "links probe writes nothing"
 else
@@ -326,7 +336,6 @@ links_case() {  # links_case <name> <body-fn>
 }
 
 # 1. a dangling link is repointed at the current checkout
-links_case repoint _t_repoint
 _t_repoint() {
   echo 'x' > "$DOTFILES_DIR/scripts/a.sh"
   mkdir -p "$CLAUDE_DIR/scripts"
@@ -339,9 +348,9 @@ _t_repoint() {
     report fail "link_file repoints a dangling link" "changed=$LINK_CHANGED"
   fi
 }
+links_case repoint _t_repoint
 
 # 2. a correct link is untouched and silent
-links_case verified _t_verified
 _t_verified() {
   echo 'x' > "$DOTFILES_DIR/scripts/b.sh"
   mkdir -p "$CLAUDE_DIR/scripts"
@@ -354,9 +363,9 @@ _t_verified() {
     report fail "link_file leaves a correct link untouched and silent" "ok=$LINK_OK out=$LINKS_OUT"
   fi
 }
+links_case verified _t_verified
 
 # 3. dst is a directory -> refused, directory survives
-links_case dstdir _t_dstdir
 _t_dstdir() {
   echo 'x' > "$DOTFILES_DIR/scripts/c.sh"
   mkdir -p "$CLAUDE_DIR/scripts/c.sh"
@@ -367,9 +376,9 @@ _t_dstdir() {
     report fail "link_file refuses a directory destination" "failed=$LINK_FAILED"
   fi
 }
+links_case dstdir _t_dstdir
 
 # 4. dst is a regular file -> backed up, then replaced
-links_case dstfile _t_dstfile
 _t_dstfile() {
   echo 'new' > "$DOTFILES_DIR/scripts/d.sh"
   mkdir -p "$CLAUDE_DIR/scripts"
@@ -382,9 +391,9 @@ _t_dstfile() {
     report fail "link_file backs up a regular file before replacing it" "$(ls -R "$CLAUDE_DIR" 2>&1)"
   fi
 }
+links_case dstfile _t_dstfile
 
 # 5. src missing -> skip, no link created
-links_case srcmissing _t_srcmissing
 _t_srcmissing() {
   mkdir -p "$CLAUDE_DIR/scripts"
   link_file "$DOTFILES_DIR/scripts/nope.sh" "$CLAUDE_DIR/scripts/nope.sh"
@@ -395,17 +404,23 @@ _t_srcmissing() {
     report fail "link_file skips a missing source" "skipped=$LINK_SKIPPED"
   fi
 }
+links_case srcmissing _t_srcmissing
 
 # 6. an exported counter does not leak into the run
-links_case exported _t_exported
 _t_exported() {
   echo 'x' > "$DOTFILES_DIR/scripts/e.sh"
   export LINK_CHANGED=7
   LINK_CHANGED=0; LINK_OK=0; LINK_SKIPPED=0; LINK_FAILED=0
   link_file "$DOTFILES_DIR/scripts/e.sh" "$CLAUDE_DIR/scripts/e.sh"
+  local got="$LINK_CHANGED"
   unset LINK_CHANGED
-  report pass "exported counter does not leak (assigned, not defaulted)"
+  if [ "$got" -eq 1 ]; then
+    report pass "an exported counter does not survive explicit assignment"
+  else
+    report fail "an exported counter does not survive explicit assignment" "got $got, want 1"
+  fi
 }
+links_case exported _t_exported
 ```
 
 - [ ] **Step 3: Run to verify they fail**
@@ -516,7 +531,6 @@ Append to `tests/preflight/run.sh`:
 
 ```bash
 # 7. link_statusline does not chmod through a link it did not create
-links_case statusline_dryrun _t_statusline_dryrun
 _t_statusline_dryrun() {
   LINKS_DRY_RUN=1
   link_statusline
@@ -527,9 +541,9 @@ _t_statusline_dryrun() {
     report fail "link_statusline makes no link and no chmod under dry run" "link exists"
   fi
 }
+links_case statusline_dryrun _t_statusline_dryrun
 
 # 8. a missing source directory is skipped, not failed
-links_case nobindir _t_nobindir
 _t_nobindir() {
   rmdir "$DOTFILES_DIR/bin"
   link_bin_tools
@@ -539,9 +553,9 @@ _t_nobindir() {
     report fail "link_bin_tools skips a missing bin/ without failing" "failed=$LINK_FAILED"
   fi
 }
+links_case nobindir _t_nobindir
 
 # 9. hooks with a dotted stem are repo-side helpers, never linked as hooks
-links_case dottedhook _t_dottedhook
 _t_dottedhook() {
   echo 'x' > "$DOTFILES_DIR/hooks/real.sh"
   echo 'x' > "$DOTFILES_DIR/hooks/helper.test.sh"
@@ -552,6 +566,7 @@ _t_dottedhook() {
     report fail "link_claude_hooks skips dotted-stem helpers" "$(ls "$CLAUDE_DIR/hooks" 2>&1)"
   fi
 }
+links_case dottedhook _t_dottedhook
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -671,7 +686,6 @@ git commit -m "links: move the five linkers into lib/links.sh"
 
 ```bash
 # 10. relink_all zeroes counters on entry — an exported value must not leak
-links_case relink_reset _t_relink_reset
 _t_relink_reset() {
   export LINK_CHANGED=99
   echo 'x' > "$DOTFILES_DIR/scripts/f.sh"
@@ -684,11 +698,11 @@ _t_relink_reset() {
     report fail "relink_all zeroes counters, ignoring an exported value" "$LINKS_OUT"
   fi
 }
+links_case relink_reset _t_relink_reset
 
 # 11. AGENTS.md failures are counted, not erased by the reset. This was the
 # review's broadest finding: called BEFORE relink_all, they printed under
 # "0 failed".
-links_case agents_counted _t_agents_counted
 _t_agents_counted() {
   echo 'x' > "$CLAUDE_DIR/CLAUDE.md"
   relink_all
@@ -698,9 +712,9 @@ _t_agents_counted() {
     report fail "relink_all links AGENTS.md and counts it" "$LINKS_OUT"
   fi
 }
+links_case agents_counted _t_agents_counted
 
 # 12. the four counters account for every link attempted
-links_case counter_sum _t_counter_sum
 _t_counter_sum() {
   echo 'x' > "$DOTFILES_DIR/scripts/g.sh"
   echo 'x' > "$DOTFILES_DIR/hooks/h.sh"
@@ -712,10 +726,10 @@ _t_counter_sum() {
     report fail "relink_all counters sum to the links attempted" "total=$total"
   fi
 }
+links_case counter_sum _t_counter_sum
 
 # 13. a repair is a warn, not an ok — 24 silent repairs under a checkmark
 # would hide exactly the condition that caused the incident
-links_case repair_warns _t_repair_warns
 _t_repair_warns() {
   echo 'x' > "$DOTFILES_DIR/scripts/i.sh"
   mkdir -p "$CLAUDE_DIR/scripts"
@@ -728,6 +742,7 @@ _t_repair_warns() {
     report fail "relink_all summarises a repair as a warn" "$LINKS_OUT"
   fi
 }
+links_case repair_warns _t_repair_warns
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -812,7 +827,6 @@ for f in setup.sh update.sh; do
 done
 
 # 15. the moved definitions exist in exactly one place
-dupes=$(grep -c '^link_file() {' "$REPO_DIR/setup.sh" "$REPO_DIR/lib/links.sh" 2>/dev/null | grep -c ':1$')
 if [ "$(grep -c '^link_file() {' "$REPO_DIR/setup.sh")" -eq 0 ]; then
   report pass "link_file is defined only in lib/links.sh"
 else
