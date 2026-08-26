@@ -946,7 +946,13 @@ After the backup's closing `ok "Backup: ..."` line at `update.sh:158`, before `#
 
 ```bash
 # ── 1b. Repo links ───────────────────────────────────────────────
-# After the backup so a repair is recoverable; before the upgrade so the
+# Before the upgrade steps so the links are correct for the rest of this
+# run and the next interactive session -- which is when hooks fire. Note
+# step 1's backup does NOT cover symlinks (settings.json,
+# settings.local.json, CLAUDE.md, ~/.claude.json only), so rollback.sh
+# does not undo this step; link_file's own ~/.claude/.backups/ copy is
+# the recovery path, independent of ordering. Formerly said "after the
+# backup so a repair is recoverable" -- that was false. The rest of the
 # links are correct for the rest of the run and the next session — which is
 # when hooks actually fire. update.sh performs no git pull, so no linkable
 # content arrives after this point (step 4 vendors into skills/, which is
