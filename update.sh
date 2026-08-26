@@ -160,11 +160,12 @@ chmod +x "$BACKUP_DIR/rollback.sh"
 ok "Backup: backup/$TS/  ${DIM}(config + rollback.sh)${RESET}"
 
 # ── 1b. Repo links ───────────────────────────────────────────────
-# After the backup so a repair is recoverable; before the upgrade so the
-# links are correct for the rest of the run and the next session — which is
-# when hooks actually fire. update.sh performs no git pull, so no linkable
-# content arrives after this point (step 4 vendors into skills/, which is
-# copied, not linked).
+# Before the upgrade steps so the links are correct for the rest of this
+# run and for the next interactive session — which is when hooks fire.
+# Note: step 1's backup does NOT cover symlinks (it captures settings.json,
+# settings.local.json, CLAUDE.md and ~/.claude.json only), so rollback.sh
+# does not undo this step. Recovery for an overwritten real file comes from
+# link_file's own backup into ~/.claude/.backups/, independent of ordering.
 header "Repo links"
 relink_all
 
