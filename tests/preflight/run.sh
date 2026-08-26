@@ -42,6 +42,8 @@ run_preflight() {
   PREFLIGHT_ENV_FILE="$TESTS_DIR/fixtures/$fixture/env" \
   PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/$fixture/skills" \
   PREFLIGHT_SMOKE_DIR="$TESTS_DIR/fixtures/$fixture/smoke" \
+  PREFLIGHT_LINK_DIRS="" \
+  PREFLIGHT_LINK_FILES="" \
     bash "$REPO_DIR/scripts/preflight.sh" "$@"
 }
 
@@ -693,6 +695,64 @@ if jq -e . <<<"$out" >/dev/null 2>&1; then
   report pass "--json --smoke stdout still parses as JSON when a smoke test fails"
 else
   report fail "--json --smoke stdout still parses as JSON when a smoke test fails" "$out"
+fi
+
+# --- links probe -----------------------------------------------------------
+# A dangling link is the incident condition. A stale-but-resolving link is the
+# condition that would have made the incident INVISIBLE had the old checkout
+# survived the move — a dangling-only check reports nothing for it.
+links_fixture="$TESTS_DIR/fixtures/links"
+out=$(PATH="$TESTS_DIR/stubs:$PATH" \
+  PREFLIGHT_CLAUDE_JSON="$TESTS_DIR/fixtures/healthy/claude.json" \
+  PREFLIGHT_SETTINGS_JSON="$TESTS_DIR/fixtures/healthy/settings.json" \
+  PREFLIGHT_ENV_FILE="$TESTS_DIR/fixtures/healthy/env" \
+  PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/healthy/skills" \
+  PREFLIGHT_LINK_DIRS="$links_fixture/home/.claude/scripts" \
+  PREFLIGHT_LINK_FILES="" \
+  PREFLIGHT_DOTFILES_DIR="$links_fixture/checkout" \
+  bash "$REPO_DIR/scripts/preflight.sh" 2>&1); rc=$?
+
+if grep -q "dangling.sh" <<<"$out"; then
+  report pass "links probe reports a dangling link"
+else
+  report fail "links probe reports a dangling link" "$out"
+fi
+
+if grep -q "stale.sh" <<<"$out"; then
+  report pass "links probe reports a stale-but-resolving link"
+else
+  report fail "links probe reports a stale-but-resolving link" "$out"
+fi
+
+if grep -qE "✔ .*healthy\.sh|✔ .*healthy" <<<"$out"; then
+  report pass "links probe passes a correct link"
+else
+  report fail "links probe passes a correct link" "$out"
+fi
+
+if [ "$rc" -eq 1 ]; then
+  report pass "links probe fails the run when drift is present"
+else
+  report fail "links probe fails the run when drift is present" "got rc=$rc"
+fi
+
+# The probe is read-only. Any write to the fixture is a defect.
+links_tree_hash() {
+  # names + link targets + sizes: catches a created, deleted, retargeted, or
+  # rewritten file. `md5sum` on Linux, `md5` on macOS.
+  find "$links_fixture" | sort | while IFS= read -r p; do
+    printf '%s|%s|%s\n' "$p" "$(readlink "$p" 2>/dev/null)" "$(wc -c <"$p" 2>/dev/null)"
+  done | { md5sum 2>/dev/null || md5; }
+}
+before=$(links_tree_hash)
+PREFLIGHT_LINK_DIRS="$links_fixture/home/.claude/scripts" \
+PREFLIGHT_DOTFILES_DIR="$links_fixture/checkout" \
+  bash "$REPO_DIR/scripts/preflight.sh" >/dev/null 2>&1
+after=$(links_tree_hash)
+if [ "$before" = "$after" ]; then
+  report pass "links probe writes nothing"
+else
+  report fail "links probe writes nothing" "fixture tree changed"
 fi
 
 echo ""

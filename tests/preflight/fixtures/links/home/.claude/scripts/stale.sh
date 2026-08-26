@@ -1,0 +1,1 @@
+../../../old-ai-dotfiles/scripts/stale.sh

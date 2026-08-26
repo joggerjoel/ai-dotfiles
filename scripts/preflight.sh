@@ -18,6 +18,11 @@ SKILLS_DIR="${PREFLIGHT_SKILLS_DIR:-$DOTFILES_DIR/skills}"
 SMOKE_DIR="${PREFLIGHT_SMOKE_DIR:-$DOTFILES_DIR/tests/smoke}"
 MCP_TIMEOUT="${PREFLIGHT_MCP_TIMEOUT:-180}"
 
+# Managed link locations. Overridable so tests never read the real $HOME.
+PREFLIGHT_LINK_DIRS="${PREFLIGHT_LINK_DIRS-$HOME/.claude/scripts:$HOME/.claude/hooks:$HOME/.local/bin:$HOME/.codex/prompts}"
+PREFLIGHT_LINK_FILES="${PREFLIGHT_LINK_FILES-$HOME/.claude/statusline.sh}"
+PREFLIGHT_DOTFILES_DIR="${PREFLIGHT_DOTFILES_DIR:-$DOTFILES_DIR}"
+
 OPT_JSON=0
 OPT_QUARANTINE=0
 OPT_SMOKE=0
@@ -274,6 +279,53 @@ probe_skills() {
   done < <(find "$SKILLS_DIR" -maxdepth 2 -name SKILL.md 2>/dev/null)
 }
 
+# Repo-owned symlinks. Two failure modes, both silent today:
+#   dangling            — target does not resolve (the aorus7 incident)
+#   stale but resolving — resolves into a DIFFERENT ai-dotfiles checkout.
+#     Had the old checkout survived the move, every link would have resolved
+#     and a dangling-only check would have reported a clean machine.
+probe_links() {
+  local dir path
+  local IFS_SAVE="$IFS"
+  IFS=':'
+  set -- $PREFLIGHT_LINK_DIRS
+  IFS="$IFS_SAVE"
+  for dir in "$@"; do
+    [ -n "$dir" ] || continue
+    [ -d "$dir" ] || continue
+    for path in "$dir"/*; do
+      [ -L "$path" ] || continue
+      _probe_one_link "$path"
+    done
+  done
+  IFS=':'
+  set -- $PREFLIGHT_LINK_FILES
+  IFS="$IFS_SAVE"
+  for path in "$@"; do
+    [ -n "$path" ] || continue
+    [ -L "$path" ] || continue
+    _probe_one_link "$path"
+  done
+}
+
+_probe_one_link() {
+  local path="$1" target name
+  name=$(basename "$path")
+  target=$(readlink "$path")
+  if [ ! -e "$path" ]; then
+    add_finding link "$name" fail "dangling -> $target" no
+    return
+  fi
+  case "$target" in
+    "$PREFLIGHT_DOTFILES_DIR"|"$PREFLIGHT_DOTFILES_DIR"/*)
+      add_finding link "$name" pass "current checkout" no ;;
+    *ai-dotfiles*)
+      add_finding link "$name" fail "stale but resolving -> $target" no ;;
+    *)
+      add_finding link "$name" pass "not repo-owned" no ;;
+  esac
+}
+
 # The checker's own dependencies. Missing ones mean exit 2 — "could not run" —
 # which must never be confused with exit 1, "ran and found failures".
 check_preconditions() {
@@ -326,6 +378,7 @@ render_human() {
   render_class env   "ENV-VAR SERVICES"
   render_class hook  "HOOKS & SCRIPTS"
   render_class skill "REPO SKILLS"
+  render_class link  "REPO LINKS"
   render_class smoke "SMOKE"
 
   containable=0
@@ -499,6 +552,7 @@ main() {
   probe_env
   probe_hooks
   probe_skills
+  probe_links
 
   if [ "$MCP_TIMED_OUT" -eq 1 ]; then
     # stderr, not stdout: --json callers pipe stdout straight into `jq` and
