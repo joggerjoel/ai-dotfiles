@@ -1175,7 +1175,69 @@ else
   report fail "update.sh sources lib/links.sh and calls relink_all" "missing one or both"
 fi
 
-# 14b. the wiring checks above only grep for strings — they'd pass even if
+# 14a. Wiring by LINE ORDER, not mere presence: a bare grep for the string
+# "links_reset_counters" would pass even if the call sat before the `source`
+# line (which would fail — the function isn't defined yet), in a comment, or
+# anywhere else in the file. Require the FIRST `links_reset_counters` call to
+# appear strictly after the FIRST `source .../lib/links.sh` line.
+check_reset_after_source() {
+  local file="$1" src_line reset_line
+  src_line=$(grep -n 'source .*lib/links\.sh' "$file" | head -1 | cut -d: -f1)
+  reset_line=$(grep -n '^links_reset_counters$' "$file" | head -1 | cut -d: -f1)
+  [ -n "$src_line" ] && [ -n "$reset_line" ] && [ "$reset_line" -gt "$src_line" ]
+}
+
+if check_reset_after_source "$REPO_DIR/setup.sh"; then
+  report pass "setup.sh calls links_reset_counters after (not before) sourcing lib/links.sh"
+else
+  report fail "setup.sh calls links_reset_counters after (not before) sourcing lib/links.sh" \
+    "src_line=$(grep -n 'source .*lib/links\.sh' "$REPO_DIR/setup.sh" | head -1) reset_line=$(grep -n '^links_reset_counters$' "$REPO_DIR/setup.sh" | head -1)"
+fi
+
+if check_reset_after_source "$REPO_DIR/update.sh"; then
+  report pass "update.sh calls links_reset_counters after (not before) sourcing lib/links.sh"
+else
+  report fail "update.sh calls links_reset_counters after (not before) sourcing lib/links.sh" \
+    "src_line=$(grep -n 'source .*lib/links\.sh' "$REPO_DIR/update.sh" | head -1) reset_line=$(grep -n '^links_reset_counters$' "$REPO_DIR/update.sh" | head -1)"
+fi
+
+# 14b. Precondition pin: link_file must NOT be safely callable before the
+# counters are reset. This documents and enforces the contract
+# setup.sh/update.sh's reset calls exist to satisfy — it fails if the
+# counters are ever made self-initializing (or the contract otherwise
+# changes) without updating this test, so that change can't silently make
+# the reset calls above look load-bearing when they no longer are. A fresh
+# fixture, untouched by any earlier case, so no prior run's `settings.json`
+# symlink can mask the missing reset by taking the "already correct" branch
+# instead of "changed" — though every link_file branch references one of the
+# four counters, so any of them would trip the same unbound-variable abort.
+PRECOND_TMP=$(mktemp -d)
+add_cleanup_dir "$PRECOND_TMP"
+PRECOND_DOTFILES="$PRECOND_TMP/checkout"
+PRECOND_HOME="$PRECOND_TMP/home"
+mkdir -p "$PRECOND_DOTFILES" "$PRECOND_HOME/.claude"
+echo '{}' > "$PRECOND_DOTFILES/settings-src.json"
+
+precond_out=$(DOTFILES_DIR="$PRECOND_DOTFILES" CLAUDE_DIR="$PRECOND_HOME/.claude" HOME="$PRECOND_HOME" \
+  bash -c '
+    set -euo pipefail
+    ok()   { :; }
+    warn() { :; }
+    skip() { :; }
+    source "$1"
+    # Deliberately NO links_reset_counters call — this is the precondition
+    # under test: link_file must not be safely callable without one.
+    link_file "$DOTFILES_DIR/settings-src.json" "$CLAUDE_DIR/settings.json"
+    echo "SHOULD_NOT_REACH_HERE"
+  ' exec-precondition-test "$REPO_DIR/lib/links.sh" 2>&1); precond_rc=$?
+
+if [ "$precond_rc" -ne 0 ] && ! grep -q 'SHOULD_NOT_REACH_HERE' <<<"$precond_out"; then
+  report pass "link_file called before links_reset_counters aborts under set -euo pipefail"
+else
+  report fail "link_file called before links_reset_counters aborts under set -euo pipefail" "rc=$precond_rc: $precond_out"
+fi
+
+# 14c. the wiring checks above only grep for strings — they'd pass even if
 # both strings sat in a comment or a dead branch. Actually RUN the sequence
 # install_settings performs: source lib/links.sh, call link_file directly
 # (no relink_all first), then call relink_all. This is a real `bash -c`
@@ -1183,6 +1245,10 @@ fi
 # `set -uo pipefail` (see the top of this file), so a false pass here can't
 # be explained by inheriting `-e` from the harness; the crash this reproduces
 # (an unbound LINK_CHANGED under `set -u`) doesn't even need `-e` to abort.
+# NOTE: this case alone cannot prove setup.sh/update.sh actually call
+# links_reset_counters — it calls the function itself, inline, so it only
+# proves the library contract is satisfiable. 14a/14b are what pin the
+# callers to that contract.
 EXEC_TMP=$(mktemp -d)
 add_cleanup_dir "$EXEC_TMP"
 EXEC_DOTFILES="$EXEC_TMP/checkout"
