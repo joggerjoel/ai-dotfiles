@@ -15,10 +15,12 @@ set -euo pipefail
 #      runs on the fleet; also reports 9router gateway status).
 #   5. Re-vendor the 9router skills from upstream and deploy them to
 #      ~/.claude/skills (scripts/vendor-9router-skills.sh --deploy).
-#   6. Prune old backups (last 7 days + first-of-month snapshots).
-#   7. With --all: propagate to the fleet servers via
+#   6. Re-vendor poteto's pstack skill pack from upstream and deploy it to
+#      ~/.claude/skills (scripts/vendor-pstack-skills.sh --deploy).
+#   7. Prune old backups (last 7 days + first-of-month snapshots).
+#   8. With --all: propagate to the fleet servers via
 #      ansible-ai/update.yml --limit aorus_ai (this machine was already
-#      updated by steps 1-6, so the playbook skips it). That playbook also
+#      updated by steps 1-7, so the playbook skips it). That playbook also
 #      re-asserts the Claude OAuth token on every server
 #      (ansible-ai/deploy-claude-token.yml) — the step that keeps the fleet
 #      authenticated, since a per-host claude login cannot be driven remotely.
@@ -32,9 +34,9 @@ set -euo pipefail
 #                  pull from origin/main — use ./deploy.sh to publish config
 #                  changes first.
 #   --dry-run      Take the backup, but DON'T upgrade. Previews the Claude
-#                  step only — sibling CLIs, 9router skills, prune, and
-#                  fleet are all skipped.
-#   --claude-only  Skip the sibling agent CLIs and 9router skills (4-5).
+#                  step only — sibling CLIs, 9router/pstack skills, prune,
+#                  and fleet are all skipped.
+#   --claude-only  Skip the sibling agent CLIs and 9router/pstack skills (4-6).
 #   --no-prune     Skip the post-upgrade backup prune.
 # ─────────────────────────────────────────────────────────────────
 
@@ -419,13 +421,40 @@ if [ "$RUN_AGENTS" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/vendor-9router-skill
   fi
 fi
 
-# ── 5. Prune old backups ─────────────────────────────────────────
+# ── 5. pstack skills (vendored from cursor/plugins, by poteto) ───
+# Re-vendors poteto's pstack skill pack from upstream and deploys it to
+# ~/.claude/skills. Writes into the repo's skills/ dir, so changes still
+# need a commit + push before the fleet sees them.
+if [ "$RUN_AGENTS" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/vendor-pstack-skills.sh" ]; then
+  header "pstack skills"
+  if ! command -v git &>/dev/null; then
+    skip "git not available — skills not re-vendored"
+  else
+    pstack_out="$("$DOTFILES_DIR/scripts/vendor-pstack-skills.sh" --deploy 2>/dev/null)"
+    if [ -n "$pstack_out" ]; then
+      # Scope the dirty-check to just the dirs this run vendored, not all of
+      # skills/, so an unrelated skill edit elsewhere doesn't get misattributed.
+      mapfile -t pstack_dirs < <(echo "$pstack_out" | sed -n 's/^vendored \([^ ]*\)$/skills\/\1/p')
+      if [ "${#pstack_dirs[@]}" -gt 0 ] \
+        && git -C "$DOTFILES_DIR" status --porcelain -- "${pstack_dirs[@]}" 2>/dev/null | grep -q .; then
+        ok "Re-vendored from cursor/plugins (pstack) → ~/.claude/skills"
+        warn "skills/ has uncommitted changes — commit + push so the fleet picks them up"
+      else
+        ok "Already current (deployed to ~/.claude/skills)"
+      fi
+    else
+      warn "pstack skills re-vendor failed (non-fatal — check network)"
+    fi
+  fi
+fi
+
+# ── 6. Prune old backups ─────────────────────────────────────────
 if [ "$RUN_PRUNE" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/backup-prune.sh" ]; then
   echo
   "$DOTFILES_DIR/scripts/backup-prune.sh" || warn "Backup prune had issues (non-fatal)."
 fi
 
-# ── 6. Fleet propagation (--all) ─────────────────────────────────
+# ── 7. Fleet propagation (--all) ─────────────────────────────────
 # Servers only (--limit aorus_ai): this machine was already updated above,
 # and update.yml's local play would redo the same work. Servers pull the
 # repo from origin/main — publish config changes with ./deploy.sh first.
