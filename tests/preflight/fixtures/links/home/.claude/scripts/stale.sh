@@ -1,1 +1,1 @@
-../../../old-ai-dotfiles/scripts/stale.sh
+../../../old/ai-dotfiles/scripts/stale.sh

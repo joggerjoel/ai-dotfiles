@@ -700,8 +700,26 @@ fi
 # --- links probe -----------------------------------------------------------
 # A dangling link is the incident condition. A stale-but-resolving link is the
 # condition that would have made the incident INVISIBLE had the old checkout
-# survived the move — a dangling-only check reports nothing for it.
+# survived the move — a dangling-only check reports nothing for it. A
+# lookalike directory name must NOT be treated as ours — the case pattern in
+# _probe_one_link must stay an anchored path-component match
+# (*/ai-dotfiles/*), never a bare substring, since a later phase uses this
+# same predicate to decide what to delete.
 links_fixture="$TESTS_DIR/fixtures/links"
+
+# The "not repo-owned" case can't be a fixture committed inside this repo:
+# this checkout's own directory is literally named ai-dotfiles, so any
+# resolved absolute path under tests/preflight/fixtures/ contains a real
+# "/ai-dotfiles/" path component no matter what a fixture subdirectory is
+# named. Build the lookalike (decoy) target outside the repo tree instead,
+# and wire the fixture's decoy.sh symlink to it only for this test.
+DECOY_DIR=$(mktemp -d)
+add_cleanup_dir "$DECOY_DIR"
+mkdir -p "$DECOY_DIR/ai-dotfiles-backup/scripts"
+echo '#!/bin/bash' > "$DECOY_DIR/ai-dotfiles-backup/scripts/decoy.sh"
+chmod +x "$DECOY_DIR/ai-dotfiles-backup/scripts/decoy.sh"
+ln -sfn "$DECOY_DIR/ai-dotfiles-backup/scripts/decoy.sh" "$links_fixture/home/.claude/scripts/decoy.sh"
+
 out=$(PATH="$TESTS_DIR/stubs:$PATH" \
   PREFLIGHT_CLAUDE_JSON="$TESTS_DIR/fixtures/healthy/claude.json" \
   PREFLIGHT_SETTINGS_JSON="$TESTS_DIR/fixtures/healthy/settings.json" \
@@ -710,24 +728,38 @@ out=$(PATH="$TESTS_DIR/stubs:$PATH" \
   PREFLIGHT_LINK_DIRS="$links_fixture/home/.claude/scripts" \
   PREFLIGHT_LINK_FILES="" \
   PREFLIGHT_DOTFILES_DIR="$links_fixture/checkout" \
-  bash "$REPO_DIR/scripts/preflight.sh" 2>&1); rc=$?
+  bash "$REPO_DIR/scripts/preflight.sh" --json 2>/dev/null); rc=$?
 
-if grep -q "dangling.sh" <<<"$out"; then
-  report pass "links probe reports a dangling link"
+# Assert on verdict AND detail string, not just the name being present.
+# render_class collapses every pass onto one bare-name line in human mode,
+# so a name-only assertion can't tell "current checkout" apart from
+# "not repo-owned" — both are pass. --json exposes the detail field.
+link_detail() {
+  jq -r --arg n "$1" '.assets[] | select(.class=="link" and .name==$n) | "\(.verdict) \(.detail)"' <<<"$out"
+}
+
+if grep -q "^pass current checkout$" <<<"$(link_detail healthy.sh)"; then
+  report pass "links probe passes a correct link as 'current checkout'"
 else
-  report fail "links probe reports a dangling link" "$out"
+  report fail "links probe passes a correct link as 'current checkout'" "$(link_detail healthy.sh)"
 fi
 
-if grep -q "stale.sh" <<<"$out"; then
-  report pass "links probe reports a stale-but-resolving link"
+if grep -q "^fail dangling -> " <<<"$(link_detail dangling.sh)"; then
+  report pass "links probe reports a dangling link as 'dangling'"
 else
-  report fail "links probe reports a stale-but-resolving link" "$out"
+  report fail "links probe reports a dangling link as 'dangling'" "$(link_detail dangling.sh)"
 fi
 
-if grep -qE "✔ .*healthy\.sh|✔ .*healthy" <<<"$out"; then
-  report pass "links probe passes a correct link"
+if grep -q "^fail stale but resolving -> " <<<"$(link_detail stale.sh)"; then
+  report pass "links probe reports a stale-but-resolving link as 'stale but resolving'"
 else
-  report fail "links probe passes a correct link" "$out"
+  report fail "links probe reports a stale-but-resolving link as 'stale but resolving'" "$(link_detail stale.sh)"
+fi
+
+if grep -q "^pass not repo-owned$" <<<"$(link_detail decoy.sh)"; then
+  report pass "links probe passes a lookalike directory name as 'not repo-owned'"
+else
+  report fail "links probe passes a lookalike directory name as 'not repo-owned'" "$(link_detail decoy.sh)"
 fi
 
 if [ "$rc" -eq 1 ]; then
@@ -754,6 +786,11 @@ if [ "$before" = "$after" ]; then
 else
   report fail "links probe writes nothing" "fixture tree changed"
 fi
+
+# decoy.sh is wired up dynamically for this test only — it targets a mktemp
+# dir that add_cleanup_dir will remove, and isn't part of the committed
+# fixture tree, so it must not linger as an untracked file afterward.
+rm -f "$links_fixture/home/.claude/scripts/decoy.sh"
 
 echo ""
 echo "  $PASS passed, $FAIL failed"

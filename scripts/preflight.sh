@@ -309,17 +309,26 @@ probe_links() {
 }
 
 _probe_one_link() {
-  local path="$1" target name
+  local path="$1" target name abs
   name=$(basename "$path")
   target=$(readlink "$path")
   if [ ! -e "$path" ]; then
     add_finding link "$name" fail "dangling -> $target" no
     return
   fi
+  # Classify the RESOLVED target, not the literal link text: a relative
+  # target like ../../checkout/scripts/x.sh never string-matches
+  # $PREFLIGHT_DOTFILES_DIR (an absolute path), so it must be resolved
+  # against the link's own directory first. The `cd` is safe here — a
+  # dangling link already returned above, so the target's directory exists.
   case "$target" in
+    /*) abs="$target" ;;
+    *)  abs="$(cd "$(dirname "$path")" && cd "$(dirname "$target")" && pwd -P)/$(basename "$target")" ;;
+  esac
+  case "$abs" in
     "$PREFLIGHT_DOTFILES_DIR"|"$PREFLIGHT_DOTFILES_DIR"/*)
       add_finding link "$name" pass "current checkout" no ;;
-    *ai-dotfiles*)
+    */ai-dotfiles/*)
       add_finding link "$name" fail "stale but resolving -> $target" no ;;
     *)
       add_finding link "$name" pass "not repo-owned" no ;;
