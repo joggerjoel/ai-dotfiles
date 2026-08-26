@@ -691,11 +691,19 @@ _t_relink_reset() {
   echo 'x' > "$DOTFILES_DIR/scripts/f.sh"
   LINKS_OUT=""
   relink_all
+  local got="$LINK_CHANGED"
   unset LINK_CHANGED
-  if ! grep -q "99" <<<"$LINKS_OUT"; then
+  # Assert the actual count, not the absence of the string "99": a broken
+  # reset that accumulated onto the exported value would report 100, which
+  # does not contain "99" and would pass a substring check. Require also
+  # that a summary was printed, so a relink_all that emitted nothing at all
+  # cannot satisfy this by silence.
+  if [ "$got" -ge 1 ] && [ "$got" -lt 99 ] \
+     && printf '%s' "$LINKS_OUT" | grep -q 'verified'; then
     report pass "relink_all zeroes counters, ignoring an exported value"
   else
-    report fail "relink_all zeroes counters, ignoring an exported value" "$LINKS_OUT"
+    report fail "relink_all zeroes counters, ignoring an exported value" \
+      "changed=$got out=$LINKS_OUT"
   fi
 }
 links_case relink_reset _t_relink_reset
