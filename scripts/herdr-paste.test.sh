@@ -373,9 +373,16 @@ CAP_URL=$(grep -o 'http://[^ ]*' "$TMP/serve.out" | head -1)
 CAP_PATH=${CAP_URL##*/}
 export CAP_PATH   # the python probes below read it from the environment
 
-[ -n "$CAP_PATH" ] &&
-  ok "serve prints a capability URL" ||
+if [ -n "$CAP_PATH" ]; then
+  ok "serve prints a capability URL"
+else
+  # Everything downstream needs this URL, so a miss here cascades into a wall of
+  # timeouts that say nothing about the cause. Print what serve actually emitted.
   ko "serve prints a capability URL" "no URL in output"
+  echo "        --- serve.out ---"
+  sed 's/^/        /' "$TMP/serve.out" 2>/dev/null | head -20
+  echo "        --- end (exit=$(kill -0 "$SERVE_PID" 2>/dev/null && echo running || echo dead)) ---"
+fi
 
 python3 - <<'PY2' && ok "the capability is long enough to be unguessable" \
                   || ko "the capability is long enough to be unguessable"
