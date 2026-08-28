@@ -5,7 +5,7 @@
 > specialized engineering team. Talk to one agent; it does the work.
 
 <p align="center">
-  <img src="assets/ai-tooling-overview.png" alt="ai-dotfiles at a glance: the pass (just — one menu that fires every order), firstmate the optional crew manager on top, the base kitchen — 76 skills, three model tiers, 9 harnesses — and the supply line underneath: ansible + setup.sh + agents-update keeping a chain of 8 machines provisioned, restocked, and health-checked" width="100%" />
+  <img src="assets/ai-tooling-overview.png" alt="ai-dotfiles at a glance: the pass (just — one menu that fires every order), firstmate the optional crew manager on top, the base kitchen — 76 skills, three model tiers, 10 harnesses — and the supply line underneath: ansible + setup.sh + agents-update keeping a chain of 8 machines provisioned, restocked, and health-checked" width="100%" />
 </p>
 
 It started as dotfiles. It's now the **config + provisioning + orchestration** layer for running an
@@ -30,7 +30,7 @@ AI workforce across a fleet of machines. The name stuck; the scope didn't.
 ## What this is (the two layers)
 
 - **The base — `ai-dotfiles` (required).** Stocks every machine and gives you a working AI toolkit
-  that runs on its own: **76 skills**, **three model tiers**, **9 harnesses**, guardrails, memory,
+  that runs on its own: **76 skills**, **three model tiers**, **10 harnesses**, guardrails, memory,
   and ansible fleet ops. This is the whole system for most work.
 - **The crew manager — `firstmate` (optional, on top).** One agent that spawns and supervises many
   agents in parallel, provisioned onto your always-on node by ai-dotfiles. Add it only when
@@ -81,8 +81,8 @@ Full write-up: **[FUSE.md](FUSE.md)** (why isolation finds what authors miss) an
 ## Models & harnesses
 
 **Harnesses** are how you talk to a model; the **model** is the brain. ai-dotfiles installs and
-keeps current 9 harnesses (`claude`, `codex`, `cursor-agent`, `cortex`, `opencode`, `gemini`, `pi`,
-`grok`, `kimi`)
+keeps current 10 harnesses (`claude`, `codex`, `cursor-agent`, `cortex`, `opencode`, `gemini`,
+`pi`, `grok`, `kimi`, `mel`)
 and routes across three model tiers:
 
 | Tier            | For                            | Reached via                                        |

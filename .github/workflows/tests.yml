@@ -31,6 +31,18 @@ jobs:
       - name: Run every suite
         run: bash scripts/run-all-tests.sh
 
+  # shellcheck over every script. Green as of this commit; keeping it that way
+  # is cheaper than a periodic cleanup, and it is the check most likely to catch
+  # a contributor's first shell mistake before a maintainer reads it.
+  lint:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck -S warning scripts/*.sh ./*.sh hooks/*.sh
+
   # Does one command still provision a machine that has never seen this repo?
   # Every host in the fleet was configured incrementally alongside the script,
   # so this is the only place a genuinely cold install is exercised. Runs

@@ -13,7 +13,7 @@
 set -uo pipefail
 
 DOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$DOT"
+cd "$DOT" || exit 1
 
 SUITES="
 tests/preflight/run.sh

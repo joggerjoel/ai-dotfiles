@@ -313,36 +313,36 @@ add_charm_apt_repo() {
 # The viewer's default syntax command invokes `bat`, so on apt we expose a shim
 # in ~/.local/bin rather than rewrite the plugin's own config.
 ensure_herdr_renderers() {
-  local pair missing=""
+  local pair missing_pkgs=""
   case "$PKG_MANAGER" in
     brew)
       for pair in bat:bat git-delta:delta glow:glow; do
-        command -v "${pair#*:}" &>/dev/null || missing="$missing ${pair%%:*}"
+        command -v "${pair#*:}" &>/dev/null || missing_pkgs="$missing_pkgs ${pair%%:*}"
       done
-      if [ -n "$missing" ]; then
-        warn "herdr renderers missing —${missing} (viewer panes fall back to plain text)"
+      if [ -n "$missing_pkgs" ]; then
+        warn "herdr renderers missing —${missing_pkgs} (viewer panes fall back to plain text)"
         # shellcheck disable=SC2086
-        brew install $missing >/dev/null 2>&1 \
-          && ok "herdr renderers installed —${missing}" \
-          || warn "renderer install failed — brew install${missing} (non-fatal)"
+        brew install $missing_pkgs >/dev/null 2>&1 \
+          && ok "herdr renderers installed —${missing_pkgs}" \
+          || warn "renderer install failed — brew install${missing_pkgs} (non-fatal)"
       else
         ok "herdr renderers present (bat, delta, glow)"
       fi
       ;;
     apt)
-      command -v batcat &>/dev/null || command -v bat &>/dev/null || missing="$missing bat"
-      command -v delta &>/dev/null || missing="$missing git-delta"
+      command -v batcat &>/dev/null || command -v bat &>/dev/null || missing_pkgs="$missing_pkgs bat"
+      command -v delta &>/dev/null || missing_pkgs="$missing_pkgs git-delta"
       if ! command -v glow &>/dev/null; then
-        add_charm_apt_repo && missing="$missing glow" \
+        add_charm_apt_repo && missing_pkgs="$missing_pkgs glow" \
           || warn "glow skipped — Charm apt repo needs root (non-fatal)"
       fi
-      if [ -n "$missing" ]; then
-        warn "herdr renderers missing —${missing} (viewer panes fall back to plain text)"
+      if [ -n "$missing_pkgs" ]; then
+        warn "herdr renderers missing —${missing_pkgs} (viewer panes fall back to plain text)"
         apt_update_once
         # shellcheck disable=SC2086
-        $SUDO apt-get install -y $missing >/dev/null 2>&1 \
-          && ok "herdr renderers installed —${missing}" \
-          || warn "renderer install failed — apt-get install${missing} (non-fatal)"
+        $SUDO apt-get install -y $missing_pkgs >/dev/null 2>&1 \
+          && ok "herdr renderers installed —${missing_pkgs}" \
+          || warn "renderer install failed — apt-get install${missing_pkgs} (non-fatal)"
       else
         ok "herdr renderers present (bat/batcat, delta, glow)"
       fi
