@@ -154,6 +154,14 @@ test:
 # "already clean" rather than erroring when there is nothing to do, so
 # they are safe to chain into a maintenance pass.
 
+# [fix] restart claude-mem only when its worker is present but unresponsive
+fix-claude-mem:
+    @{{dotfiles}}/scripts/recover-claude-mem.sh
+
+# [fix] install Ghostty terminfo on an SSH host (run on the Ghostty client)
+fix-ghostty-ssh HOST="macstudio":
+    @{{dotfiles}}/scripts/fix-ghostty-ssh.sh {{HOST}}
+
 # [fix] untrack the per-host injection-guard baseline (must never be committed)
 fix-baseline:
     #!/usr/bin/env bash
