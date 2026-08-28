@@ -235,6 +235,17 @@ the profile/`CLAUDE.md` assembly system, and 18 of the skills are his. This fork
 node/HUD/worker topology, and the firstmate integration. Full breakdown in
 [NOTICE.md](NOTICE.md). If the upstream helped you, star it.
 
+## Contributing
+
+The install has been exercised on very few machines that were not already
+configured, so the most useful thing you can report is what happened when you
+ran `./setup.sh` — including when it worked. See
+[CONTRIBUTING.md](CONTRIBUTING.md); there is an issue template for exactly this.
+
+```bash
+just test-all   # every suite (330 tests), the same command CI runs
+```
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
