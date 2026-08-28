@@ -12,7 +12,7 @@ P="$HERE/herdr-paste.py"
 export P TMP   # the python probes below read these from the environment
 pass=0 fail=0
 
-TMP=$(mktemp -d -t herdrpaste-test) || exit 1
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/herdrpaste-test.XXXXXX") || exit 1
 trap 'rm -rf "$TMP"' EXIT
 
 export PATH="$ROOT/tests/paste-stubs:$PATH"

@@ -11,7 +11,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 G="$HERE/cache-guard.sh"
 pass=0 fail=0
 
-TMP=$(mktemp -d -t cacheguard-test) || exit 1
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/cacheguard-test.XXXXXX") || exit 1
 trap 'rm -rf "$TMP"' EXIT
 export CACHE_GUARD_STATE_DIR="$TMP/state"
 export CACHE_GUARD_POLICY_FILE="$TMP/policy"
@@ -25,7 +25,12 @@ ok() { printf '  PASS  %s\n' "$1"; pass=$((pass + 1)); }
 ko() { printf '  FAIL  %s%s\n' "$1" "${2:+ — $2}"; fail=$((fail + 1)); }
 
 policy() { printf '%s\n' "$@" > "$CACHE_GUARD_POLICY_FILE"; }
+# Both take an optional mode. Every current caller wants the default, which
+# newer shellcheck reports as SC2120. The parameter is the point: keeping it
+# means a mode-specific test needs no new helper.
+# shellcheck disable=SC2120
 sub_policy() { policy "profile=subscription" "mode=${1:-warn}"; } # ttl 3600/600
+# shellcheck disable=SC2120
 api_policy() { policy "profile=api" "mode=${1:-warn}"; }          # ttl 300/60
 
 state_file() { echo "$CACHE_GUARD_STATE_DIR/$SID.state"; }
