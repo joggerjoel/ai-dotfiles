@@ -39,7 +39,7 @@ AI workforce across a fleet of machines. The name stuck; the scope didn't.
 The overview image above is the map: base at the bottom, crew manager on top. For the **runtime
 view** — the six-layer stack (operator → `just` → provisioning → herdr session → crew → models),
 machine roles, and how a typed command flows through it — see
-**[docs/orchestration.md](docs/orchestration.md)**.
+**[references/orchestration.md](references/orchestration.md)**.
 
 ## What you get
 
@@ -112,7 +112,7 @@ MCP. Or open Claude Code in the folder and say **"set this up for me."** Drop to
 Every workflow in this repo — herdr, fleet ansible, firstmate, install/maintain — is indexed in the
 [`justfile`](justfile). How the layers fit together (operator → launchpad → provisioning → session →
 crew → models) and how one command flows through them:
-**[docs/orchestration.md](docs/orchestration.md)** — the high-level map. The menu itself:
+**[references/orchestration.md](references/orchestration.md)** — the high-level map. The menu itself:
 
 ```bash
 just                # list every recipe (setup.sh installs `just`; fleet-wide: `just fleet-just`)
