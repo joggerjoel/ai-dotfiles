@@ -5,13 +5,13 @@
 > specialized engineering team. Talk to one agent; it does the work.
 
 <p align="center">
-  <img src="assets/ai-tooling-overview.png" alt="ai-dotfiles at a glance: the pass (just — one menu that fires every order), firstmate the optional crew manager on top, the base kitchen — 40+ skills, three model tiers, 7 harnesses — and the supply line underneath: ansible + setup.sh + agents-update keeping a chain of 8 machines provisioned, restocked, and health-checked" width="100%" />
+  <img src="assets/ai-tooling-overview.png" alt="ai-dotfiles at a glance: the pass (just — one menu that fires every order), firstmate the optional crew manager on top, the base kitchen — 76 skills, three model tiers, 9 harnesses — and the supply line underneath: ansible + setup.sh + agents-update keeping a chain of 8 machines provisioned, restocked, and health-checked" width="100%" />
 </p>
 
 It started as dotfiles. It's now the **config + provisioning + orchestration** layer for running an
 AI workforce across a fleet of machines. The name stuck; the scope didn't.
 
-> **Lineage:** forked from **[iamnolanhu/ai-dotfiles](https://github.com/iamnolanhu/ai-dotfiles)**
+> **Lineage:** forked from **[iamnolanhu/claude-dotfiles](https://github.com/iamnolanhu/claude-dotfiles)**
 > (Nolan Hu / Sigma Synapses) — kept its clean one-command provisioning core, then grew a
 > model-routing gateway, a multi-agent review pipeline, a node/HUD/worker fleet, and optional crew
 > orchestration. Credit + link at the bottom.
@@ -30,7 +30,7 @@ AI workforce across a fleet of machines. The name stuck; the scope didn't.
 ## What this is (the two layers)
 
 - **The base — `ai-dotfiles` (required).** Stocks every machine and gives you a working AI toolkit
-  that runs on its own: **40+ skills**, **three model tiers**, **7 harnesses**, guardrails, memory,
+  that runs on its own: **76 skills**, **three model tiers**, **9 harnesses**, guardrails, memory,
   and ansible fleet ops. This is the whole system for most work.
 - **The crew manager — `firstmate` (optional, on top).** One agent that spawns and supervises many
   agents in parallel, provisioned onto your always-on node by ai-dotfiles. Add it only when
@@ -52,10 +52,10 @@ machine roles, and how a typed command flows through it — see
   `/maintain` prompts that read the logs, close gaps, and carry the known-issues playbook.
 - **Persistent sessions on an always-on node** — herdr keeps the crew running when your laptop
   closes; attach from anywhere on the mesh (`just attach`).
-- **On-demand multi-agent power commands** — `/fusion`, `/council`, `isolate`, `/ship` — plus a
-  40+-skill library (review, plan, design, write, web, dev).
-- **Three model tiers, routed by the work** — frontier (subscription), bulk (9router: 458 models
-  across 57 providers), and local (ollama).
+- **On-demand multi-agent power commands** — `/fusion`, `/council`, `isolate`, plus the SHIPIT
+  review loop — and a 76-skill library (review, plan, design, write, web, dev).
+- **Three model tiers, routed by the work** — frontier (subscription), bulk (9router: ~690 models
+  across ~69 providers), and local (ollama).
 - **Guardrails baked in** — dangerous commands blocked, risky actions confirmed, telemetry opt-out.
 - **Prompt-cache awareness** — the `cache-guard` hook shows live cache reads/writes and a
   warm / expiring / cold state in the status line, sends one desktop warning before an idle
@@ -73,7 +73,7 @@ The multiplier isn't the model; it's the discipline wired around it. These ship 
 | **`/fusion`**  | Two models answer independently, a third merges them — consensus, divergence, what got discarded. |
 | **`/council`** | An 8-lens adversarial audit of a plan or spec before any code is written.                         |
 | **`isolate`**  | One cold, zero-context reviewer — finds the gaps an author's own context hides.                   |
-| **`/ship`**    | The SHIPIT pipeline: `isolate → council → write-back → isolate` to convergence, then commit.      |
+| **SHIPIT**     | The full loop: `isolate → council → write-back → isolate` to convergence, then commit. A documented sequence, not a slash command — see SHIPIT.md. |
 
 Full write-up: **[FUSE.md](FUSE.md)** (why isolation finds what authors miss) and
 **[SHIPIT.md](SHIPIT.md)** (the exact review-and-ship sequence).
@@ -81,13 +81,14 @@ Full write-up: **[FUSE.md](FUSE.md)** (why isolation finds what authors miss) an
 ## Models & harnesses
 
 **Harnesses** are how you talk to a model; the **model** is the brain. ai-dotfiles installs and
-keeps current 7 harnesses (`claude`, `codex`, `pi`, `grok`, `opencode`, `gemini`, `cursor-agent`)
+keeps current 9 harnesses (`claude`, `codex`, `cursor-agent`, `cortex`, `opencode`, `gemini`, `pi`,
+`grok`, `kimi`)
 and routes across three model tiers:
 
 | Tier            | For                            | Reached via                                        |
 | --------------- | ------------------------------ | -------------------------------------------------- |
 | 💎 **Frontier** | hard reasoning, design         | subscription harnesses (Claude, GPT, Grok, Gemini) |
-| ⚡ **Bulk**     | cheap/fast mechanical subtasks | **9router** gateway (458 models · 57 providers)    |
+| ⚡ **Bulk**     | cheap/fast mechanical subtasks | **9router** gateway (~690 models · ~69 providers) |
 | 🏠 **Local**    | private, free to run           | **ollama** on your own machines                    |
 
 **9router** (an internal OpenAI-compatible gateway) and **headroom** (a context-optimization proxy)
@@ -218,7 +219,7 @@ Your `~/.claude/CLAUDE.md` is assembled from `base/` + `profiles/<profile>/` + g
 > **Telemetry opt-out vs Remote Control** — the desktop profile ships `DISABLE_TELEMETRY`,
 > `DO_NOT_TRACK`, and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`. Claude Code gates feature-flag
 > reads behind these, so any one **silently disables Remote Control (`/rc`)**
-> ([#4](https://github.com/iamnolanhu/ai-dotfiles/issues/4),
+> ([#4](https://github.com/iamnolanhu/claude-dotfiles/issues/4),
 > [anthropics/claude-code#76748](https://github.com/anthropics/claude-code/issues/76748)). Setup
 > asks whether you use Remote Control: **y** installs `settings.json` as a copy with those three
 > vars stripped; **n** (default) keeps the privacy opt-out and skips `/rc`. Flip later via
@@ -227,12 +228,17 @@ Your `~/.claude/CLAUDE.md` is assembled from `base/` + `profiles/<profile>/` + g
 
 ## Lineage & credit
 
-Forked from **[iamnolanhu/ai-dotfiles](https://github.com/iamnolanhu/ai-dotfiles)** by
+Forked from **[iamnolanhu/claude-dotfiles](https://github.com/iamnolanhu/claude-dotfiles)** by
 **Nolan Hu / [Sigma Synapses](https://sigmasynapses.com)** — the one-command provisioning core,
-profile system, and much of the ansible fleet plumbing are his. This fork adds the model-routing
-gateway, the multi-agent review pipeline, the node/HUD/worker topology, and the firstmate
-integration. If the upstream helped you, star it.
+the profile/`CLAUDE.md` assembly system, and 18 of the skills are his. This fork adds the
+`ansible-ai/` fleet layer, the model-routing gateway, the multi-agent review pipeline, the
+node/HUD/worker topology, and the firstmate integration. Full breakdown in
+[NOTICE.md](NOTICE.md). If the upstream helped you, star it.
 
 ## License
 
-MIT. Use it, fork it, ship with it.
+MIT — see [LICENSE](LICENSE).
+
+One caveat worth stating plainly: the upstream this was forked from publishes no license, so the
+portions inherited from it are not mine to relicense. [NOTICE.md](NOTICE.md) records exactly what
+came from where — inherited, vendored, installed-but-not-redistributed, and authored here.
