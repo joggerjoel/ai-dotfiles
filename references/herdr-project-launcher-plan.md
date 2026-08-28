@@ -49,7 +49,7 @@ the CLI prompt name the chosen repo.
 prompt when the CLI exits. Chaining a login shell leaves you in the project
 directory. This is race-free, unlike `create` + `send-keys`, which can drop
 characters if the shell has not finished starting. Mirrors the `fallback` policy
-in [`bin/herdr-wire-space.sh`](../bin/herdr-wire-space.sh).
+in [`bin/herdr-wire-space.sh`](../scripts/herdr-wire-space.sh).
 
 **Git repos only, `-name .git` not `-type d`.** Matching the name rather than the
 type finds linked worktrees, where `.git` is a file. Repo-only filtering keeps

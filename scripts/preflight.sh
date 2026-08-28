@@ -91,6 +91,46 @@ count_verdict() {
 
 # Probe every MCP server with a single `claude mcp list`. One invocation covers
 # all servers in ~90s; per-server probing would cost ~90s each.
+# Run a command under a time limit, portably.
+#
+# `timeout` is GNU coreutils. Stock macOS does not ship it -- it appears only
+# where someone has run `brew install coreutils`, which is why this script
+# worked on the author's Mac and nowhere else: without it, every `timeout ...`
+# call returned 127 and the MCP probe silently produced no findings at all.
+#
+# Order: coreutils under either name, then perl, which every macOS has. Perl's
+# alarm kills with SIGALRM (exit 142); remapped to 124 so callers keep reading
+# one number for "timed out". If none exist, run uncapped rather than not at
+# all, and say so once -- a slow probe beats a missing one.
+PREFLIGHT_TIMEOUT_WARNED=0
+with_timeout() {
+  local secs="$1"; shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$secs" "$@"
+  elif command -v perl >/dev/null 2>&1; then
+    # perl forks and reaps rather than alarm+exec: an alarm survives exec, so
+    # the child would die of SIGALRM and the shell would print "Alarm clock" to
+    # stderr -- which callers capture with 2>&1 and would file as a finding.
+    # Handling the signal in the parent keeps stderr clean and returns 124.
+    perl -e '
+      my $s = shift;
+      my $pid = fork(); defined $pid or exit 127;
+      if ($pid == 0) { exec @ARGV or exit 127; }
+      $SIG{ALRM} = sub { kill "TERM", $pid; waitpid($pid, 0); exit 124; };
+      alarm $s; waitpid($pid, 0); alarm 0;
+      exit($? >> 8);
+    ' "$secs" "$@"
+  else
+    if [ "$PREFLIGHT_TIMEOUT_WARNED" -eq 0 ]; then
+      echo "preflight: no timeout, gtimeout or perl — probes run uncapped" >&2
+      PREFLIGHT_TIMEOUT_WARNED=1
+    fi
+    "$@"
+  fi
+}
+
 probe_mcp() {
   local out rc line name detail
   local seen_names=""
@@ -99,7 +139,7 @@ probe_mcp() {
   # `claude` is on PATH before main() ever calls probe_mcp, and exited 2 if
   # not. A duplicate guard here could never fire — see main()'s single
   # CHECKER_BROKEN check right after check_preconditions.
-  out=$(timeout "$MCP_TIMEOUT" claude mcp list 2>&1)
+  out=$(with_timeout "$MCP_TIMEOUT" claude mcp list 2>&1)
   rc=$?
 
   # 124 is `timeout` killing the child. Every server becomes UNKNOWN — never
@@ -475,7 +515,7 @@ run_smoke() {
       add_finding smoke "$n" untested "no smoke test" no
       continue
     fi
-    out=$(timeout 60 bash "$script" 2>&1); rc=$?
+    out=$(with_timeout 60 bash "$script" 2>&1); rc=$?
     if [ "$rc" -eq 0 ]; then
       add_finding smoke "$n" pass "smoke ok" no
     else

@@ -14,7 +14,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 S="$HERE/claude-token.sh"
 pass=0 fail=0
 
-TMP=$(mktemp -d -t claudetoken-test) || exit 1
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/claudetoken-test.XXXXXX") || exit 1
 trap 'rm -rf "$TMP"' EXIT
 
 ok() { printf '  PASS  %s\n' "$1"; pass=$((pass + 1)); }

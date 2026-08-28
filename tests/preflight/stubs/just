@@ -1,0 +1,12 @@
+#!/bin/bash
+# Stub for `just`, one of MANDATED_CLIS in lib/integrations.sh.
+#
+# probe_clis() only asks `command -v`, so the CLI class used to be answered by
+# whatever happened to be installed on the machine running the tests. That made
+# the "healthy fixture reports no failures" assertions pass on a provisioned
+# workstation and fail everywhere else — including CI and any contributor's
+# machine. Stubbed here for the same reason `claude` is.
+#
+# gh and jq are deliberately NOT stubbed: preflight.sh calls them for real work
+# (jq parses the fixture claude.json), so a stub would break what it is testing.
+exit 0

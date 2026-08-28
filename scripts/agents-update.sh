@@ -187,6 +187,17 @@ update_cli "grok" "grok" "$GROK_INSTALL" "$GROK_INSTALL"
 KIMI_INSTALL="curl $CURL_RETRY --proto '=https' --tlsv1.2 -fsSL https://code.kimi.com/kimi-code/install.sh | bash"
 update_cli "kimi" "$HOME/.kimi-code/bin/kimi" "\"%BIN%\" upgrade || $KIMI_INSTALL" "$KIMI_INSTALL"
 
+# mel (openmel.dev) — agentic terminal; a desktop app whose binary is also a
+# working CLI (`mel --version` answers), so it belongs in this roster.
+# It ships as a plain archive from S3: no package manager, no version endpoint,
+# no release feed. Nothing to ask "is this current?", so the wrapper caches the
+# object's ETag and skips the download when it has not moved — without that,
+# every fleet pass would re-pull 27-45 MB per host for an unchanged build.
+# macOS is a .app bundle (symlinked onto PATH); Linux is x86_64 only and the
+# wrapper stops with a clear message on anything else.
+MEL_INSTALL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/install-mel.sh"
+update_cli "mel" "$HOME/.local/bin/mel" "$MEL_INSTALL" "$MEL_INSTALL"
+
 # just (command runner — the justfile launchpad). Same split as gemini:
 # brew-managed where brew manages it, otherwise the official installer,
 # which always fetches the latest prebuilt binary into ~/.local/bin — so

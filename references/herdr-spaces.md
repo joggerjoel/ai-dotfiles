@@ -124,7 +124,7 @@ terminal app's existing grant, so the fleet is reachable and nothing looks
 amiss; started by `launchctl` it is judged on its own, and without a grant every
 ssh from a pane to a LAN host fails:
 
-    ssh: connect to host 192.168.1.217 port 22: No route to host
+    ssh: connect to host 192.168.1.42 port 22: No route to host
 
 The error is misleading. The host is up, `ping` answers, and the same `ssh`
 succeeds from your own terminal against the same address in the same second.

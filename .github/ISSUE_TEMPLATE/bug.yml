@@ -1,0 +1,45 @@
+name: Bug report
+description: Something installed, but does not work
+title: "<area>: <what is wrong>"
+labels: ["bug"]
+body:
+  - type: input
+    id: command
+    attributes:
+      label: What you ran
+      description: The exact command.
+      placeholder: "just attach"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: "Pasted, not summarized. Redact .env, inventory.local.yml, hostnames and IPs."
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and architecture
+      placeholder: "macOS 15.3 (Apple Silicon)"
+    validations:
+      required: true
+  - type: dropdown
+    id: role
+    attributes:
+      label: Machine role
+      description: "FLEET_ROLE in your .env. Default is hud."
+      options: [hud, node, worker, "not set / single machine"]
+  - type: textarea
+    id: preflight
+    attributes:
+      label: "./scripts/preflight.sh output (optional but usually decisive)"
+      render: shell

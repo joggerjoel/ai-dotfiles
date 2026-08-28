@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Third-party software this repo installs
+    url: https://github.com/joggerjoel/ai-dotfiles/blob/main/NOTICE.md
+    about: "Bugs in herdr, firstmate, 9router or the agent CLIs belong in their own trackers — NOTICE.md lists them."

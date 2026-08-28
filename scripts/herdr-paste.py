@@ -573,8 +573,29 @@ def render_qr(url):
 
 def cmd_serve(args):
     import secrets
+    import socketserver
     import threading
     from http.server import HTTPServer
+
+    class _Server(HTTPServer):
+        """HTTPServer that does not reverse-DNS its own bind address.
+
+        HTTPServer.server_bind() calls socket.getfqdn(host), a reverse lookup
+        that runs inside the constructor -- before this command can print
+        anything. Where reverse DNS is slow or simply unanswered (macOS asking
+        mDNS about 127.0.0.1 with no responder is the case that found this)
+        that blocks for tens of seconds, and serve sits there bound, silent,
+        and apparently hung: the port answers while the URL you need has not
+        been printed.
+
+        server_name is only used to populate CGI variables, which nothing here
+        serves. Set it to the address and skip the lookup.
+        """
+
+        def server_bind(self):
+            socketserver.TCPServer.server_bind(self)
+            self.server_name = self.server_address[0]
+            self.server_port = self.server_address[1]
 
     preflight()
     protocol_check()
@@ -647,7 +668,7 @@ def cmd_serve(args):
              "held": None, "outcome": None, "lock": threading.Lock()}
 
     try:
-        httpd = HTTPServer((host, port), build_handler(capability, host, port, state))
+        httpd = _Server((host, port), build_handler(capability, host, port, state))
     except OSError as e:
         raise Fatal(EXIT_PREFLIGHT,
                     "cannot bind %s:%d (%s). Not falling back to another port: "
@@ -660,6 +681,14 @@ def cmd_serve(args):
     print(url)
     print("open this on a device joined to this tailnet; the page is not "
           "reachable from anywhere else, so the phone must be on it too")
+    # Flush BEFORE the QR code, not after. stdout is block-buffered whenever it
+    # is not a terminal, which is exactly the documented way to run this --
+    # backgrounded with output redirected. render_qr shells out to qrencode, so
+    # a slow or hanging spawn used to hold the URL in the buffer with it: the
+    # server was up and answering while the one line telling you where it was
+    # had not been written. The URL is the point; a decoration must never gate
+    # it.
+    sys.stdout.flush()
     render_qr(url)
     sys.stdout.flush()
 

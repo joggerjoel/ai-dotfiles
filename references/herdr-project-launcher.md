@@ -84,7 +84,7 @@ needed.
 The trailing `exec $SHELL -l` matters: without it the pane sits at a dead prompt
 once the CLI exits. Chaining a login shell leaves you in the project directory
 instead. This mirrors the `fallback` policy in
-[`bin/herdr-wire-space.sh`](../bin/herdr-wire-space.sh), which solves the same
+[`bin/herdr-wire-space.sh`](../scripts/herdr-wire-space.sh), which solves the same
 constraint for whole workspaces.
 
 ## Customizing

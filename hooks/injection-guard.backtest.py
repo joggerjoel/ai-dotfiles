@@ -131,8 +131,23 @@ print(f"  suppressed (echo / self-reference) : {len(echoes)}")
 print(f"  hit rate                           : {rate:.4f}%")
 
 if ACCEPT:
-    BASELINE.write_text(json.dumps(
-        {"rate": round(rate, 4), "hits": len(hits), "scanned": scanned}, indent=2) + "\n")
+    # Store the matched payloads, not just the rate. The rate is a ratio over a
+    # corpus that both grows (new sessions) and shrinks (Claude Code compacts
+    # transcripts in place, so past records vanish from files that still exist).
+    # A ratio over a mutable corpus cannot tell "detection regressed" apart from
+    # "the corpus moved" — on 2026-08-28 it reported a 76.8% fall while the guard
+    # was byte-identical to the version that recorded the baseline. Replaying the
+    # stored payloads measures detection directly and is immune to corpus churn.
+    #
+    # These payloads are excerpts of real transcripts. The baseline lives outside
+    # the repo, per-host, and must never be committed.
+    BASELINE.parent.mkdir(parents=True, exist_ok=True)
+    BASELINE.write_text(json.dumps({
+        "rate": round(rate, 4),
+        "hits": len(hits),
+        "scanned": scanned,
+        "payloads": [{"pattern": h["pattern"], "excerpt": h["excerpt"]} for h in hits],
+    }, indent=2) + "\n")
     print(f"\n  baseline recorded: {rate:.4f}% ({len(hits)}/{scanned:,}) -> {BASELINE.name}")
     sys.exit(0)
 
@@ -143,25 +158,46 @@ if CHECK:
         sys.exit(1)
     base = json.loads(BASELINE.read_text())
     prev = base.get("rate", 0.0)
+    payloads = base.get("payloads")
+
     drift = abs(rate - prev) / prev if prev else (1.0 if rate else 0.0)
-    # Compare at the baseline's stored precision, or an unchanged rate reads as a fall.
     r4 = round(rate, 4)
-    arrow = "→" if r4 == prev else ("↓" if r4 < prev else "↑")
+    arrow = "\u2192" if r4 == prev else ("\u2193" if r4 < prev else "\u2191")
     print(f"\n  baseline {prev:.4f}%  {arrow}  now {rate:.4f}%   "
-          f"(drift {drift * 100:.1f}%, tolerance {TOLERANCE * 100:.0f}%)")
-    if drift <= TOLERANCE:
-        print("  within tolerance.")
-        sys.exit(0)
-    print("\n  ── DRIFT EXCEEDS TOLERANCE ─────────────────────────────")
-    if rate < prev:
-        print("  The rate FELL. That usually means detection was lost, not that")
-        print("  false positives were fixed. Confirm the guard still catches a")
-        print("  real payload before accepting this.")
-    else:
-        print("  The rate ROSE. Check the hits above are genuinely foreign")
-        print("  content and not a pattern that now over-matches.")
-    print(f"\n  If the new number is correct:  {Path(__file__).name} --accept")
-    sys.exit(1)
+          f"(drift {drift * 100:.1f}%, informational)")
+
+    if payloads is None:
+        # Pre-payload baseline. Its rate cannot distinguish a regression from
+        # corpus churn, so it does not gate anything. Un-gated, not broken.
+        print("\n  NO BASELINE payloads (recorded in the older rate-only format).")
+        print(f"  Re-record to enable the regression check:  {Path(__file__).name} --accept")
+        sys.exit(1)
+
+    # The real check: every payload this guard caught before must still match.
+    # Corpus churn cannot affect this — the payloads are frozen in the baseline.
+    lost = []
+    for item in payloads:
+        text = item.get("excerpt", "")
+        if not any(pat.search(text) for pat in ig.BLOCK_PATTERNS):
+            lost.append(item)
+
+    if lost:
+        print(f"\n  \u2500\u2500 DETECTION LOST \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
+        print(f"  {len(lost)} of {len(payloads)} recorded payloads no longer match any pattern.")
+        print("  This is a real regression: the same bytes that tripped the guard")
+        print("  before now pass it. Restore detection, or if the pattern was")
+        print(f"  deliberately narrowed:  {Path(__file__).name} --accept")
+        for item in lost[:10]:
+            print(f"\n    was caught by: {item.get('pattern', '?')}")
+            print(f"    excerpt: {item.get('excerpt', '')[:160]}")
+        sys.exit(1)
+
+    print(f"  all {len(payloads)} recorded payloads still detected.")
+    if drift > TOLERANCE:
+        # Worth a look, never a failure: the corpus moves on its own.
+        print(f"  note: hit rate moved more than {TOLERANCE * 100:.0f}% — corpus churn,")
+        print("  not a detection change (payload replay above is the real check).")
+    sys.exit(0)
 
 if not hits:
     print("\n  No hits across the corpus.")

@@ -1,0 +1,50 @@
+name: Cold install failed
+description: ./setup.sh did not complete on a machine that had never run it
+title: "cold install: <os> — <what failed>"
+labels: ["cold-install"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the report we most want. The install has been exercised on very
+        few machines that were not already configured, so a failure here is new
+        information rather than a known issue.
+  - type: input
+    id: os
+    attributes:
+      label: OS and version
+      placeholder: "macOS 15.3 (Apple Silicon) / Ubuntu 24.04 (x86_64)"
+    validations:
+      required: true
+  - type: input
+    id: shell
+    attributes:
+      label: Shell and version
+      description: "`echo $SHELL` and `bash --version | head -1`"
+      placeholder: "/bin/zsh — GNU bash 3.2.57"
+    validations:
+      required: true
+  - type: dropdown
+    id: freshness
+    attributes:
+      label: How fresh is this machine?
+      options:
+        - Brand new / container — nothing installed
+        - Normal working machine, never ran this repo
+        - Had run an older version of this repo
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Last 30 lines before it stopped
+      description: "Pasted, not summarized. Redact anything you would rather not publish."
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: preflight
+    attributes:
+      label: "./scripts/preflight.sh output (optional)"
+      description: "If setup got far enough to leave something behind."
+      render: shell

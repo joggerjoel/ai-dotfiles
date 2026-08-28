@@ -9,7 +9,7 @@ ROOT=$(cd "$HERE/.." && pwd)
 T="$HERE/herdr-tmux.sh"
 pass=0 fail=0
 
-TMP=$(mktemp -d -t herdrtmux-test) || exit 1
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/herdrtmux-test.XXXXXX") || exit 1
 trap 'rm -rf "$TMP"' EXIT
 
 export PATH="$ROOT/tests/tmux-stubs:$PATH"

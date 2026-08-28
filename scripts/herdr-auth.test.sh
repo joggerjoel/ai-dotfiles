@@ -10,7 +10,7 @@ ROOT=$(cd "$HERE/.." && pwd)
 A="$HERE/herdr-auth.sh"
 pass=0 fail=0
 
-TMP=$(mktemp -d -t herdrauth-test) || exit 1
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/herdrauth-test.XXXXXX") || exit 1
 trap 'rm -rf "$TMP"' EXIT
 
 export PATH="$ROOT/tests/auth-stubs:$PATH"

@@ -135,7 +135,7 @@ inventory_for() {
   # suffix and no extension, so ansible tried its INI plugin on YAML and
   # reported `Invalid host pattern 'aorus_ai:'` — an error about the content
   # that was really about the name.
-  tmpd="$(mktemp -d -t claude-token-inv)" || die "could not create a temp inventory"
+  tmpd="$(mktemp -d "${TMPDIR:-/tmp}/claude-token-inv.XXXXXX")" || die "could not create a temp inventory"
   tmp="$tmpd/inventory.yml"
   {
     printf 'aorus_ai:\n  hosts:\n'

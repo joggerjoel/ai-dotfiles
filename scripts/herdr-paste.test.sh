@@ -12,7 +12,7 @@ P="$HERE/herdr-paste.py"
 export P TMP   # the python probes below read these from the environment
 pass=0 fail=0
 
-TMP=$(mktemp -d -t herdrpaste-test) || exit 1
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/herdrpaste-test.XXXXXX") || exit 1
 trap 'rm -rf "$TMP"' EXIT
 
 export PATH="$ROOT/tests/paste-stubs:$PATH"
@@ -347,21 +347,49 @@ PASTE_TS_MULTI=1 python3 "$P" serve >/dev/null 2>&1
 eq "serve refuses to start on an ambiguous address" 6 "$?"
 
 # Everything below drives a live server. It is started once, probed, then shut
+# Wait for a backgrounded `serve` to announce its URL.
+#
+# This was 12 rounds -- three seconds for a Python interpreter to start and bind
+# a socket. Instant on a warm developer machine, not on a cold CI runner, where
+# every live-server assertion failed and the ones that only check a refusal
+# passed, which is what a too-short startup budget looks like. Breaks as soon as
+# the URL appears, so a fast machine pays nothing for the larger bound.
+await_url() { # <file>
+  local i=0
+  while [ "$i" -lt 60 ]; do
+    grep -q 'http://' "$1" 2>/dev/null && return 0
+    python3 -c "import time; time.sleep(0.25)"
+    i=$((i + 1))
+  done
+  return 1
+}
+
 # down through its own endpoint.
 daemon ok
-python3 "$P" serve --port 8779 --timeout 30 > "$TMP/serve.out" 2>&1 &
+PYTHONFAULTHANDLER=1 python3 "$P" serve --port 8779 --timeout 30 > "$TMP/serve.out" 2>&1 &
 SERVE_PID=$!
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
-  grep -q 'http://' "$TMP/serve.out" 2>/dev/null && break
-  python3 -c "import time; time.sleep(0.25)"
-done
+await_url "$TMP/serve.out"
 CAP_URL=$(grep -o 'http://[^ ]*' "$TMP/serve.out" | head -1)
 CAP_PATH=${CAP_URL##*/}
 export CAP_PATH   # the python probes below read it from the environment
 
-[ -n "$CAP_PATH" ] &&
-  ok "serve prints a capability URL" ||
+if [ -n "$CAP_PATH" ]; then
+  ok "serve prints a capability URL"
+else
+  # Everything downstream needs this URL, so a miss here cascades into a wall of
+  # timeouts that say nothing about the cause. Print what serve actually emitted.
   ko "serve prints a capability URL" "no URL in output"
+  echo "        --- serve.out (size: $(wc -c < "$TMP/serve.out" 2>/dev/null || echo MISSING)) ---"
+  sed 's/^/        /' "$TMP/serve.out" 2>/dev/null | head -20
+  echo "        --- process: $(kill -0 "$SERVE_PID" 2>/dev/null && echo running || echo dead) ---"
+  # A running server that has printed nothing is stuck somewhere before the
+  # announcement. SIGABRT with faulthandler armed makes it name the frame.
+  kill -ABRT "$SERVE_PID" 2>/dev/null
+  python3 -c "import time; time.sleep(2)"
+  echo "        --- traceback ---"
+  sed 's/^/        /' "$TMP/serve.out" 2>/dev/null | tail -25
+  echo "        --- end ---"
+fi
 
 python3 - <<'PY2' && ok "the capability is long enough to be unguessable" \
                   || ko "the capability is long enough to be unguessable"
@@ -442,10 +470,7 @@ daemon ok
 python3 "$P" serve --port 8781 --timeout 30 > "$TMP/serve2.out" 2>&1 &
 S2=$!
 export S2
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
-  grep -q 'http://' "$TMP/serve2.out" 2>/dev/null && break
-  python3 -c "import time; time.sleep(0.25)"
-done
+await_url "$TMP/serve2.out"
 C2=$(grep -o 'http://[^ ]*' "$TMP/serve2.out" | head -1); C2=${C2##*/}
 export C2
 
@@ -514,7 +539,7 @@ grep -q 'SENTINEL-PAGE' "$PASTE_WIRE" &&
 S2_CODE=$(python3 - <<'PY2'
 import os, subprocess, sys, time
 pid = os.environ["S2"]
-for _ in range(40):
+for _ in range(80):
     if subprocess.run(["kill", "-0", pid], capture_output=True).returncode != 0:
         print("exited"); sys.exit(0)
     time.sleep(0.25)
@@ -524,7 +549,7 @@ PY2
 if [ "$S2_CODE" = exited ]; then
   wait "$S2"; eq "serve exits 0 after a delivered send" 0 "$?"
 else
-  ko "serve exits 0 after a delivered send" "still running after 10s"
+  ko "serve exits 0 after a delivered send" "still running after 20s"
   kill "$S2" 2>/dev/null; wait "$S2" 2>/dev/null
 fi
 

@@ -1,0 +1,62 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The deterministic suites. No network, no fleet, no private corpus — the
+  # injection-guard backtest skips itself where there are no transcripts, which
+  # is every runner. macOS is in the matrix because contributors run stock
+  # bash 3.2 and that is where portability breaks first.
+  suites:
+    name: suites (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record the shell we are testing under
+        run: |
+          bash --version | head -1
+          python3 --version
+      - name: Run every suite
+        run: bash scripts/run-all-tests.sh
+
+  # shellcheck over every script. Green as of this commit; keeping it that way
+  # is cheaper than a periodic cleanup, and it is the check most likely to catch
+  # a contributor's first shell mistake before a maintainer reads it.
+  lint:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck -S warning scripts/*.sh ./*.sh hooks/*.sh
+
+  # Does one command still provision a machine that has never seen this repo?
+  # Every host in the fleet was configured incrementally alongside the script,
+  # so this is the only place a genuinely cold install is exercised. Runs
+  # unattended: setup.sh reads from /dev/null, and each prompt falls back to
+  # its default on EOF.
+  cold-install:
+    name: cold install (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run setup.sh on a clean machine
+        run: ./setup.sh < /dev/null
+      - name: Verify what landed
+        run: ./scripts/preflight.sh || true
+      - name: Suites must still pass after install
+        run: bash scripts/run-all-tests.sh

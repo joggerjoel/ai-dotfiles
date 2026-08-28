@@ -280,6 +280,10 @@ audit:
 test:
     {{dotfiles}}/tests/preflight/run.sh
 
+# [local] run every test suite — the same command CI runs
+test-all:
+    @bash {{dotfiles}}/scripts/run-all-tests.sh
+
 # ── fix (targeted repairs; each is idempotent and safe to re-run) ────
 # Every recipe here exists because a failure mode recurred. They report
 # "already clean" rather than erroring when there is nothing to do, so
