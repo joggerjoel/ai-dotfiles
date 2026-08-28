@@ -366,7 +366,7 @@ await_url() { # <file>
 
 # down through its own endpoint.
 daemon ok
-python3 "$P" serve --port 8779 --timeout 30 > "$TMP/serve.out" 2>&1 &
+PYTHONFAULTHANDLER=1 python3 "$P" serve --port 8779 --timeout 30 > "$TMP/serve.out" 2>&1 &
 SERVE_PID=$!
 await_url "$TMP/serve.out"
 CAP_URL=$(grep -o 'http://[^ ]*' "$TMP/serve.out" | head -1)
@@ -379,9 +379,16 @@ else
   # Everything downstream needs this URL, so a miss here cascades into a wall of
   # timeouts that say nothing about the cause. Print what serve actually emitted.
   ko "serve prints a capability URL" "no URL in output"
-  echo "        --- serve.out ---"
+  echo "        --- serve.out (size: $(wc -c < "$TMP/serve.out" 2>/dev/null || echo MISSING)) ---"
   sed 's/^/        /' "$TMP/serve.out" 2>/dev/null | head -20
-  echo "        --- end (exit=$(kill -0 "$SERVE_PID" 2>/dev/null && echo running || echo dead)) ---"
+  echo "        --- process: $(kill -0 "$SERVE_PID" 2>/dev/null && echo running || echo dead) ---"
+  # A running server that has printed nothing is stuck somewhere before the
+  # announcement. SIGABRT with faulthandler armed makes it name the frame.
+  kill -ABRT "$SERVE_PID" 2>/dev/null
+  python3 -c "import time; time.sleep(2)"
+  echo "        --- traceback ---"
+  sed 's/^/        /' "$TMP/serve.out" 2>/dev/null | tail -25
+  echo "        --- end ---"
 fi
 
 python3 - <<'PY2' && ok "the capability is long enough to be unguessable" \
