@@ -660,6 +660,14 @@ def cmd_serve(args):
     print(url)
     print("open this on a device joined to this tailnet; the page is not "
           "reachable from anywhere else, so the phone must be on it too")
+    # Flush BEFORE the QR code, not after. stdout is block-buffered whenever it
+    # is not a terminal, which is exactly the documented way to run this --
+    # backgrounded with output redirected. render_qr shells out to qrencode, so
+    # a slow or hanging spawn used to hold the URL in the buffer with it: the
+    # server was up and answering while the one line telling you where it was
+    # had not been written. The URL is the point; a decoration must never gate
+    # it.
+    sys.stdout.flush()
     render_qr(url)
     sys.stdout.flush()
 
