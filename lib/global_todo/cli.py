@@ -296,7 +296,9 @@ def _build_block() -> str:
         top = sorted(others.items(), key=lambda kv: -kv[1])[:6]
         lines.append("")
         lines.append("Elsewhere: " + " · ".join(f"{p} ({n})" for p, n in top))
-    lines.append("Close with `/global-todo done <id>`")
+    # The CLI, not a slash command: this block is read in every project, and
+    # `just` recipes only resolve inside the ai-dotfiles checkout.
+    lines.append("Close with `global-todo done <id>` when the work is finished.")
 
     body = "\n".join(lines)
     return (

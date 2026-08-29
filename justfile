@@ -284,6 +284,34 @@ test:
 test-all:
     @bash {{dotfiles}}/scripts/run-all-tests.sh
 
+# ── global-todo (cross-project worklist from claude-mem + docs) ──────
+# The CLI is on PATH as `global-todo` and works from any directory; these
+# recipes are the progress-check entry point from inside this repo.
+
+# [local] what is still owed, across every project
+todo:
+    @{{dotfiles}}/bin/global-todo status
+
+# [local] open the worklist in a browser (summary, then drill down)
+todo-open:
+    @{{dotfiles}}/bin/global-todo open
+
+# [local] rescan docs only — deterministic, no LLM calls, instant
+todo-docs:
+    @{{dotfiles}}/bin/global-todo refresh --docs-only
+
+# [local] rescan both sources; new observations only (~90s per 120-row chunk)
+todo-refresh:
+    @{{dotfiles}}/bin/global-todo refresh --yes
+
+# [local] first run only: sweep all history. ~38 min, ~110 LLM chunks.
+todo-cold-start:
+    @{{dotfiles}}/bin/global-todo refresh --cold-start
+
+# [local] global-todo: unit tests (scripts/global-todo.test.sh)
+todo-test:
+    @bash {{dotfiles}}/scripts/global-todo.test.sh
+
 # ── fix (targeted repairs; each is idempotent and safe to re-run) ────
 # Every recipe here exists because a failure mode recurred. They report
 # "already clean" rather than erroring when there is nothing to do, so
