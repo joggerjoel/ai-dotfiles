@@ -285,28 +285,30 @@ test-all:
     @bash {{dotfiles}}/scripts/run-all-tests.sh
 
 # ── global-todo (cross-project worklist from claude-mem + docs) ──────
-# The CLI is on PATH as `global-todo` and works from any directory; these
-# recipes are the progress-check entry point from inside this repo.
+# The CLI is on PATH as `global-todo` via ~/.local/bin, so these recipes call
+# it by name rather than building a path from {{dotfiles}}. That variable is
+# justfile_directory(), which under `just -g` resolves to the directory of the
+# ~/.justfile SYMLINK rather than its target, producing ~/bin/global-todo.
 
 # [local] what is still owed, across every project
 todo:
-    @{{dotfiles}}/bin/global-todo status
+    @global-todo status
 
 # [local] open the worklist in a browser (summary, then drill down)
 todo-open:
-    @{{dotfiles}}/bin/global-todo open
+    @global-todo open
 
 # [local] rescan docs only — deterministic, no LLM calls, instant
 todo-docs:
-    @{{dotfiles}}/bin/global-todo refresh --docs-only
+    @global-todo refresh --docs-only
 
 # [local] rescan both sources; new observations only (~90s per 120-row chunk)
 todo-refresh:
-    @{{dotfiles}}/bin/global-todo refresh --yes
+    @global-todo refresh --yes
 
 # [local] first run only: sweep all history. ~38 min, ~110 LLM chunks.
 todo-cold-start:
-    @{{dotfiles}}/bin/global-todo refresh --cold-start
+    @global-todo refresh --cold-start
 
 # [local] global-todo: unit tests (scripts/global-todo.test.sh)
 todo-test:
