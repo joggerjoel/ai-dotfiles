@@ -115,7 +115,10 @@ SUDO=""                 # "sudo" when needed & available, else empty
 APT_UPDATED="no"        # run `apt-get update` at most once
 
 detect_pkg_manager() {
-  if [[ "$(uname -s)" == "Darwin" ]]; then
+  # Darwin does not imply Homebrew. A stock Mac has none, and claiming brew
+  # here made ensure_node report "Package manager: brew" and then die on
+  # `brew: command not found` one line later.
+  if [[ "$(uname -s)" == "Darwin" ]] && command -v brew &>/dev/null; then
     PKG_MANAGER="brew"
   elif command -v apt-get &>/dev/null; then
     PKG_MANAGER="apt"
@@ -174,6 +177,20 @@ ensure_node() {
       curl -fsSL https://deb.nodesource.com/setup_lts.x | $SUDO -E bash - >/dev/null 2>&1 \
         && $SUDO apt-get install -y nodejs ;;
   esac
+
+  # Fall back to nvm when no system package manager can supply node: a Mac
+  # without Homebrew matches neither branch above. nvm needs no sudo, and the
+  # fleet's provisioning playbook already installs node this way.
+  if ! command -v node &>/dev/null; then
+    [ -s "$HOME/.nvm/nvm.sh" ] || curl -fsSL \
+      https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash >/dev/null 2>&1
+    # shellcheck disable=SC1091
+    if [ -s "$HOME/.nvm/nvm.sh" ]; then
+      . "$HOME/.nvm/nvm.sh"
+      nvm install --lts >/dev/null 2>&1
+    fi
+  fi
+
   command -v node &>/dev/null && ok "node $(node -v) installed" \
     || fail "node install failed — install manually, then re-run"
 }

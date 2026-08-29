@@ -26,6 +26,11 @@
   hosts: ai_all
   gather_facts: true
   ignore_unreachable: true
+  # Every other play here carries a tag, so this one had no way to be selected
+  # on its own. `--tags sync` now runs the git pull and profile re-apply without
+  # the CLI upgrades, the gateway deploys, or the token distribution — the last
+  # of which asserts a token exists and fails the run when one does not.
+  tags: [sync]
   tasks:
     # ignore_unreachable keeps one absent host from killing the run, but it also
     # marches unreachable hosts into the tasks below — where claude_bin templates
