@@ -174,6 +174,17 @@ fleet-harnesses: _control
 fleet-push: _control
     set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook push-config.yml 2>&1 | cat
 
+# provision-ai.yml is the fleet's dependency installer and is safe to re-run:
+# every task gates on the tool already being present, so a converged host skips
+# 19-20 of them. Ansible owns dependency convergence because it branches on
+# os_family explicitly and reports per host; setup.sh's ensure_* functions
+# remain for a machine set up by hand, with no ansible.
+# Skips claude-token, whose assert fails the run when no token exists.
+# NOTE: targets aorus_ai, so the control node itself is not converged.
+# [fleet] install/repair missing tooling on every fleet host
+fleet-converge: _control
+    set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook provision-ai.yml --skip-tags claude-token 2>&1 | cat
+
 # [fleet] provision the always-on node as the firstmate node
 provision-node: _control
     set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook provision-firstmate.yml 2>&1 | cat

@@ -281,6 +281,88 @@
         executable: /bin/bash
         creates: "{{ ansible_facts.env.HOME }}/.local/bin/headroom"
 
+    # gh + bun. setup.sh installs both (ensure_gh/ensure_bun) but only runs on a
+    # host that reaches Stage B, so a host provisioned by this playbook alone was
+    # left without them. Both installs land in $HOME, matching setup.sh, so the
+    # two paths converge on the same binaries.
+    #
+    # gh: setup.sh's no-sudo release-tarball fallback (gh_install_binary), not its
+    # apt-keyring branch — one branch covers Debian and macOS, needs no root, and
+    # puts gh in ~/.local/bin alongside every other CLI here. The apt branch would
+    # need a second macOS-only brew branch and root on every Debian box.
+    # Detection probes absolute paths as well as PATH: Ansible shells are
+    # non-login, so a brew- or apt-installed gh may not be on PATH.
+    - name: Is gh present? (PATH varies; may be brew, apt, or ~/.local/bin)
+      ansible.builtin.shell: |
+        for p in "$HOME/.local/bin/gh" /opt/homebrew/bin/gh /usr/local/bin/gh /usr/bin/gh; do
+          [ -x "$p" ] && exit 0
+        done
+        command -v gh >/dev/null 2>&1
+      args:
+        executable: /bin/bash
+      register: gh_check
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Install gh (release tarball -> ~/.local/bin/gh)
+      ansible.builtin.shell: |
+        set -o pipefail
+        case "$(uname -m)" in
+          x86_64)        arch=amd64 ;;
+          aarch64|arm64) arch=arm64 ;;
+          *)             arch=amd64 ;;
+        esac
+        # cli/cli publishes Linux as .tar.gz but macOS only as .zip. The hardcoded
+        # .tar.gz URL in setup.sh would 404 here; it never runs on a Mac (the brew
+        # branch wins), so the bug stayed hidden there.
+        os=linux; ext=tar.gz
+        [ "$(uname -s)" = "Darwin" ] && { os=macOS; ext=zip; }
+        tag=$(curl {{ curl_retry }} -fsSL https://api.github.com/repos/cli/cli/releases/latest | jq -r '.tag_name')
+        [ -n "$tag" ] && [ "$tag" != "null" ] || { echo "could not resolve latest gh release"; exit 1; }
+        ver="${tag#v}"
+        # A predictable /tmp name is clobberable by any other user on the box;
+        # setup.sh uses one, an unattended fleet run should not.
+        tmp="$(mktemp -d)"
+        trap 'rm -rf "$tmp"' EXIT
+        curl {{ curl_retry }} -fsSL \
+          "https://github.com/cli/cli/releases/download/${tag}/gh_${ver}_${os}_${arch}.${ext}" -o "$tmp/gh.${ext}"
+        case "$ext" in
+          tar.gz) tar xzf "$tmp/gh.${ext}" -C "$tmp" ;;
+          zip)    unzip -q "$tmp/gh.${ext}" -d "$tmp" ;;
+        esac
+        mkdir -p "$HOME/.local/bin"
+        install -m 0755 "$tmp/gh_${ver}_${os}_${arch}/bin/gh" "$HOME/.local/bin/gh"
+      args:
+        executable: /bin/bash
+        # `when` alone is the real guard (gh may live outside ~/.local/bin);
+        # creates: additionally lets --check report this task truthfully — a
+        # shell task without it is skipped outright in check mode.
+        creates: "{{ ansible_facts.env.HOME }}/.local/bin/gh"
+      when: gh_check.rc != 0
+
+    - name: Is bun present? (installer dir ~/.bun/bin, or brew)
+      ansible.builtin.shell: |
+        for p in "$HOME/.bun/bin/bun" "$HOME/.local/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
+          [ -x "$p" ] && exit 0
+        done
+        command -v bun >/dev/null 2>&1
+      args:
+        executable: /bin/bash
+      register: bun_check
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Install bun (official installer -> ~/.bun/bin/bun)
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl {{ curl_retry }} -fsSL https://bun.sh/install | bash
+      args:
+        executable: /bin/bash
+        creates: "{{ ansible_facts.env.HOME }}/.bun/bin/bun"
+      when: bun_check.rc != 0
+
     # ── Stage B: ai-dotfiles config (vps profile) ────────────────
     # (git/jq/curl already ensured in Stage 0)
     # force: true discards local runtime pollution — the live ~/.claude/settings.json
