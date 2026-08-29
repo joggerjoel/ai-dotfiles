@@ -169,11 +169,23 @@ def render_all(items: list[Item], outdir: Path = STORE_DIR) -> dict:
         )
 
     # --- latest ------------------------------------------------------------
-    cutoff = time.strftime("%Y-%m-%d", time.localtime(time.time() - LATEST_DAYS * 86400))
-    latest = [i for i in open_items if i.first_seen >= cutoff]
+    # Filtered on observation activity, NOT first_seen. first_seen is the date
+    # the sweep ran, so on a cold start every item carries the same value and
+    # this page rendered 172 of 172 open items -- "Latest" meaning "all of
+    # them", and staying that way for LATEST_DAYS.
+    #
+    # Activity is also the right axis: latest and stale are now two ends of one
+    # measure rather than two unrelated ones.
+    fresh_after = _now_ms() - LATEST_DAYS * 86400 * 1000
+    latest = sorted(
+        [i for i in open_items
+         if i.newest_source_epoch and i.newest_source_epoch > fresh_after],
+        key=lambda i: i.newest_source_epoch or 0,
+        reverse=True,
+    )
     (outdir / "latest.html").write_text(
         _page("Latest", "latest.html", _rows(latest, True),
-              subtitle=f"first seen in the last {LATEST_DAYS} days")
+              subtitle=f"source activity within {LATEST_DAYS} days, newest first")
     )
 
     # --- stale -------------------------------------------------------------

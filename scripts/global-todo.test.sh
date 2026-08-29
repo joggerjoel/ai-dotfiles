@@ -296,6 +296,7 @@ printf '\nRegressions found by running it\n'
 # tool, never by reading it. Each must FAIL if its fix is reverted.
 py - <<'PY'
 import sys, os, json, inspect, sqlite3, tempfile, threading
+from pathlib import Path as _P
 sys.path.insert(0, os.environ["DOT"] + "/lib")
 from global_todo import llm, sources
 
@@ -361,9 +362,32 @@ e = llm.IncompleteSweep("stopped", 3, 1, [{"i": 1}])
 check("IncompleteSweep carries its partial results",
       e.added == 3 and e.suppressed == 1 and len(e.items) == 1)
 
+# --- 5. latest.html must not select everything -----------------------------
+# first_seen is the SWEEP date, so on a cold start every item shares one value
+# and a first_seen filter selected 172 of 172 open items. Filter on observation
+# activity instead, which also makes latest and stale two ends of one axis.
+import time as _t
+from global_todo import render, core as _c
+now = _t.time() * 1000
+old = _c.Item(id="a1", topic="p / t", project="p", text="old work",
+              newest_source_epoch=int(now - 60 * 86400 * 1000), first_seen="2026-08-29")
+new = _c.Item(id="b2", topic="p / t", project="p", text="new work",
+              newest_source_epoch=int(now - 1 * 86400 * 1000), first_seen="2026-08-29")
+import tempfile as _tf
+outdir = _P(_tf.mkdtemp())
+render.render_all([old, new], outdir)
+latest_html = (outdir / "latest.html").read_text()
+stale_html = (outdir / "stale.html").read_text()
+check("latest excludes stale-dated work despite identical first_seen",
+      "new work" in latest_html and "old work" not in latest_html)
+check("stale is its mirror, not an overlap",
+      "old work" in stale_html and "new work" not in stale_html)
+check("render does not filter latest on first_seen",
+      "first_seen >=" not in inspect.getsource(render.render_all))
+
 sys.exit(1 if fails else 0)
 PY
-[ $? -eq 0 ] && pass=$((pass + 12)) || fail=$((fail + 1))
+[ $? -eq 0 ] && pass=$((pass + 15)) || fail=$((fail + 1))
 
 # A partial sweep must not exit 0: a wrapper cannot otherwise tell 4/110
 # chunks from 110/110.
