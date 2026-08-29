@@ -139,6 +139,9 @@ review +FILES:
     isolate --review "$(cat {{FILES}})"
 
 # ── fleet (ansible over all hosts; control machine only) ────────────
+# Every ansible line pipes through `cat`: ansible aborts outright when
+# stdout is a non-blocking pipe, which is what an agent session or any
+# wrapper reading output live hands it. pipefail keeps the real exit code.
 # Guard: fleet recipes need this machine to hold YOUR inventory (gitignored).
 _control:
     @test -f "{{dotfiles}}/ansible-ai/inventory.local.yml" || { \
@@ -149,27 +152,27 @@ _control:
 
 # [fleet] update every host (ai_all: the whole fleet incl. this box)
 fleet-update: _control
-    cd {{dotfiles}}/ansible-ai && ansible-playbook update.yml
+    set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook update.yml 2>&1 | cat
 
 # [fleet] install/refresh `just` on every host
 fleet-just: _control
-    cd {{dotfiles}}/ansible-ai && ansible-playbook provision-just.yml
+    set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook provision-just.yml 2>&1 | cat
 
 # [fleet] refresh the agent CLIs (claude/codex/pi/grok/…) everywhere
 fleet-harnesses: _control
-    cd {{dotfiles}}/ansible-ai && ansible-playbook update.yml --tags harnesses
+    set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook update.yml --tags harnesses 2>&1 | cat
 
 # [fleet] push local config out to the fleet
 fleet-push: _control
-    cd {{dotfiles}}/ansible-ai && ansible-playbook push-config.yml
+    set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook push-config.yml 2>&1 | cat
 
 # [fleet] provision the always-on node as the firstmate node
 provision-node: _control
-    cd {{dotfiles}}/ansible-ai && ansible-playbook provision-firstmate.yml
+    set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook provision-firstmate.yml 2>&1 | cat
 
 # [fleet] ad-hoc: reachability check across the fleet
 ping: _control
-    cd {{dotfiles}}/ansible-ai && ansible ai_all -m ping
+    set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible ai_all -m ping 2>&1 | cat
 
 # ── local (this machine) ────────────────────────────────────────────
 # [local] refresh this machine's agent CLIs + plugins
