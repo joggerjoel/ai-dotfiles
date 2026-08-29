@@ -9,8 +9,9 @@
 # Stage B — config (so remote claude behaves like your local setup):
 #   - base deps (git/jq/curl) so setup.sh needn't sudo mid-run
 #   - clone joggerjoel/ai-dotfiles
-#   - run setup.sh UNATTENDED with the vps profile + core plugin stack
-#     (answers seeded: profile=2/vps, github user, hide-AI=y; EOF drives the
+#   - run setup.sh UNATTENDED with the dotfiles_profile answer + core plugin
+#     stack (defaults to 2/vps for the headless fleet; pass 1 for an
+#     interactive Mac. Answers seeded: profile, github user, hide-AI=y; EOF
 #      rest to safe defaults: skip MCP integrations, skip Supabase, install
 #      core plugins, skip optional plugin groups)
 #
@@ -24,6 +25,15 @@
     # Retry transient network/CDN errors (5xx, 429, timeouts, conn refused) so a
     # blip like a 503 from an install CDN doesn't hard-fail a whole host.
     curl_retry: "--retry 5 --retry-delay 2 --retry-connrefused"
+
+    # The raw answer setup.sh's profile menu reads: an interactive Mac wants the
+    # desktop profile, a headless box wants vps. The fleet is headless, hence "2".
+    dotfiles_profile: "2"
+
+    # ~/.claude/settings.json also appears on hosts where Claude Code ran before
+    # ai-dotfiles was ever installed, so its presence is not proof setup.sh ran.
+    # Set true to run setup anyway on such a host.
+    dotfiles_force_setup: false
   tasks:
     # ── Stage 0: prerequisites ───────────────────────────────────────
     # Every CLI installer below pipes `curl`, and setup.sh needs git/jq. Install
@@ -291,9 +301,9 @@
       register: dotfiles_done
       when: install_dotfiles | bool
 
-    - name: Run ai-dotfiles setup.sh (vps profile, unattended)
+    - name: Run ai-dotfiles setup.sh (profile answer {{ dotfiles_profile }}, unattended)
       ansible.builtin.shell: |
-        printf '2\n{{ dotfiles_github_user }}\n{{ dotfiles_hide_ai }}\n' | bash setup.sh
+        printf '{{ dotfiles_profile }}\n{{ dotfiles_github_user }}\n{{ dotfiles_hide_ai }}\n' | bash setup.sh
       args:
         chdir: "{{ dotfiles_dir }}"
         executable: /bin/bash
@@ -301,7 +311,7 @@
       changed_when: "'Setup complete' in dotfiles_setup.stdout"
       when:
         - install_dotfiles | bool
-        - not (dotfiles_done.stat.exists | default(false))
+        - not (dotfiles_done.stat.exists | default(false)) or (dotfiles_force_setup | bool)
 
     # ── Verify + report ──────────────────────────────────────────────
     - name: Verify claude
