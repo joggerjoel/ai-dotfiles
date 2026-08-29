@@ -16,8 +16,15 @@ set -uo pipefail
 LOG="$HOME/.claude/.changelog/fleet-update.log"
 LOCK="$HOME/.claude/.fleet-update.lock"
 
-# cron's PATH is bare; ansible lives in brew/pip/user dirs.
-export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+# cron's PATH is bare; ansible lives in brew/pip/user dirs. pyenv's shim dir is
+# included because a pyenv-managed ansible is invisible otherwise: the guard
+# below then reported "not on PATH" and aborted every night, which is how the
+# fleet drifted 16 commits behind while the cron logged a run each morning.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.pyenv/shims:$PATH"
+
+# A pyenv shim resolves through `pyenv version`, which needs PYENV_ROOT when
+# HOME-relative discovery has not run. Harmless when pyenv is absent.
+[ -d "$HOME/.pyenv" ] && export PYENV_ROOT="$HOME/.pyenv"
 
 # Resolve the repo through the ~/.claude/scripts symlink.
 SELF="$0"
@@ -46,7 +53,11 @@ trap 'rmdir "$LOCK" 2>/dev/null' EXIT
   echo "───────────────────────────────────────────────"
   echo "[$(date '+%F %T')] fleet update starting (repo: $REPO)"
   if ! command -v ansible-playbook >/dev/null 2>&1; then
-    echo "ansible-playbook not on PATH — aborting"
+    # Print the PATH searched. Without it this line reads identically whether
+    # ansible is uninstalled or merely installed somewhere this script does not
+    # look, and the second case aborted nightly for weeks while the log kept
+    # showing a run.
+    echo "ansible-playbook not on PATH — aborting. PATH=$PATH"
     exit 1
   fi
   if [ ! -f "$REPO/ansible-ai/inventory.local.yml" ]; then
