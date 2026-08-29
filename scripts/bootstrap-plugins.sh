@@ -99,16 +99,44 @@ OPT_WRITING=(
   "learning-output-style@claude-plugins-official|Interactive 'learning' output style"
 )
 
+# ── Command runner ───────────────────────────────────────────────
+# A freshly added marketplace finishes cloning its catalog asynchronously, so
+# the `marketplace update` / `plugin install` calls that follow can hit a
+# half-populated catalog and fail spuriously. Retry before believing a failure,
+# and always keep the output so we can show WHY something failed.
+ATTEMPTS=3
+RETRY_DELAY=3
+RUN_OUT=""
+
+run_retry() {
+  local attempt
+  for attempt in $(seq 1 "$ATTEMPTS"); do
+    RUN_OUT=$("$@" 2>&1) && return 0
+    [ "$attempt" -lt "$ATTEMPTS" ] && sleep "$RETRY_DELAY"
+  done
+  return 1
+}
+
+# The CLI writes progress and result on one line; show the meaningful tail.
+last_line() { printf '%s' "$1" | tr '\r' '\n' | grep -v '^[[:space:]]*$' | tail -1; }
+
+FAILED_PLUGINS=()
+
 add_marketplaces() {
   header "Adding marketplaces"
   for entry in "${MARKETPLACES[@]}"; do
     local name="${entry%%|*}" repo="${entry##*|}"
-    if claude plugin marketplace list 2>/dev/null | grep -q "$name"; then
-      skip "$name (already added)"
-    elif claude plugin marketplace add "$repo" &>/dev/null; then
-      ok "$name ($repo)"
+    # `marketplace add` is idempotent and says "already on disk" when it is a
+    # no-op, so trust its own answer rather than grepping `marketplace list` —
+    # that list is empty whenever the registry has been reset, which silently
+    # turned every marketplace into a "fresh add" and triggered the clone race.
+    if run_retry claude plugin marketplace add "$repo"; then
+      case "$RUN_OUT" in
+        *"already on disk"*) skip "$name (already added)" ;;
+        *)                   ok   "$name ($repo)" ;;
+      esac
     else
-      warn "$name ($repo) — add failed, skipping its plugins"
+      warn "$name ($repo) — add failed: $(last_line "$RUN_OUT")"
     fi
   done
 }
@@ -118,21 +146,28 @@ refresh_marketplaces() {
   # plugins pick up updates on the next Claude Code start. Mirrors the daily
   # cron (marketplace-auto-update.sh); harmless right after a fresh add.
   header "Refreshing marketplaces"
-  if claude plugin marketplace update &>/dev/null; then
+  if run_retry claude plugin marketplace update; then
     ok "Marketplaces up to date"
   else
-    warn "Marketplace refresh had issues (network?) — plugins may be stale"
+    warn "Marketplace refresh failed: $(last_line "$RUN_OUT")"
+    warn "Plugins may be stale — retry: claude plugin marketplace update"
   fi
 }
 
 install_plugin() {
   local spec="$1" desc="$2" name="${1%%@*}"
-  if claude plugin list 2>/dev/null | grep -q "$name"; then
-    skip "$name (already installed)"
-  elif claude plugin install "$spec" &>/dev/null; then
-    ok "$name — $desc"
+  # `plugin install` is idempotent too, and reports "already installed". Asking
+  # it directly beats grepping `claude plugin list` for a bare plugin name,
+  # which both substring-matched the wrong rows (pg, code-review) and came up
+  # empty when the marketplace registry was missing.
+  if run_retry claude plugin install "$spec"; then
+    case "$RUN_OUT" in
+      *"already installed"*) skip "$name (already installed)" ;;
+      *)                     ok   "$name — $desc" ;;
+    esac
   else
-    warn "$name — install failed"
+    warn "$name — install failed: $(last_line "$RUN_OUT")"
+    FAILED_PLUGINS+=("$spec")
   fi
 }
 
@@ -179,7 +214,15 @@ else
 fi
 
 header "Plugins bootstrapped"
+if [ ${#FAILED_PLUGINS[@]} -gt 0 ]; then
+  warn "${#FAILED_PLUGINS[@]} plugin(s) failed after $ATTEMPTS attempts:"
+  for spec in "${FAILED_PLUGINS[@]}"; do
+    echo -e "      ${DIM}claude plugin install $spec${RESET}"
+  done
+fi
 echo -e "  ${DIM}Restart Claude Code to load newly installed plugins.${RESET}"
 echo -e "  ${DIM}List:   claude plugin list${RESET}"
 echo -e "  ${DIM}Add:    claude plugin install <plugin>@<marketplace>${RESET}"
 echo -e "  ${DIM}Remove: claude plugin uninstall <plugin>${RESET}"
+
+[ ${#FAILED_PLUGINS[@]} -eq 0 ]
