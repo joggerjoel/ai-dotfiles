@@ -16,6 +16,22 @@ set -uo pipefail
 # an install offer (y/N, default no); unattended runs (Ansible, cron)
 # skip them silently.
 #
+# Where a latest version is resolvable without installing (npm- and
+# brew-backed CLIs), it is checked first and the upgrade is skipped
+# outright when already current — so the fleet stops reinstalling
+# packages that haven't moved.
+#
+# Interactive runs get a prompt ONLY for a CLI with a known-newer
+# version: [U]pgrade/[P]in/[s]kip, default upgrade. Installer-only
+# CLIs (codex, cursor-agent, cortex, opencode, kimi, mel) can't be
+# checked without installing, so they never prompt — they just
+# upgrade, as they always did. Upgrade/skip are one-off answers;
+# nothing is recorded. Only [P]in persists, via the state file pin.sh
+# manages, and it holds across every future run — interactive or
+# unattended — until `pin.sh remove <name>`. Pin ahead of time with
+# pin.sh (or `setup.sh pin add <name>`) to hold back a CLI that never
+# prompts, or to have an unattended host converge on a pinned roster.
+#
 # Deliberately NOT `set -e` — one broken installer must not block
 # the remaining CLIs; failures are collected and reported instead.
 # ─────────────────────────────────────────────────────────────────
@@ -34,6 +50,12 @@ warn() { echo -e "  ${YELLOW}!${RESET} $1"; }
 # npm-installed CLIs (gemini) need node on PATH in non-login shells.
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+
+# Pin/unpin state (is_pinned/pin_cli/unpin_cli) lives in pin.sh, which
+# is also runnable standalone to set up pins ahead of an unattended
+# run — see pin.sh's header.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/pin.sh"
 
 CURL_RETRY="--retry 5 --retry-delay 2 --retry-connrefused"
 FAILED=""
@@ -85,22 +107,84 @@ offer_install() {
   fi
 }
 
-echo -e "${BOLD}Sibling agent CLIs${RESET}"
+# Best-effort "what's the latest version" lookups. Never required —
+# a lookup that fails or comes back empty just leaves the CLI's
+# latest version unknown, which is a reportable state, not an error.
+npm_latest() { command -v npm >/dev/null 2>&1 && npm view "$1" version 2>/dev/null; }
+brew_latest() {
+  command -v brew >/dev/null 2>&1 || return 0
+  brew info "$1" 2>/dev/null | head -1 | grep -oE '[0-9]+(\.[0-9]+)+' | head -1
+}
 
-# update_cli <name> <binary path or command name> <upgrade command> [install command]
-# Offers to install when the binary is absent; otherwise runs the
-# upgrade and reports old → new version (installers are quiet unless
-# they fail). "%BIN%" in the upgrade command is replaced with the
-# RESOLVED binary path, so a CLI found outside ~/.local/bin still
-# upgrades itself rather than a hardcoded path that doesn't exist.
-update_cli() {
-  local name="$1" bin="$2" cmd="$3" install_cmd="${4:-}" before="" after=""
-  if [ ! -x "$bin" ]; then
-    bin="$(command -v "$bin" 2>/dev/null || true)"
-    [ -n "$bin" ] || { offer_install "$name" "$install_cmd"; return 0; }
-  fi
+# ── Wave structure ───────────────────────────────────────────────
+# This runs in two passes over the same roster, because inspecting
+# and mutating want different things from you.
+#
+#   Wave 1 (survey)  Read-only. Resolves every CLI's installed and
+#                    available version and prints the table. Nothing
+#                    is installed, so the full picture is on screen
+#                    BEFORE the first question — you can see that
+#                    three CLIs are current and one moved, instead of
+#                    deciding on #1 with no idea what #2..#12 hold.
+#   Wave 2 (apply)   Mutating. Per CLI: obey pin.sh's config if it
+#                    has an entry, otherwise ask (when a human is
+#                    attached) or upgrade (when not).
+#
+# register_cli <name> <binary path or command name> <upgrade command> [install command] [latest-version command]
+# Registration is pure data — it must not print or mutate, or wave 1
+# would no longer be a clean survey. "%BIN%" in the upgrade command
+# is replaced during wave 2 with the RESOLVED binary path, so a CLI
+# found outside ~/.local/bin upgrades itself rather than a hardcoded
+# path that doesn't exist.
+CLI_NAME=(); CLI_BIN=(); CLI_CMD=(); CLI_INSTALL=(); CLI_LATEST_CMD=(); CLI_BLOCKED=()
+register_cli() {
+  CLI_NAME+=("$1"); CLI_BIN+=("$2"); CLI_CMD+=("$3")
+  CLI_INSTALL+=("${4:-}"); CLI_LATEST_CMD+=("${5:-}"); CLI_BLOCKED+=("")
+}
+# A CLI present but unupgradable here (locked keychain, no package
+# manager). Registered so the survey still reports it and says why.
+block_cli() {
+  CLI_NAME+=("$1"); CLI_BIN+=(""); CLI_CMD+=(""); CLI_INSTALL+=("")
+  CLI_LATEST_CMD+=(""); CLI_BLOCKED+=("$2")
+}
+
+# apply_cli <index> — wave 2's per-CLI mutation.
+apply_cli() {
+  local i="$1"
+  local name="${CLI_NAME[$i]}" bin="${RES_BIN[$i]}" cmd="${CLI_CMD[$i]}"
+  local before="${RES_CUR[$i]}" latest="${RES_LATEST[$i]}" status="${RES_STATUS[$i]}"
+  local action after="" choice=""
+
+  # Already fully reported by the survey — saying it twice would bury
+  # the lines that represent actual work.
+  case "$status" in
+    blocked | current) return 0 ;;
+    missing) offer_install "$name" "${CLI_INSTALL[$i]}"; return 0 ;;
+  esac
+
+  action="$(get_action "$name")"
+  case "$action" in
+    pin)  skip "$name: pinned at ${before:-current version} — clear with: pin.sh remove $name"; return 0 ;;
+    auto) ;;  # configured to always upgrade — no question
+    *)
+      # Unconfigured. Ask only when a human is attached AND we can
+      # show a concrete newer version; an unattended run, or one
+      # where "latest" is unknowable, takes the default and upgrades.
+      if [ "$INTERACTIVE" = "yes" ] && [ "$status" = "outdated" ]; then
+        printf "  %s: %s → %s — [U]pgrade once/[A]lways/[P]in/[s]kip? [U/a/p/s] " \
+          "$name" "${before:-?}" "$latest"
+        IFS= read -r choice </dev/tty || choice=""
+        case "$choice" in
+          a | A) set_action "$name" auto; ok "$name: will always upgrade from now on" ;;
+          p | P) set_action "$name" pin; skip "$name pinned at ${before:-current version}"; return 0 ;;
+          s | S) skip "$name skipped this run"; return 0 ;;
+          *) ;; # default (bare Enter included): upgrade once, record nothing
+        esac
+      fi
+      ;;
+  esac
+
   cmd="${cmd//%BIN%/$bin}"
-  before="$("$bin" --version 2>/dev/null | head -1)"
   if $RUN_TIMEOUT bash -c "$cmd" >"$LOG" 2>&1; then
     after="$("$bin" --version 2>/dev/null | head -1)"
     if [ -n "$after" ] && [ "$after" = "$before" ]; then
@@ -120,15 +204,15 @@ update_cli() {
 # Codex makes the launch's exit status masquerade as an install failure.
 # The installer doubles as the updater.
 CODEX_INSTALL="curl $CURL_RETRY -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
-update_cli "codex" "$HOME/.local/bin/codex" "$CODEX_INSTALL" "$CODEX_INSTALL"
+register_cli "codex" "$HOME/.local/bin/codex" "$CODEX_INSTALL" "$CODEX_INSTALL"
 
 # cursor-agent needs the macOS login keychain, which is locked over
 # SSH — a doomed attempt would just pollute the report every run.
 if [ "$(uname -s)" = "Darwin" ] && [ -n "${SSH_CONNECTION:-}" ] \
    && ! security show-keychain-info >/dev/null 2>&1; then
-  skip "cursor-agent: login keychain locked over SSH — update from a local session"
+  block_cli "cursor-agent" "login keychain locked over SSH — update from a local session"
 else
-  update_cli "cursor-agent" "$HOME/.local/bin/cursor-agent" \
+  register_cli "cursor-agent" "$HOME/.local/bin/cursor-agent" \
     "\"%BIN%\" update" \
     "curl $CURL_RETRY -fsSL https://cursor.com/install | bash"
 fi
@@ -136,7 +220,7 @@ fi
 # https://docs.snowflake.com/en/user-guide/cortex-code/cortex-code-cli
 # NON_INTERACTIVE + SKIP_PATH_PROMPT: the installer otherwise prompts
 # "add .local/bin to PATH? [y/N]" on /dev/tty and dies without one.
-update_cli "cortex" "$HOME/.local/bin/cortex" \
+register_cli "cortex" "$HOME/.local/bin/cortex" \
   "\"%BIN%\" update" \
   "curl $CURL_RETRY -LsS https://ai.snowflake.com/static/cc-scripts/install.sh | NON_INTERACTIVE=1 SKIP_PATH_PROMPT=1 sh"
 
@@ -147,34 +231,39 @@ for p in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
   [ -x "$p" ] && { OPENCODE_BIN="$p"; break; }
 done
 [ -z "$OPENCODE_BIN" ] && OPENCODE_BIN="$(command -v opencode 2>/dev/null || true)"
-if [ -n "$OPENCODE_BIN" ]; then
-  update_cli "opencode" "$OPENCODE_BIN" "\"%BIN%\" upgrade || $OPENCODE_INSTALL"
-else
-  offer_install "opencode" "$OPENCODE_INSTALL"
-fi
+# Registering the bare name when nothing resolved lets wave 1 report it
+# as missing and wave 2 offer the install — same path as every other CLI.
+register_cli "opencode" "${OPENCODE_BIN:-opencode}" \
+  "\"%BIN%\" upgrade || $OPENCODE_INSTALL" "$OPENCODE_INSTALL"
 
 # gemini is npm-installed on the fleet but may be brew-managed locally;
 # upgrading the wrong way would leave two copies fighting over PATH.
 # Fresh installs prefer brew when it exists, npm otherwise.
 GEMINI_UPGRADE="npm install -g @google/gemini-cli@latest"
 GEMINI_INSTALL="npm install -g @google/gemini-cli@latest"
+GEMINI_LATEST="npm_latest @google/gemini-cli"
 if command -v brew >/dev/null 2>&1; then
   GEMINI_INSTALL="brew install gemini-cli"
-  brew list --formula gemini-cli >/dev/null 2>&1 && GEMINI_UPGRADE="brew upgrade gemini-cli"
+  if brew list --formula gemini-cli >/dev/null 2>&1; then
+    GEMINI_UPGRADE="brew upgrade gemini-cli"
+    GEMINI_LATEST="brew_latest gemini-cli"
+  fi
 fi
-update_cli "gemini" "gemini" "$GEMINI_UPGRADE" "$GEMINI_INSTALL"
+register_cli "gemini" "gemini" "$GEMINI_UPGRADE" "$GEMINI_INSTALL" "$GEMINI_LATEST"
 
 # pi (Earendil Pi coding agent) — npm global, MIT. Vendor documents
 # --ignore-scripts on install; pi has its own updater (`pi update self`),
 # so prefer that and fall back to npm if the self-update path fails.
+# The npm registry version is a reasonable stand-in for "latest" even
+# on the self-update path — both track the same upstream releases.
 PI_INSTALL="npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
-update_cli "pi" "pi" "\"%BIN%\" update self || $PI_INSTALL" "$PI_INSTALL"
+register_cli "pi" "pi" "\"%BIN%\" update self || $PI_INSTALL" "$PI_INSTALL" "npm_latest @earendil-works/pi-coding-agent"
 
 # grok (official xAI Grok CLI) — npm global. The @xai-official/grok package
 # is the one firstmate's grok harness targets (grok --always-approve); the
 # many third-party grok-cli packages are NOT interchangeable.
 GROK_INSTALL="npm install -g @xai-official/grok@latest"
-update_cli "grok" "grok" "$GROK_INSTALL" "$GROK_INSTALL"
+register_cli "grok" "grok" "$GROK_INSTALL" "$GROK_INSTALL" "npm_latest @xai-official/grok"
 
 # kimi (Kimi Code CLI, Moonshot) — installs to ~/.kimi-code/bin, which is off
 # PATH in the non-login shells Ansible and cron use, so resolve it by absolute
@@ -185,7 +274,7 @@ update_cli "grok" "grok" "$GROK_INSTALL" "$GROK_INSTALL"
 # NB: MoonshotAI/kimi-cli (the older Python CLI) is a DIFFERENT, wound-down
 # project — this is kimi-code, its successor.
 KIMI_INSTALL="curl $CURL_RETRY --proto '=https' --tlsv1.2 -fsSL https://code.kimi.com/kimi-code/install.sh | bash"
-update_cli "kimi" "$HOME/.kimi-code/bin/kimi" "\"%BIN%\" upgrade || $KIMI_INSTALL" "$KIMI_INSTALL"
+register_cli "kimi" "$HOME/.kimi-code/bin/kimi" "\"%BIN%\" upgrade || $KIMI_INSTALL" "$KIMI_INSTALL"
 
 # mel (openmel.dev) — agentic terminal; a desktop app whose binary is also a
 # working CLI (`mel --version` answers), so it belongs in this roster.
@@ -196,7 +285,7 @@ update_cli "kimi" "$HOME/.kimi-code/bin/kimi" "\"%BIN%\" upgrade || $KIMI_INSTAL
 # macOS is a .app bundle (symlinked onto PATH); Linux is x86_64 only and the
 # wrapper stops with a clear message on anything else.
 MEL_INSTALL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/install-mel.sh"
-update_cli "mel" "$HOME/.local/bin/mel" "$MEL_INSTALL" "$MEL_INSTALL"
+register_cli "mel" "$HOME/.local/bin/mel" "$MEL_INSTALL" "$MEL_INSTALL"
 
 # just (command runner — the justfile launchpad). Same split as gemini:
 # brew-managed where brew manages it, otherwise the official installer,
@@ -207,11 +296,15 @@ update_cli "mel" "$HOME/.local/bin/mel" "$MEL_INSTALL" "$MEL_INSTALL"
 # every host that has just, so upgrades never land on the Linux fleet.
 JUST_INSTALL="curl $CURL_RETRY --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --force --to \"\$HOME/.local/bin\""
 JUST_UPGRADE="$JUST_INSTALL"
+JUST_LATEST=""
 if command -v brew >/dev/null 2>&1; then
   JUST_INSTALL="brew install just"
-  brew list --formula just >/dev/null 2>&1 && JUST_UPGRADE="brew upgrade just"
+  if brew list --formula just >/dev/null 2>&1; then
+    JUST_UPGRADE="brew upgrade just"
+    JUST_LATEST="brew_latest just"
+  fi
 fi
-update_cli "just" "just" "$JUST_UPGRADE" "$JUST_INSTALL"
+register_cli "just" "just" "$JUST_UPGRADE" "$JUST_INSTALL" "$JUST_LATEST"
 
 # headroom is a pipx- or uv-tool-managed python CLI; `headroom update`
 # confirms on a tty, so drive the manager directly. Resolve both by
@@ -245,21 +338,85 @@ fi
 
 if [ -n "$UV" ] && [ -d "$HOME/.local/share/uv/tools/headroom-ai" ]; then
   # installed as a uv tool (hosts provisioned without pipx)
-  update_cli "headroom" "$HOME/.local/bin/headroom" \
+  register_cli "headroom" "$HOME/.local/bin/headroom" \
     "\"$UV\" tool upgrade headroom-ai" \
     "\"$UV\" tool install 'headroom-ai[all]'"
 elif [ -n "$PIPX" ]; then
-  update_cli "headroom" "$HOME/.local/bin/headroom" \
+  register_cli "headroom" "$HOME/.local/bin/headroom" \
     "\"$PIPX\" upgrade headroom-ai" \
     "\"$PIPX\" install 'headroom-ai[all]'"
 elif [ -n "$UV" ]; then
-  update_cli "headroom" "$HOME/.local/bin/headroom" \
+  register_cli "headroom" "$HOME/.local/bin/headroom" \
     "\"$UV\" tool upgrade headroom-ai" \
     "\"$UV\" tool install 'headroom-ai[all]'"
 elif [ -x "$HOME/.local/bin/headroom" ]; then
-  warn "headroom installed but neither pipx nor uv found — can't upgrade it"
+  block_cli "headroom" "installed but neither pipx nor uv found — can't upgrade it"
 else
-  skip "headroom skipped (pipx/uv not available)"
+  block_cli "headroom" "skipped (pipx/uv not available)"
+fi
+
+# ── Wave 1: survey (read-only) ───────────────────────────────────
+# Resolve and report every CLI before touching any of them.
+echo -e "${BOLD}Sibling agent CLIs${RESET}"
+RES_BIN=(); RES_CUR=(); RES_LATEST=(); RES_STATUS=()
+NEED_ACTION="no"
+for i in "${!CLI_NAME[@]}"; do
+  name="${CLI_NAME[$i]}"; bin="${CLI_BIN[$i]}"; cur=""; latest=""; status=""
+  if [ -n "${CLI_BLOCKED[$i]}" ]; then
+    status="blocked"
+  else
+    [ -x "$bin" ] || bin="$(command -v "$bin" 2>/dev/null || true)"
+    if [ -z "$bin" ]; then
+      status="missing"
+    else
+      cur="$("$bin" --version 2>/dev/null | head -1)"
+      # eval, not `bash -c` — the lookups are shell functions defined
+      # above, and a subshell wouldn't have them.
+      [ -n "${CLI_LATEST_CMD[$i]}" ] && latest="$(eval "${CLI_LATEST_CMD[$i]}" 2>/dev/null)"
+      if [ -n "$latest" ] && [ -n "$cur" ] && [[ "$cur" == *"$latest"* ]]; then
+        status="current"
+      elif [ -n "$latest" ]; then
+        status="outdated"
+      else
+        # No way to check without installing — the installer decides.
+        status="unknown"
+      fi
+    fi
+  fi
+  RES_BIN+=("$bin"); RES_CUR+=("$cur"); RES_LATEST+=("$latest"); RES_STATUS+=("$status")
+
+  case "$status" in
+    blocked)  note="${CLI_BLOCKED[$i]}";        color="$DIM" ;;
+    missing)  note="not installed";             color="$DIM" ;;
+    current)  note="current";                   color="$GREEN" ;;
+    outdated) note="→ ${latest} available";     color="$YELLOW" ;;
+    unknown)  note="latest unknown";            color="$DIM" ;;
+  esac
+  # Policy rides on the same line — a CLI's version and whether it is
+  # frozen are one fact, and splitting them doubles the table's height.
+  pol="$(get_action "$name")"
+  case "$pol" in
+    pin)  poltag=" [pinned]" ;;
+    auto) poltag=" [auto]" ;;
+    *)    poltag="" ;;
+  esac
+  printf "  %-14s %-30s ${color}%s${RESET}${DIM}%s${RESET}\n" "$name" "$cur" "$note" "$poltag"
+
+  case "$status" in
+    current | blocked) ;;
+    *) [ "$pol" = "pin" ] || NEED_ACTION="yes" ;;
+  esac
+done
+
+# ── Wave 2: apply (mutating) ─────────────────────────────────────
+# Only entries that represent real work reach this pass; pinned CLIs
+# and anything already current were settled by the survey.
+if [ "$NEED_ACTION" = "yes" ]; then
+  echo
+  echo -e "${BOLD}Updates${RESET}"
+  for i in "${!CLI_NAME[@]}"; do
+    apply_cli "$i"
+  done
 fi
 HEADROOM_BIN="$HOME/.local/bin/headroom"
 [ -x "$HEADROOM_BIN" ] || HEADROOM_BIN="$(command -v headroom 2>/dev/null || true)"
@@ -302,6 +459,17 @@ elif curl -m 2 -fsS "http://127.0.0.1:${NINEROUTER_PORT}/api/health" >/dev/null 
   ok "9router: gateway up on :${NINEROUTER_PORT}"
 else
   skip "9router: not reachable on :${NINEROUTER_PORT} — Docker service on the fleet; update via ansible-ai/deploy-9router.yml"
+fi
+
+# Pins persist and are easy to forget — months later a deliberately
+# frozen CLI looks identical to one nobody has touched. Restate them
+# on every run, unattended included: the survey marks each inline, but
+# a fleet recap of 8 hosts is skimmed at the tail, not read in full.
+PINS="$(list_pins)"
+if [ -n "$PINS" ]; then
+  echo
+  echo -e "  ${DIM}Pinned, not upgraded: $(echo "$PINS" | tr '\n' ' ')${RESET}"
+  echo -e "  ${DIM}Clear with: scripts/pin.sh remove <name>${RESET}"
 fi
 
 if [ -n "$FAILED" ]; then
