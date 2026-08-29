@@ -385,9 +385,46 @@ check("stale is its mirror, not an overlap",
 check("render does not filter latest on first_seen",
       "first_seen >=" not in inspect.getsource(render.render_all))
 
+# --- 6. verification-time merge into existing records ----------------------
+# Jaccard at 0.7 matched 0 pairs across 172 real open items while three records
+# described one piece of stop-hook work (0.278 against each other). Meaning has
+# to be judged by something that understands meaning, so verification now sees
+# the project's open records and may return merge_into.
+tgt = _c.Item(id="aaaa1111", topic="p / t", project="p",
+              text="Fix missing stop hook scripts", source_ids=[1, 2])
+closed = _c.Item(id="bbbb2222", topic="p / t", project="p",
+                 text="already handled", source_ids=[9])
+closed.status, closed.closed_by = "dismissed", "user"
+
+fresh, n = llm.apply_merges([tgt, closed],
+    [{"text": "Create two missing stop hook scripts", "source_ids": [3],
+      "merge_into": "aaaa1111"}])
+check("a merge_into folds the candidate into the existing record", n == 1 and fresh == [])
+check("merging unions source_ids", tgt.source_ids == [1, 2, 3])
+check("merging preserves the target's id and status",
+      tgt.id == "aaaa1111" and tgt.status == "open")
+
+# The model must not be able to retire new work by pointing at a closed record.
+fresh2, n2 = llm.apply_merges([tgt, closed],
+    [{"text": "something new", "source_ids": [4], "merge_into": "bbbb2222"}])
+check("merging into a CLOSED record is refused", n2 == 0 and len(fresh2) == 1)
+check("the refused candidate survives as new", fresh2[0]["source_ids"] == [4])
+
+# A hallucinated id must not silently discard the candidate.
+fresh3, n3 = llm.apply_merges([tgt],
+    [{"text": "unrelated", "source_ids": [5], "merge_into": "deadbeef"}])
+check("an unknown merge_into keeps the candidate", n3 == 0 and len(fresh3) == 1)
+
+fresh4, n4 = llm.apply_merges([tgt],
+    [{"text": "plain new item", "source_ids": [6]}])
+check("a candidate with no merge_into is untouched", n4 == 0 and len(fresh4) == 1)
+
+check("only open records are offered to the model",
+      "if i.is_open()" in inspect.getsource(llm._verify))
+
 sys.exit(1 if fails else 0)
 PY
-[ $? -eq 0 ] && pass=$((pass + 15)) || fail=$((fail + 1))
+[ $? -eq 0 ] && pass=$((pass + 23)) || fail=$((fail + 1))
 
 # A partial sweep must not exit 0: a wrapper cannot otherwise tell 4/110
 # chunks from 110/110.

@@ -67,21 +67,30 @@ INPUT:
 """
 
 VERIFY_PROMPT = """\
-You are verifying whether candidate work items are STILL OPEN.
+You are verifying whether candidate work items are STILL OPEN, and whether any
+of them duplicate work already tracked.
 
 CANDIDATES (JSON) were extracted from older observations. RECENT OBSERVATIONS
-are the newest activity in this project. An item is RESOLVED if the recent
-observations show the work was completed, superseded, or abandoned.
+are the newest activity in this project. EXISTING are items already tracked and
+still open, each with an id.
+
+An item is RESOLVED if the recent observations show the work was completed,
+superseded, or abandoned.
 
 Rules:
 - Return only candidates that are STILL OPEN.
+- If a candidate describes the SAME piece of work as an EXISTING item, set
+  "merge_into" to that item's id instead of returning it as new. Judge by
+  meaning, not wording: "Fix missing stop hook scripts" and "Create two missing
+  stop hook scripts" are the same work.
 - Merge candidates describing facets of one piece of work into one item,
   carrying the UNION of their source_ids. Never drop a source_id.
 - Keep text imperative and <=120 chars.
 - When the recent observations say nothing about a candidate, KEEP it.
+- Only ever merge into an id listed under EXISTING. Never invent one.
 
 Output STRICT JSON only. Schema:
-[{"topic":"...","text":"...","source_ids":[1,2]}]
+[{"topic":"...","text":"...","source_ids":[1,2],"merge_into":"<id or null>"}]
 
 """
 
@@ -248,7 +257,15 @@ def sweep(items: list[Item], state: dict, args) -> tuple[int, int, list[Item]]:
     if incomplete:
         state["last_status"] = "incomplete"
 
-    verified = _verify(staged, obs_index, snap.recent_by_project, model)
+    existing_by_project: dict[str, list[Item]] = {}
+    for it in items:
+        existing_by_project.setdefault(it.project, []).append(it)
+
+    verified = _verify(staged, obs_index, snap.recent_by_project, model,
+                       existing_by_project)
+    verified, n_merged = apply_merges(items, verified)
+    if n_merged:
+        print(f"claude-mem: {n_merged} candidate(s) merged into existing items")
     candidates = _to_items(verified, obs_index)
     merged, added, suppressed = core.merge(items, candidates)
     print(f"claude-mem: {len(verified)} verified  {added} new  {suppressed} known")
@@ -291,8 +308,49 @@ def _keep_unverified(project: str, cands: list[dict], exc: Exception,
     return list(cands)
 
 
+def apply_merges(items: list[Item], verified: list[dict]) -> tuple[list[dict], int]:
+    """Fold `merge_into` decisions into existing records.
+
+    Returns (candidates that are genuinely new, merge count).
+
+    Token-overlap dedupe cannot close this gap. On the live store, Jaccard at
+    the configured 0.7 matched zero pairs out of 172 open items, while three
+    separate records described one piece of stop-hook work -- scoring 0.278
+    against each other, below even a 0.4 threshold. Short imperative sentences
+    reworded by a model share too few tokens. Meaning has to be judged by
+    something that understands meaning.
+
+    Safety: only OPEN records were offered to the model, and a merge_into
+    naming anything else is ignored rather than trusted. Merging into a closed
+    record would hand the model a silent way to suppress new work.
+    """
+    open_by_id = {i.id: i for i in items if i.is_open()}
+    fresh: list[dict] = []
+    merged = 0
+
+    for cand in verified:
+        target_id = cand.get("merge_into")
+        if not target_id or not isinstance(target_id, str):
+            fresh.append(cand)
+            continue
+        target = open_by_id.get(target_id)
+        if target is None:
+            # Hallucinated or closed id: treat as new rather than dropping it.
+            log(f"merge_into '{target_id}' is not an open record; keeping as new")
+            fresh.append(cand)
+            continue
+        sids = [s for s in cand.get("source_ids", []) if isinstance(s, int)]
+        target.source_ids = sorted(set(target.source_ids) | set(sids))
+        # The record keeps its id and status, so a `done` set by the user is
+        # never stranded by a later merge.
+        merged += 1
+
+    return fresh, merged
+
+
 def _verify(staged: list[dict], obs_index: dict,
-            recent_by_project: dict[str, list[dict]], model: str) -> list[dict]:
+            recent_by_project: dict[str, list[dict]], model: str,
+            existing_by_project: dict[str, list[Item]] | None = None) -> list[dict]:
     """One call per project over staged candidates plus recent evidence.
 
     The sweep is chunk-local and cannot see that an August observation
@@ -323,13 +381,20 @@ def _verify(staged: list[dict], obs_index: dict,
         return []
     print(f"verifying:  {len(by_project)} projects", flush=True)
 
+    existing_by_project = existing_by_project or {}
+
     def run(project: str, cands: list[dict]) -> list[dict]:
         recent = recent_by_project.get(project, [])
+        # Only open records are offered: a merge into a closed one would be a
+        # silent suppression path.
+        existing = [{"id": i.id, "text": i.text}
+                    for i in existing_by_project.get(project, []) if i.is_open()]
         out: list[dict] = []
         for i in range(0, len(cands), VERIFY_BATCH):
             batch = cands[i:i + VERIFY_BATCH]
             prompt = (VERIFY_PROMPT
                       + "CANDIDATES:\n" + json.dumps(batch, ensure_ascii=False)
+                      + "\n\nEXISTING:\n" + json.dumps(existing[:200], ensure_ascii=False)
                       + "\n\nRECENT OBSERVATIONS:\n"
                       + "\n".join(f"{r['title']} / {r['subtitle']}" for r in recent))
             try:
