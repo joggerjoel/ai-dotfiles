@@ -56,6 +56,10 @@
       args:
         executable: /bin/bash
       register: prereq_check
+      # A shell task is skipped under --check, so this var would have no .rc and
+      # the install task it gates would skip for the wrong reason -- a dry run
+      # reporting convergence it never checked.
+      check_mode: false
       changed_when: false
       failed_when: false
 
@@ -79,6 +83,10 @@
       args:
         executable: /bin/bash
       register: node_check
+      # A shell task is skipped under --check, so this var would have no .rc and
+      # the install task it gates would skip for the wrong reason -- a dry run
+      # reporting convergence it never checked.
+      check_mode: false
       changed_when: false
       failed_when: false
 
@@ -106,6 +114,10 @@
     - name: Detect existing tmux
       ansible.builtin.shell: command -v tmux
       register: tmux_check
+      # A shell task is skipped under --check, so this var would have no .rc and
+      # the install task it gates would skip for the wrong reason -- a dry run
+      # reporting convergence it never checked.
+      check_mode: false
       changed_when: false
       failed_when: false
 
@@ -171,6 +183,10 @@
       args:
         executable: /bin/bash
       register: opencode_check
+      # A shell task is skipped under --check, so this var would have no .rc and
+      # the install task it gates would skip for the wrong reason -- a dry run
+      # reporting convergence it never checked.
+      check_mode: false
       changed_when: false
       failed_when: false
 
@@ -190,6 +206,10 @@
       args:
         executable: /bin/bash
       register: gemini_check
+      # A shell task is skipped under --check, so this var would have no .rc and
+      # the install task it gates would skip for the wrong reason -- a dry run
+      # reporting convergence it never checked.
+      check_mode: false
       changed_when: false
       failed_when: false
 
@@ -212,6 +232,10 @@
       args:
         executable: /bin/bash
       register: pi_check
+      # A shell task is skipped under --check, so this var would have no .rc and
+      # the install task it gates would skip for the wrong reason -- a dry run
+      # reporting convergence it never checked.
+      check_mode: false
       changed_when: false
       failed_when: false
 
@@ -236,6 +260,10 @@
       args:
         executable: /bin/bash
       register: grok_check
+      # A shell task is skipped under --check, so this var would have no .rc and
+      # the install task it gates would skip for the wrong reason -- a dry run
+      # reporting convergence it never checked.
+      check_mode: false
       changed_when: false
       failed_when: false
 
