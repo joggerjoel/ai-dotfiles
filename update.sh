@@ -442,7 +442,11 @@ if [ "$RUN_AGENTS" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/vendor-pstack-skills
     if [ -n "$pstack_out" ]; then
       # Scope the dirty-check to just the dirs this run vendored, not all of
       # skills/, so an unrelated skill edit elsewhere doesn't get misattributed.
-      mapfile -t pstack_dirs < <(echo "$pstack_out" | sed -n 's/^vendored \([^ ]*\)$/skills\/\1/p')
+      # while-read, not mapfile: stock macOS is bash 3.2 and has no mapfile.
+      pstack_dirs=()
+      while IFS= read -r pstack_dir; do
+        [ -n "$pstack_dir" ] && pstack_dirs+=("$pstack_dir")
+      done < <(echo "$pstack_out" | sed -n 's/^vendored \([^ ]*\)$/skills\/\1/p')
       if [ "${#pstack_dirs[@]}" -gt 0 ] \
         && git -C "$DOTFILES_DIR" status --porcelain -- "${pstack_dirs[@]}" 2>/dev/null | grep -q .; then
         ok "Re-vendored from cursor/plugins (pstack) → ~/.claude/skills"
