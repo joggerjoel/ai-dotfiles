@@ -171,9 +171,11 @@ def sweep(items: list[Item], state: dict, args) -> tuple[int, int, list[Item]]:
     model = state.get("model_id") or DEFAULT_MODEL
     state["model_id"] = model
 
-    conn = sources.connect()
+    # One transaction, then the connection is gone. No database handle exists
+    # from here on, so no thread can touch one.
     watermark = 0 if args.cold_start else state.get("watermark_epoch", 0)
-    rows = sources.fetch_observations(conn, watermark)
+    snap = sources.take_snapshot(watermark, recent_limit=RECENT_EVIDENCE)
+    rows = snap.rows
     if not rows:
         print("claude-mem: no new observations")
         return 0, 0, items
@@ -190,7 +192,7 @@ def sweep(items: list[Item], state: dict, args) -> tuple[int, int, list[Item]]:
             print("  aborted")
             return 0, 0, items
 
-    obs_index = sources.observation_index(rows)
+    obs_index = snap.index()
     attempts = state.setdefault("chunk_attempts", {})
     staged: list[dict] = []
     committed = 0
@@ -246,7 +248,7 @@ def sweep(items: list[Item], state: dict, args) -> tuple[int, int, list[Item]]:
     if incomplete:
         state["last_status"] = "incomplete"
 
-    verified = _verify(staged, obs_index, conn, model)
+    verified = _verify(staged, obs_index, snap.recent_by_project, model)
     candidates = _to_items(verified, obs_index)
     merged, added, suppressed = core.merge(items, candidates)
     print(f"claude-mem: {len(verified)} verified  {added} new  {suppressed} known")
@@ -268,34 +270,61 @@ def _project_of(source_ids: list[int], obs_index: dict) -> str:
     return "unknown"
 
 
-def _verify(staged: list[dict], obs_index: dict, conn, model: str) -> list[dict]:
+def _keep_unverified(project: str, cands: list[dict], exc: Exception,
+                     where: str) -> list[dict]:
+    """The single failure policy for verification: never drop on error.
+
+    Verification's job is to REMOVE candidates, so any error inside it is
+    indistinguishable from "the model said these are resolved" unless the
+    failure path is explicitly the other way. An unverified candidate is a
+    triage problem you can see; a dropped one is invisible forever.
+
+    This exists as one named function because the bug it prevents was caused
+    by having two handlers with opposite policies: the inner one kept the
+    batch, the outer one dropped it, and the outer one is the one that fired.
+    Every failure path in _verify routes through here. Do not add another.
+    """
+    log(f"verify {project} {where} failed ({type(exc).__name__}); "
+        f"keeping {len(cands)} unverified")
+    print(f"  verify {project}: {type(exc).__name__} in {where} "
+          f"— keeping {len(cands)} unverified", flush=True)
+    return list(cands)
+
+
+def _verify(staged: list[dict], obs_index: dict,
+            recent_by_project: dict[str, list[dict]], model: str) -> list[dict]:
     """One call per project over staged candidates plus recent evidence.
 
     The sweep is chunk-local and cannot see that an August observation
     resolved a July item. This is the only stage that sees a whole project.
+
+    Takes pre-read evidence, never a database connection: this function owns a
+    thread pool, and a live sqlite3 handle in its scope is the exact hazard
+    that silently discarded every candidate once already.
     """
     by_project: dict[str, list[dict]] = {}
+    dropped_no_ids = 0
     for cand in staged:
         sids = [s for s in cand.get("source_ids", []) if isinstance(s, int)]
         if not sids:
+            dropped_no_ids += 1
             continue
         cand["source_ids"] = sids
         by_project.setdefault(_project_of(sids, obs_index), []).append(cand)
+
+    if dropped_no_ids:
+        # Loud, because this is a silent-loss path: a candidate with no usable
+        # source_ids cannot be keyed, so it cannot enter the store at all.
+        log(f"verify: {dropped_no_ids} candidate(s) had no usable source_ids")
+        print(f"  verify: {dropped_no_ids} candidate(s) dropped — no source_ids",
+              flush=True)
 
     if not by_project:
         return []
     print(f"verifying:  {len(by_project)} projects", flush=True)
 
-    # Gather evidence on THIS thread. sqlite3 connections are not thread-safe;
-    # touching one from the pool raises ProgrammingError, which an outer
-    # handler would then turn into silent, total candidate loss.
-    evidence = {
-        project: sources.recent_observations(conn, project, RECENT_EVIDENCE)
-        for project in by_project
-    }
-
     def run(project: str, cands: list[dict]) -> list[dict]:
-        recent = evidence.get(project, [])
+        recent = recent_by_project.get(project, [])
         out: list[dict] = []
         for i in range(0, len(cands), VERIFY_BATCH):
             batch = cands[i:i + VERIFY_BATCH]
@@ -306,8 +335,7 @@ def _verify(staged: list[dict], obs_index: dict, conn, model: str) -> list[dict]
             try:
                 out.extend(call(prompt, model))
             except Exception as e:  # noqa: BLE001
-                log(f"verify {project} batch failed ({type(e).__name__}); keeping batch")
-                out.extend(batch)  # fail toward visibility, never silent loss
+                out.extend(_keep_unverified(project, batch, e, "batch"))
         return out
 
     results: list[dict] = []
@@ -317,11 +345,7 @@ def _verify(staged: list[dict], obs_index: dict, conn, model: str) -> list[dict]
             try:
                 results.extend(fut.result())
             except Exception as e:  # noqa: BLE001
-                # Same rule as the batch handler: an unverified candidate is a
-                # triage problem, a dropped one is invisible forever.
-                log(f"verify {project} failed ({type(e).__name__}); keeping {len(cands)}")
-                print(f"  verify {project}: failed ({type(e).__name__}) — keeping unverified")
-                results.extend(cands)
+                results.extend(_keep_unverified(project, cands, e, "worker"))
     return results
 
 

@@ -10,6 +10,7 @@ import os
 import re
 import sqlite3
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from .core import Item, docs_id, log
@@ -31,6 +32,58 @@ _SESSION_SUFFIX = re.compile(r"/[a-z0-9-]+-[0-9a-f]{6}$")
 
 def root_project(project: str) -> str:
     return _SESSION_SUFFIX.sub("", project)
+
+
+@dataclass
+class Snapshot:
+    """Everything the sweep will ever need from claude-mem, read once.
+
+    The connection is opened, drained inside a single deferred transaction,
+    and closed before this object is returned -- so by the time any
+    ThreadPoolExecutor exists there is no database handle left to misuse.
+
+    That is deliberate. sqlite3 connections are not thread-safe, and an
+    earlier version called recent_observations() from inside the verification
+    pool: it raised ProgrammingError on every project, an outer handler logged
+    it, and every candidate was silently discarded. A clean exit 0 with all
+    work gone. Passing a live connection into a function that spawns threads
+    is the hazard; not having one is the fix.
+
+    Reading in one transaction also gives every chunk a consistent view. The
+    sweep runs ~28 minutes while claude-mem keeps writing; without this,
+    chunk 1 and the verification evidence would see different databases.
+    """
+
+    rows: list[dict]
+    recent_by_project: dict[str, list[dict]]
+
+    def index(self) -> dict[int, dict]:
+        return {r["id"]: r for r in self.rows}
+
+
+def take_snapshot(watermark: int, db: Path = CLAUDE_MEM_DB,
+                  recent_limit: int = 40) -> Snapshot:
+    """Open, read everything, close. The only function that touches sqlite."""
+    conn = connect(db)
+    try:
+        # DEFERRED so the read set is a single consistent view without
+        # blocking claude-mem's writer.
+        conn.execute("BEGIN DEFERRED")
+        rows = fetch_observations(conn, watermark)
+
+        # Evidence for every project, not just the ones that produce
+        # candidates: which projects those are is not known until extraction
+        # finishes ~28 minutes later, and reopening then would defeat both the
+        # snapshot and the no-live-handle rule. 43 projects x 40 rows is
+        # nothing next to the 13k rows already being read.
+        recent: dict[str, list[dict]] = {}
+        for project in sorted({r["project"] for r in rows}):
+            recent[project] = recent_observations(conn, project, recent_limit)
+
+        conn.execute("COMMIT")
+        return Snapshot(rows=rows, recent_by_project=recent)
+    finally:
+        conn.close()
 
 
 def connect(db: Path = CLAUDE_MEM_DB) -> sqlite3.Connection:

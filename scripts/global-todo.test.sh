@@ -290,6 +290,88 @@ PY
 [ $? -eq 0 ] && pass=$((pass + 8)) || fail=$((fail + 1))
 
 # ===========================================================================
+printf '\nRegressions found by running it\n'
+# ===========================================================================
+# Every case below is a bug that shipped and was caught only by executing the
+# tool, never by reading it. Each must FAIL if its fix is reverted.
+py - <<'PY'
+import sys, os, json, inspect, sqlite3, tempfile, threading
+sys.path.insert(0, os.environ["DOT"] + "/lib")
+from global_todo import llm, sources
+
+fails = []
+def check(name, cond):
+    print(f"  {'PASS' if cond else 'FAIL'}  {name}")
+    if not cond: fails.append(name)
+
+# --- 1. threading: no live DB handle may reach a function that pools --------
+# The original bug: recent_observations() was called from inside the
+# verification ThreadPoolExecutor. sqlite3 raised ProgrammingError on every
+# project and an outer handler discarded every candidate. Exit 0, all work
+# gone. The fix is structural -- _verify takes pre-read evidence, never a
+# connection -- so this pins the signature.
+params = list(inspect.signature(llm._verify).parameters)
+check("_verify takes no database connection", "conn" not in params)
+check("_verify takes pre-read evidence", "recent_by_project" in params)
+src = inspect.getsource(llm._verify)
+check("_verify body never calls a sources DB function",
+      "recent_observations" not in src and "connect(" not in src)
+check("take_snapshot closes its connection",
+      "conn.close()" in inspect.getsource(sources.take_snapshot))
+check("snapshot reads inside one transaction",
+      "BEGIN DEFERRED" in inspect.getsource(sources.take_snapshot))
+
+# Prove sqlite3 really does reject cross-thread use, so the guard above is
+# guarding something real rather than a theory.
+db = tempfile.mktemp(suffix=".db")
+c = sqlite3.connect(db)
+c.execute("CREATE TABLE t (x int)")
+boom = []
+def touch():
+    try: c.execute("SELECT 1")
+    except Exception as e: boom.append(type(e).__name__)
+t = threading.Thread(target=touch); t.start(); t.join()
+c.close()
+check("sqlite3 rejects cross-thread use (the hazard is real)",
+      boom == ["ProgrammingError"])
+
+# --- 2. error handling: verification must never drop on failure ------------
+# Two handlers with opposite policies caused the loss; there is now one.
+check("a single named keep-on-failure policy exists",
+      callable(getattr(llm, "_keep_unverified", None)))
+kept = llm._keep_unverified("p", [{"a": 1}, {"b": 2}], RuntimeError("x"), "batch")
+check("keep-on-failure returns the candidates, not []", len(kept) == 2)
+vsrc = inspect.getsource(llm._verify)
+check("every _verify failure path routes through it",
+      vsrc.count("except Exception") == vsrc.count("_keep_unverified"))
+
+# --- 3. trailing prose ------------------------------------------------------
+# The real chunk-5 response: valid JSON followed by a paragraph of reasoning.
+real = ('```json\n[]\n```\n\nAll work items from 2026-07-14 in the input are '
+        'completed. Each "change" and "feature" type has corresponding '
+        '"discovery" verification. No work remains explicitly undone.')
+try:
+    check("the exact chunk-5 response parses", json.loads(llm.strip_fence(real)) == [])
+except Exception as e:
+    check("the exact chunk-5 response parses", False)
+
+# --- 4. exit code on a partial sweep ---------------------------------------
+check("IncompleteSweep exists", hasattr(llm, "IncompleteSweep"))
+e = llm.IncompleteSweep("stopped", 3, 1, [{"i": 1}])
+check("IncompleteSweep carries its partial results",
+      e.added == 3 and e.suppressed == 1 and len(e.items) == 1)
+
+sys.exit(1 if fails else 0)
+PY
+[ $? -eq 0 ] && pass=$((pass + 12)) || fail=$((fail + 1))
+
+# A partial sweep must not exit 0: a wrapper cannot otherwise tell 4/110
+# chunks from 110/110.
+grep -q "return 2" "$DOT/lib/global_todo/cli.py" \
+  && ok "refresh returns a distinct non-zero code on a partial sweep" \
+  || ko "refresh returns a distinct non-zero code on a partial sweep" "no return 2"
+
+# ===========================================================================
 printf '\nCLI and hook\n'
 # ===========================================================================
 D2="$TMP/s2"
