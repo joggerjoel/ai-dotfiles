@@ -154,6 +154,14 @@ _control:
 fleet-update: _control
     set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook update.yml 2>&1 | cat
 
+# Narrower than fleet-update on purpose. It runs only the git pull and profile
+# re-apply, skipping the CLI upgrades, the gateway deploys, and the token
+# distribution — that last play asserts a token exists and fails the whole run
+# on a fleet that has none, which reads as a broken sync when nothing is broken.
+# [fleet] git-sync every host to origin/main, nothing else
+fleet-sync: _control
+    set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook update.yml --tags sync 2>&1 | cat
+
 # [fleet] install/refresh `just` on every host
 fleet-just: _control
     set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook provision-just.yml 2>&1 | cat
