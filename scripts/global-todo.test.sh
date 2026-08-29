@@ -1,0 +1,361 @@
+#!/usr/bin/env bash
+# Tests for bin/global-todo. Dotted stem on purpose: link_claude_hooks()
+# excludes *.*.* files, so this never installs as a live hook.
+#
+# No network, no real `claude -p`, and no reads of the live claude-mem
+# database. Every LLM response is a stub and every fixture is hand-authored --
+# a fixture built from a slice of the real database would ship this user's
+# session history to a public repo.
+#
+# The cases that matter most are the durability ones. An earlier revision
+# derived each item's id from the LLM-authored item TEXT, so re-extraction
+# reworded items, minted fresh ids, and resurrected work already marked done.
+# Test 4 is that exact path: same observations, deliberately different wording.
+# It must stay load-bearing -- an earlier version of it passed vacuously
+# because the advanced watermark meant the second refresh selected zero rows
+# and never exercised dedupe at all.
+#
+# Runs under bash 3.2 (stock macOS): no associative arrays, no mapfile.
+set -uo pipefail
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+# Exported: the python blocks below read DOT from the environment, so this
+# must survive into subprocesses. Without the export the suite passes when run
+# by hand and KeyErrors under run-all-tests.sh.
+export DOT
+DOT=$(cd "$HERE/.." && pwd)
+GT="$DOT/bin/global-todo"
+pass=0 fail=0
+
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/globaltodo-test.XXXXXX") || exit 1
+trap 'rm -rf "$TMP"' EXIT
+
+ok() { printf '  PASS  %s\n' "$1"; pass=$((pass + 1)); }
+ko() { printf '  FAIL  %s — %s\n' "$1" "$2"; fail=$((fail + 1)); }
+
+py() { PYTHONPATH="$DOT/lib" python3 "$@"; }
+
+# --- fixture docs tree -----------------------------------------------------
+DOCS="$TMP/docs/superpowers/plans"
+mkdir -p "$DOCS"
+
+printf '**Status:** Built. shipped in v2\n\n- [ ] stale box\n' > "$DOCS/done.md"
+printf '**Status:** approved, not yet implemented\n\n- [ ] a\n- [ ] b\n' > "$DOCS/live.md"
+printf '**Status:** incomplete\n\n- [ ] still open\n' > "$DOCS/incomplete.md"
+printf '**Status:** not yet complete\n\n- [ ] also open\n' > "$DOCS/notyet.md"
+printf '# no status line here\n\n- [ ] must still emit\n' > "$DOCS/nostatus.md"
+
+export GLOBAL_TODO_DOCS_ROOTS="$TMP/docs/superpowers"
+
+run() { GLOBAL_TODO_DIR="$1" "$GT" "${@:2}" 2>&1; }
+count() { # <store dir> <python expr over `items`>
+  # eval() is deliberate and safe HERE only: every expression passed to this
+  # helper is a string literal written in this file, never a value read from
+  # the store, the environment, or a model response. It exists so assertions
+  # read as one line instead of a heredoc each. Do not extend it to take
+  # anything that crosses a trust boundary.
+  py - "$1" "$2" <<'PY'
+import json, sys
+items = json.load(open(sys.argv[1] + "/global-todo.json"))["items"]
+print(eval(sys.argv[2]))  # noqa: S307 - literal test expressions only
+PY
+}
+
+# ===========================================================================
+printf '\nDocs source\n'
+# ===========================================================================
+D1="$TMP/s1"
+out=$(run "$D1" refresh --docs-only)
+
+n=$(count "$D1" "len(items)")
+[ "$n" = "4" ] && ok "terminal Status is skipped, everything else emits" \
+                || ko "terminal Status is skipped, everything else emits" "got $n records, want 4"
+
+# An unanchored /built|shipped|merged|complete/i matches "incomplete" and
+# "not yet built" as substrings -- silently suppressing the most natural
+# phrasings of "still open". This is the regression guard for that.
+got=$(count "$D1" "sorted(i['path'].split('/')[-1] for i in items)")
+case "$got" in
+  *incomplete.md*) ok "'incomplete' is not swallowed by the status regex" ;;
+  *) ko "'incomplete' is not swallowed by the status regex" "$got" ;;
+esac
+case "$got" in
+  *notyet.md*) ok "'not yet complete' is not swallowed" ;;
+  *) ko "'not yet complete' is not swallowed" "$got" ;;
+esac
+case "$got" in
+  *nostatus.md*) ok "a file with no Status line still emits" ;;
+  *) ko "a file with no Status line still emits" "$got" ;;
+esac
+case "$got" in
+  *done.md*) ko "terminal Status file is excluded" "done.md present" ;;
+  *) ok "terminal Status file is excluded" ;;
+esac
+
+steps=$(count "$D1" "[i['remaining_steps'] for i in items if i['path'].endswith('live.md')][0]")
+[ "$steps" = "2" ] && ok "remaining_steps counts unchecked boxes" \
+                   || ko "remaining_steps counts unchecked boxes" "got $steps, want 2"
+
+# --- idempotency -----------------------------------------------------------
+run "$D1" refresh --docs-only >/dev/null
+n2=$(count "$D1" "len(items)")
+[ "$n2" = "4" ] && ok "second consecutive refresh adds nothing" \
+                || ko "second consecutive refresh adds nothing" "grew to $n2"
+
+# --- rescan stability: tick a box, count updates, no duplicate -------------
+printf '**Status:** approved, not yet implemented\n\n- [x] a\n- [ ] b\n' > "$DOCS/live.md"
+run "$D1" refresh --docs-only >/dev/null
+n3=$(count "$D1" "len(items)")
+s3=$(count "$D1" "[i['remaining_steps'] for i in items if i['path'].endswith('live.md')][0]")
+[ "$n3" = "4" ] && [ "$s3" = "1" ] \
+  && ok "ticking a box updates the count without duplicating" \
+  || ko "ticking a box updates the count without duplicating" "records=$n3 steps=$s3"
+
+# --- auto-close when Status goes terminal ----------------------------------
+printf '**Status:** Built.\n\n- [ ] leftover\n' > "$DOCS/live.md"
+run "$D1" refresh --docs-only >/dev/null
+st=$(count "$D1" "[i['status'] for i in items if i['path'].endswith('live.md')][0]")
+[ "$st" = "done" ] && ok "docs record auto-closes when Status goes terminal" \
+                   || ko "docs record auto-closes when Status goes terminal" "status=$st"
+
+# ===========================================================================
+printf '\nDurability\n'
+# ===========================================================================
+py - <<'PY'
+import sys, os, tempfile
+sys.path.insert(0, os.environ["DOT"] + "/lib")
+d = tempfile.mkdtemp()
+os.environ["GLOBAL_TODO_DIR"] = d
+from pathlib import Path
+import global_todo.core as core
+core.STORE_DIR = Path(d)
+
+fails = []
+def check(name, cond):
+    print(f"  {'PASS' if cond else 'FAIL'}  {name}")
+    if not cond: fails.append(name)
+
+# Same observations, deliberately different wording. Under text-derived ids
+# this minted a new id and resurrected the closed item.
+a = core.Item(id=core.claude_mem_id([10, 11]), topic="p / t", project="p",
+              text="Drain the sync outbox", source_ids=[10, 11])
+a.status, a.closed_by = "done", "user"
+reworded = core.Item(id=core.claude_mem_id([11, 10]), topic="p / t", project="p",
+                     text="Flush the outbox table backlog", source_ids=[11, 10])
+merged, added, _ = core.merge([a], [reworded])
+check("provenance id survives a total rewording", added == 0 and merged[0].status == "done")
+check("source_ids order does not change the id",
+      core.claude_mem_id([11, 10]) == core.claude_mem_id([10, 11]))
+
+# The assertion above passes through merge(), so it could in principle be
+# rescued by the fuzzy backstop rather than by the id scheme. This one cannot:
+# it pins the id function's inputs directly. If anyone reintroduces item text
+# into the key, this fails immediately instead of waiting for a rewording that
+# happens to score under the Jaccard threshold.
+import inspect
+check("claude_mem_id takes only source_ids",
+      list(inspect.signature(core.claude_mem_id).parameters) == ["source_ids"])
+check("the same observations always hash the same, regardless of wording",
+      core.claude_mem_id([10, 11]) == core.claude_mem_id([10, 11]))
+check("different observations hash differently",
+      core.claude_mem_id([10, 11]) != core.claude_mem_id([10, 12]))
+
+# The reworded pair used above scores 0.286 -- well under the 0.7 threshold --
+# so the fuzzy pass genuinely cannot catch it. That is what makes the id
+# scheme, not the backstop, the thing under test.
+check("the reworded pair is below the fuzzy threshold",
+      core.jaccard(core.normalize("Drain the sync outbox"),
+                   core.normalize("Flush the outbox table backlog")) < 0.7)
+
+# Fuzzy scoped to OPEN items only was how reworded near-duplicates of closed
+# work got appended as new.
+b = core.Item(id="aaaaaaaa", topic="p / t", project="p",
+              text="fix the broken symlink in the vendor script")
+b.status = "dismissed"
+near = core.Item(id="bbbbbbbb", topic="p / t", project="p",
+                 text="fix the broken symlink in the vendor script now")
+m2, added2, _ = core.merge([b], [near])
+check("fuzzy pass sees closed records", added2 == 0 and m2[0].status == "dismissed")
+check("absorbed id becomes an alias", "bbbbbbbb" in m2[0].alias_ids)
+
+# Distinct work in the same project must NOT be collapsed.
+c = core.Item(id="cccccccc", topic="p / t", project="p", text="rotate the API credential")
+far = core.Item(id="dddddddd", topic="p / t", project="p", text="paginate the results table")
+_, added3, _ = core.merge([c], [far])
+check("unrelated items are not merged", added3 == 1)
+
+sys.exit(1 if fails else 0)
+PY
+[ $? -eq 0 ] && pass=$((pass + 9)) || fail=$((fail + 1))
+
+# ===========================================================================
+printf '\nValidation and safety\n'
+# ===========================================================================
+py - <<'PY'
+import sys, os, json, tempfile
+sys.path.insert(0, os.environ["DOT"] + "/lib")
+d = tempfile.mkdtemp(); os.environ["GLOBAL_TODO_DIR"] = d
+from pathlib import Path
+import global_todo.core as core
+from global_todo import render
+core.STORE_DIR = Path(d); core.STORE = Path(d) / "global-todo.json"
+core.BAK = Path(d) / "global-todo.json.bak"; core.STATE = Path(d) / ".state.json"
+core.LOG = Path(d) / ".log"; render.STORE_DIR = Path(d)
+
+fails = []
+def check(name, cond):
+    print(f"  {'PASS' if cond else 'FAIL'}  {name}")
+    if not cond: fails.append(name)
+
+def rejects(raw):
+    try:
+        core.validate(raw); return False
+    except core.StoreError: return True
+
+base = {"id": "x", "topic": "t", "project": "p", "text": "ok"}
+check("over-length text is rejected", rejects({**base, "text": "z" * 121}))
+check("unknown status is rejected", rejects({**base, "status": "bogus"}))
+check("unknown closed_by is rejected", rejects({**base, "closed_by": "someone"}))
+check("non-int source_ids are rejected", rejects({**base, "source_ids": ["1"]}))
+check("missing project is rejected", rejects({"id": "x", "topic": "t", "text": "ok"}))
+check("control characters are stripped",
+      core.validate({**base, "text": "a\x00b"}).text == "ab")
+
+# The pages are opened over file://, where injected markup executes with
+# local-file read.
+evil = core.Item(id="deadbeef", topic="p / t", project="p",
+                 text="<script>alert(1)</script> & \"q\"", first_seen="2026-08-29")
+core.save([evil]); render.render_all([evil], Path(d))
+full = (Path(d) / "full.html").read_text()
+check("html escaping: no live script tag", "<script>alert(1)</script>" not in full)
+check("html escaping: rendered inert", "&lt;script&gt;" in full)
+
+# A seconds-valued watermark matches every row and silently turns every
+# incremental refresh into a full sweep.
+try:
+    core.write_state({"watermark_epoch": 1788004350, "watermark_unit": "milliseconds"})
+    check("seconds-valued watermark is rejected", False)
+except core.StoreError:
+    check("seconds-valued watermark is rejected", True)
+core.write_state({"watermark_epoch": 1788004350945, "watermark_unit": "milliseconds"})
+check("milliseconds watermark is accepted", True)
+
+# Distinct project keys must not collide onto one filename and silently
+# overwrite each other's page.
+check("slug disambiguates colliding keys", core.slug("13.10.2") != core.slug("13-10-2"))
+
+sys.exit(1 if fails else 0)
+PY
+[ $? -eq 0 ] && pass=$((pass + 11)) || fail=$((fail + 1))
+
+# ===========================================================================
+printf '\nModel response parsing\n'
+# ===========================================================================
+# Haiku fences its JSON on every observed response AND frequently appends a
+# paragraph of reasoning. Stripping only the fence leaves that prose and
+# json.loads dies with "Extra data" -- this hit within the first 5 chunks of
+# the first real sweep, after a 2-chunk spike showed only clean output.
+py - <<'PY'
+import sys, os, json
+sys.path.insert(0, os.environ["DOT"] + "/lib")
+from global_todo.llm import strip_fence
+
+cases = [
+    ("fenced then prose", '```json\n[]\n```\n\nAll work items are completed.', []),
+    ("fenced with items", '```json\n[{"a":1}]\n```', [{"a": 1}]),
+    ("bare array", '[{"a":1}]', [{"a": 1}]),
+    ("prose before and after", 'Analysis:\n[{"a":1}]\nThat is all.', [{"a": 1}]),
+    ("bracket inside a string", '[{"t":"fix the [broken] link"}]', [{"t": "fix the [broken] link"}]),
+    ("escaped quote in string", '[{"t":"say \\"hi\\""}]', [{"t": 'say "hi"'}]),
+    ("empty array with prose", 'Nothing open.\n[]\nDone.', []),
+]
+fails = []
+for name, raw, want in cases:
+    try:
+        got = json.loads(strip_fence(raw))
+        good = got == want
+    except Exception as e:
+        got, good = f"{type(e).__name__}", False
+    print(f"  {'PASS' if good else 'FAIL'}  parses: {name}")
+    if not good: fails.append(name)
+
+try:
+    strip_fence("no array at all")
+    print("  FAIL  a response with no array raises"); fails.append("noarray")
+except ValueError:
+    print("  PASS  a response with no array raises")
+
+sys.exit(1 if fails else 0)
+PY
+[ $? -eq 0 ] && pass=$((pass + 8)) || fail=$((fail + 1))
+
+# ===========================================================================
+printf '\nCLI and hook\n'
+# ===========================================================================
+D2="$TMP/s2"
+run "$D2" refresh --docs-only >/dev/null
+first_id=$(count "$D2" "items[0]['id']")
+
+out=$(run "$D2" done "$first_id")
+case "$out" in
+  done:*) ok "done closes an item" ;;
+  *) ko "done closes an item" "$out" ;;
+esac
+st=$(count "$D2" "[i['status'] for i in items if i['id']=='$first_id'][0]")
+by=$(count "$D2" "[i['closed_by'] for i in items if i['id']=='$first_id'][0]")
+[ "$st" = "done" ] && [ "$by" = "user" ] && ok "closure records status and closed_by" \
+  || ko "closure records status and closed_by" "status=$st closed_by=$by"
+
+run "$D2" reopen "$first_id" >/dev/null
+st=$(count "$D2" "[i['status'] for i in items if i['id']=='$first_id'][0]")
+[ "$st" = "open" ] && ok "reopen clears the closure" || ko "reopen clears the closure" "status=$st"
+
+out=$(run "$D2" done ffffffff 2>&1); rc=$?
+[ "$rc" != "0" ] && ok "closing an unknown id fails loudly" \
+                 || ko "closing an unknown id fails loudly" "exit 0"
+
+# A refresh that did no work must not report success to a wrapper script.
+py - "$D2" <<'PY' &
+import sys, os, time
+sys.path.insert(0, os.environ["DOT"] + "/lib")
+os.environ["GLOBAL_TODO_DIR"] = sys.argv[1]
+from pathlib import Path
+import global_todo.core as core
+core.STORE_DIR = Path(sys.argv[1]); core.LOCK = core.STORE_DIR / ".lock"
+with core.store_lock():
+    time.sleep(3)
+PY
+sleep 1
+run "$D2" done "$first_id" >/dev/null 2>&1; rc=$?
+[ "$rc" = "75" ] && ok "lock contention exits 75, not 0" \
+                 || ko "lock contention exits 75, not 0" "exit $rc"
+wait
+
+# --- inject ----------------------------------------------------------------
+blk=$(run "$D2" inject)
+case "$blk" in
+  *untrusted-data*) ok "injected block is wrapped as untrusted data" ;;
+  *) ko "injected block is wrapped as untrusted data" "missing delimiter" ;;
+esac
+case "$blk" in
+  *hookSpecificOutput*) ok "inject emits hookSpecificOutput" ;;
+  *) ko "inject emits hookSpecificOutput" "$blk" ;;
+esac
+
+# A malformed store must never block a session launch -- but silence would
+# make it indistinguishable from a clean worklist, indefinitely.
+printf 'not json at all' > "$D2/global-todo.json"
+blk=$(run "$D2" inject); rc=$?
+[ "$rc" = "0" ] && ok "corrupt store: inject still exits 0" \
+                || ko "corrupt store: inject still exits 0" "exit $rc"
+case "$blk" in
+  *"could not be read"*) ok "corrupt store: emits a visible notice, not silence" ;;
+  *) ko "corrupt store: emits a visible notice, not silence" "$blk" ;;
+esac
+out=$(run "$D2" refresh --docs-only 2>&1); rc=$?
+[ "$rc" != "0" ] && ok "refresh refuses to overwrite an unparseable store" \
+                 || ko "refresh refuses to overwrite an unparseable store" "exit 0"
+
+# ===========================================================================
+printf '\n%d passed, %d failed\n' "$pass" "$fail"
+[ "$fail" -eq 0 ]

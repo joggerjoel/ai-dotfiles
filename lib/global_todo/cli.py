@@ -261,6 +261,12 @@ def _build_block() -> str:
     # Security-typed items are stored and rendered, but never pushed into a
     # session's context.
     mine = [i for i in mine if not i.sensitive]
+    # Freshest first. Insertion order puts whichever source merged first at the
+    # top, which buried 63 recent claude-mem items behind 7 docs records --
+    # the block you see every session showed the least actionable items in it.
+    # Docs records carry no source epoch and sort last, which is right: a plan
+    # file is a pointer, not a next action.
+    mine.sort(key=lambda i: i.newest_source_epoch or 0, reverse=True)
 
     state = core.read_state()
     age = _age(state.get("last_run"))
