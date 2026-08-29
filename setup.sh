@@ -154,16 +154,28 @@ gh_install_binary() {
     aarch64|arm64) arch="arm64" ;;
     *)             arch="amd64" ;;
   esac
-  os="linux"; [ "$(uname -s)" = "Darwin" ] && os="macOS"
+  # cli/cli publishes Linux as .tar.gz but macOS only as .zip. This built a
+  # macOS .tar.gz URL that 404s; it stayed hidden because ensure_gh only reaches
+  # this fallback from the apt branch, so it has never run on a Mac.
+  local ext tmp
+  os="linux"; ext="tar.gz"
+  [ "$(uname -s)" = "Darwin" ] && { os="macOS"; ext="zip"; }
   tag=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | jq -r '.tag_name')
   [ -n "$tag" ] && [ "$tag" != "null" ] || return 1
   ver="${tag#v}"
   mkdir -p "$HOME/.local/bin"
-  curl -fsSL "https://github.com/cli/cli/releases/download/${tag}/gh_${ver}_${os}_${arch}.tar.gz" -o /tmp/gh.tgz || return 1
-  tar xzf /tmp/gh.tgz -C /tmp || return 1
-  cp "/tmp/gh_${ver}_${os}_${arch}/bin/gh" "$HOME/.local/bin/gh"
-  chmod +x "$HOME/.local/bin/gh"
-  rm -rf /tmp/gh.tgz "/tmp/gh_${ver}_${os}_${arch}"
+  # mktemp, not a fixed /tmp name: a predictable path is clobberable by any
+  # other user on a shared box.
+  tmp="$(mktemp -d)" || return 1
+  curl -fsSL "https://github.com/cli/cli/releases/download/${tag}/gh_${ver}_${os}_${arch}.${ext}" \
+    -o "$tmp/gh.${ext}" || { rm -rf "$tmp"; return 1; }
+  case "$ext" in
+    tar.gz) tar xzf "$tmp/gh.${ext}" -C "$tmp" ;;
+    zip)    unzip -q "$tmp/gh.${ext}" -d "$tmp" ;;
+  esac || { rm -rf "$tmp"; return 1; }
+  install -m 0755 "$tmp/gh_${ver}_${os}_${arch}/bin/gh" "$HOME/.local/bin/gh" \
+    || { rm -rf "$tmp"; return 1; }
+  rm -rf "$tmp"
 }
 
 ensure_node() {
