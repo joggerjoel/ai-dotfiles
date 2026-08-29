@@ -13,14 +13,22 @@ set -euo pipefail
 #      cursor-agent, cortex, opencode, gemini, pi, grok, headroom
 #      (scripts/agents-update.sh, the same script ansible-ai/update.yml
 #      runs on the fleet; also reports 9router gateway status).
+#      Run from a terminal it prompts ([U]pgrade/[P]in/[s]kip) only for a
+#      CLI with a known-newer version — the ones whose latest can't be
+#      checked without installing just upgrade. Pinned CLIs are held at
+#      their version here and on the fleet until `setup.sh pin remove
+#      <name>`, and every run lists what is pinned.
 #   5. Re-vendor the 9router skills from upstream and deploy them to
 #      ~/.claude/skills (scripts/vendor-9router-skills.sh --deploy).
 #   6. Re-vendor poteto's pstack skill pack from upstream and deploy it to
 #      ~/.claude/skills (scripts/vendor-pstack-skills.sh --deploy).
-#   7. Prune old backups (last 7 days + first-of-month snapshots).
-#   8. With --all: propagate to the fleet servers via
+#   7. Re-vendor the unlazy skill from upstream and deploy it to both
+#      ~/.claude/skills and ~/.codex/skills (scripts/vendor-unlazy-skill.sh
+#      --deploy) — it is agent-agnostic, so Codex gets it too.
+#   8. Prune old backups (last 7 days + first-of-month snapshots).
+#   9. With --all: propagate to the fleet servers via
 #      ansible-ai/update.yml --limit aorus_ai (this machine was already
-#      updated by steps 1-7, so the playbook skips it). That playbook also
+#      updated by steps 1-8, so the playbook skips it). That playbook also
 #      re-asserts the Claude OAuth token on every server
 #      (ansible-ai/deploy-claude-token.yml) — the step that keeps the fleet
 #      authenticated, since a per-host claude login cannot be driven remotely.
@@ -34,9 +42,9 @@ set -euo pipefail
 #                  pull from origin/main — use ./deploy.sh to publish config
 #                  changes first.
 #   --dry-run      Take the backup, but DON'T upgrade. Previews the Claude
-#                  step only — sibling CLIs, 9router/pstack skills, prune,
+#                  step only — sibling CLIs, vendored skills, prune,
 #                  and fleet are all skipped.
-#   --claude-only  Skip the sibling agent CLIs and 9router/pstack skills (4-6).
+#   --claude-only  Skip the sibling agent CLIs and the vendored skills (4-7).
 #   --no-prune     Skip the post-upgrade backup prune.
 # ─────────────────────────────────────────────────────────────────
 
@@ -448,13 +456,37 @@ if [ "$RUN_AGENTS" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/vendor-pstack-skills
   fi
 fi
 
-# ── 6. Prune old backups ─────────────────────────────────────────
+# ── 6. unlazy skill (vendored from Leonxlnx/unlazy) ──────────────
+# Re-vendors the unlazy skill from upstream and deploys it to BOTH
+# ~/.claude/skills and ~/.codex/skills — unlike the Claude-specific skills
+# above, unlazy ships Codex metadata (agents/openai.yaml) and runs on either
+# agent. Writes into the repo's skills/ dir, so prose changes still need a
+# commit + push before the fleet sees them. The checker under
+# skills/unlazy/scripts/ is gitignored: what actually travels to the fleet is
+# the commit pinned in skills/unlazy/.upstream, which setup.sh restores from.
+if [ "$RUN_AGENTS" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/vendor-unlazy-skill.sh" ]; then
+  header "unlazy skill"
+  if ! command -v git &>/dev/null; then
+    skip "git not available — skill not re-vendored"
+  elif "$DOTFILES_DIR/scripts/vendor-unlazy-skill.sh" --deploy >/dev/null 2>&1; then
+    if git -C "$DOTFILES_DIR" status --porcelain -- skills/unlazy 2>/dev/null | grep -q .; then
+      ok "Re-vendored from Leonxlnx/unlazy → ~/.claude/skills + ~/.codex/skills"
+      warn "skills/unlazy changed — the checker is gitignored, so the diff will not show it; review upstream at the new .upstream pin, then commit + push"
+    else
+      ok "Already current (deployed to ~/.claude/skills + ~/.codex/skills)"
+    fi
+  else
+    warn "unlazy skill re-vendor failed (non-fatal — check network)"
+  fi
+fi
+
+# ── 7. Prune old backups ─────────────────────────────────────────
 if [ "$RUN_PRUNE" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/backup-prune.sh" ]; then
   echo
   "$DOTFILES_DIR/scripts/backup-prune.sh" || warn "Backup prune had issues (non-fatal)."
 fi
 
-# ── 7. Fleet propagation (--all) ─────────────────────────────────
+# ── 8. Fleet propagation (--all) ─────────────────────────────────
 # Servers only (--limit aorus_ai): this machine was already updated above,
 # and update.yml's local play would redo the same work. Servers pull the
 # repo from origin/main — publish config changes with ./deploy.sh first.

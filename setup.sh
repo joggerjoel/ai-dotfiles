@@ -666,6 +666,43 @@ install_skills() {
   ok "$count skill(s) installed to ~/.claude/skills/"
 }
 
+# Copies the agent-agnostic subset of repo skills into ~/.codex/skills/<name>/,
+# so Codex gets them too. Deliberately an allowlist, not a mirror of skills/:
+# most skills here assume Claude Code's tools, hooks, or plugin stack and would
+# only mislead Codex. A skill earns a place in CODEX_SKILLS by working in both.
+# skills/unlazy/scripts/ is gitignored — it is third-party Node that runs shell
+# from CHECK: lines, so it is not carried in this repo (see .gitignore). A fresh
+# clone, or any fleet host that pulled from origin, therefore has the skill's
+# prose but not its checker. Restore it at the commit pinned in .upstream before
+# installing; otherwise every command the skill documents is missing there.
+ensure_unlazy_payload() {
+  [ -f "$DOTFILES_DIR/skills/unlazy/.upstream" ] || return 0
+  [ -f "$DOTFILES_DIR/skills/unlazy/scripts/gate-check.mjs" ] && return 0
+  if [ -x "$DOTFILES_DIR/scripts/vendor-unlazy-skill.sh" ] \
+     && "$DOTFILES_DIR/scripts/vendor-unlazy-skill.sh" --payload >/dev/null 2>&1; then
+    ok "unlazy checker restored at its pinned commit"
+  else
+    warn "unlazy checker missing and restore failed — the skill installs without its gate checker (run ./scripts/vendor-unlazy-skill.sh --payload)"
+  fi
+  return 0
+}
+
+CODEX_SKILLS=(unlazy)
+
+install_codex_skills() {
+  [ -d "$DOTFILES_DIR/skills" ] || return 0
+  local count=0
+  for name in "${CODEX_SKILLS[@]}"; do
+    [ -d "$DOTFILES_DIR/skills/$name" ] || continue
+    mkdir -p "$HOME/.codex/skills"
+    rm -rf "${HOME:?}/.codex/skills/$name"
+    cp -R "$DOTFILES_DIR/skills/$name" "$HOME/.codex/skills/$name"
+    count=$((count+1))
+  done
+  [ "$count" -gt 0 ] && ok "$count skill(s) installed to ~/.codex/skills/"
+  return 0
+}
+
 # Copies repo commands/<name>.md into ~/.claude/commands/<name>.md (copy model,
 # like skills). Only touches command files the repo owns; leaves user-local
 # commands untouched. These are thin slash-command wrappers that typically just
@@ -973,8 +1010,12 @@ cmd_setup() {
   done
   ok "Reference files copied to ~/.claude/references/"
 
+  ensure_unlazy_payload
   # Install repo-owned skills
   install_skills
+
+  # Mirror the agent-agnostic ones into Codex
+  install_codex_skills
 
   # Install repo-owned slash commands
   install_commands
@@ -1418,8 +1459,12 @@ cmd_update() {
   done
   ok "Reference files updated"
 
+  ensure_unlazy_payload
   # Re-install repo-owned skills
   install_skills
+
+  # Re-mirror the agent-agnostic ones into Codex
+  install_codex_skills
 
   # Re-install repo-owned slash commands
   install_commands
@@ -1560,6 +1605,10 @@ case "${1:-}" in
   env)      cmd_env "${2:-}" "${3:-}" ;;
   cache)    cmd_cache "${2:-}" "${3:-}" ;;
   supabase) configure_supabase "${2:-}" ;;
+  # Hold a sibling agent CLI at its installed version. Pins are plain state,
+  # not a prompt, so one set here also holds on unattended upgrade runs
+  # (ansible-ai/update.yml, cron) — configure them before those run.
+  pin)      exec bash "$DOTFILES_DIR/scripts/pin.sh" "${2:-}" "${3:-}" ;;
   # Opt-in: stand up THIS machine as a firstmate node (herdr + source toolchain
   # + firstmate clone). Never part of `setup.sh` or `setup.sh update`.
   provision-firstmate) exec bash "$DOTFILES_DIR/scripts/provision-firstmate.sh" ;;
@@ -1577,6 +1626,8 @@ case "${1:-}" in
     echo "  ./setup.sh cache [p]    cache-guard policy (subscription|api|custom <s>|off,"
     echo "                          or mode: observe|warn|protect; no arg shows current)"
     echo "  ./setup.sh supabase [m] Configure Supabase MCP (m = cloud|internal, or prompt)"
+    echo "  ./setup.sh pin [c]      Hold an agent CLI at its version, incl. on unattended"
+    echo "                          runs (list|add <name>|remove <name>)"
     echo "  ./setup.sh update       Pull latest and reassemble config"
     echo "                          (--no-pull: reassemble without touching git)"
     echo "  ./setup.sh help         Show this help"
