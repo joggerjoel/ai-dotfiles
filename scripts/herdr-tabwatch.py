@@ -145,6 +145,45 @@ def workspace_labels():
             for w in res.get("workspaces", [])}
 
 
+def existing_tab_ids():
+    """Tab ids that already exist. Captured BEFORE subscribing, always.
+
+    `events.subscribe` does not start a clean stream: it **replays historical
+    `tab_created` events**, including for tabs closed long ago. A watcher that
+    treats them as new types into every pre-existing single-pane tab the moment
+    it connects — and under launchd's KeepAlive, again on every restart.
+
+    This was not theoretical. It typed an ssh command into a live pane running
+    an agent session, because that pane's tab was replayed on subscribe. The
+    tell had been visible in every dry run — the same tab ids appearing each
+    time — and reads as "new tabs" only if you do not check whether they are.
+
+    Snapshot first, then subscribe. The gap between the two can lose a tab
+    created in that instant, which is the right direction to fail.
+    """
+    res = rpc("tab.list", {}) or {}
+    return {t["tab_id"] for t in res.get("tabs", [])}
+
+
+def pane_is_untouched(pane_id, max_lines=3):
+    """Does this pane look like a shell nobody has used yet?
+
+    Second guard, independent of the first. A freshly created tab's pane has a
+    prompt and little else; a pane someone is working in has scrollback. Typing
+    into the latter is the harm this whole program has to avoid, so when the
+    pane has anything to say for itself, leave it alone.
+
+    Deliberately conservative: unreadable means untouched=False, because the
+    safe answer to "I cannot tell" is to do nothing.
+    """
+    res = rpc("pane.read", {"pane_id": pane_id, "source": "recent_unwrapped",
+                            "lines": 40, "strip_ansi": True})
+    if res is None:
+        return False
+    text = res.get("text") or res.get("output") or ""
+    return len([ln for ln in text.splitlines() if ln.strip()]) <= max_lines
+
+
 def pane_of_tab(tab_id):
     """The single pane of a freshly created tab, or None.
 
@@ -188,9 +227,11 @@ def connect_pane(pane_id, host):
     })
 
 
-def handle_tab(tab, hosts, locals_):
+def handle_tab(tab, hosts, locals_, preexisting):
     """Decide about one new tab and act, or explain why not."""
     tab_id = tab.get("tab_id")
+    if tab_id in preexisting:
+        return "%s: already existed before we subscribed (replay)" % tab_id
     label = workspace_labels().get(tab.get("workspace_id"), "")
 
     if not label:
@@ -205,6 +246,9 @@ def handle_tab(tab, hosts, locals_):
     pane_id = pane_of_tab(tab_id)
     if not pane_id:
         return "%s: no single fresh pane" % tab_id
+    if not pane_is_untouched(pane_id):
+        return "%s: %s already has output — not typing into it" % (tab_id,
+                                                                   pane_id)
 
     if DRY_RUN:
         return "%s: WOULD type into %s: %s" % (tab_id, pane_id,
@@ -218,6 +262,8 @@ def watch():
     """Subscribe and dispatch until the socket goes away."""
     hosts, locals_ = ssh_hosts(), local_names()
     seen = []
+    # Before subscribing, never after: see existing_tab_ids().
+    preexisting = existing_tab_ids()
 
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.settimeout(None)          # events arrive whenever they arrive
@@ -229,9 +275,9 @@ def watch():
     ack = f.readline()
     if not ack:
         raise OSError("socket closed before the subscription was acknowledged")
-    log("subscribed%s (%d ssh hosts, self=%s)"
+    log("subscribed%s (%d ssh hosts, %d pre-existing tabs ignored, self=%s)"
         % (" [DRY RUN — nothing will be typed]" if DRY_RUN else "",
-           len(hosts), ",".join(locals_)))
+           len(hosts), len(preexisting), ",".join(locals_)))
 
     for line in f:
         try:
@@ -247,7 +293,7 @@ def watch():
         seen.append(tab_id)
         del seen[:-SEEN_CAP]
         try:
-            log(handle_tab(tab, hosts, locals_))
+            log(handle_tab(tab, hosts, locals_, preexisting))
         except (OSError, ValueError) as e:
             log("%s: failed — %s" % (tab_id, e))
     raise OSError("event stream ended")
