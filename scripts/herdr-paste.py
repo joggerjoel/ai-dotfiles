@@ -220,11 +220,23 @@ def protocol_check():
     Called at startup and again immediately before each write. `serve` sits for
     ten minutes and `send` blocks on a human confirming; a daemon restart
     inside either window would otherwise reach the socket with a stale gate.
+
+    Asks the SERVER, not the local binary. `herdr api schema` reads the schema
+    bundled into whichever herdr is on this PATH, which is the wrong machine
+    entirely once the socket is a forwarded one: the laptop would vouch for
+    itself while the write landed on a node that had moved on. `herdr status
+    --json` reports the protocol of the daemon behind the socket it is pointed
+    at, which is the only one that matters here.
+
+    A server that reports no protocol is a mismatch, not a pass. `got` stays
+    None and the comparison below fails closed.
     """
     try:
-        out = subprocess.run(["herdr", "api", "schema", "--json"],
-                             capture_output=True, text=True, timeout=10).stdout
-        got = json.loads(out).get("protocol")
+        out = subprocess.run(
+            ["herdr", "status", "--json"], capture_output=True, text=True,
+            timeout=10,
+            env={**os.environ, "HERDR_SOCKET_PATH": socket_path()}).stdout
+        got = (json.loads(out).get("server") or {}).get("protocol")
     except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
         got = None
     if got != PROTOCOL:

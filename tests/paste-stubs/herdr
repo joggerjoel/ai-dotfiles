@@ -8,6 +8,10 @@
 printf '%s\n' "$*" >> "${PASTE_CALLS:-/dev/null}"
 
 case "$1 $2" in
+  # The gate asks the SERVER for its protocol, not this binary, so the stub
+  # reports it under `server` exactly as `herdr status --json` does.
+  "status --json")  printf '{"server":{"protocol":%s}}\n' \
+                      "$(sed 's/[^0-9]//g' "$PASTE_FIXTURE/schema.json")" ;;
   "api schema")     cat "$PASTE_FIXTURE/schema.json" ;;
   "workspace list") cat "$PASTE_FIXTURE/workspaces.json" ;;
   "tab list")       cat "$PASTE_FIXTURE/tabs.json" ;;

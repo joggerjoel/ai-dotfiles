@@ -20,6 +20,7 @@
 #   ./scripts/herdr-node.sh service uninstall [node|bridge|tabwatch|all] # remove launchd agent(s)
 #     tabwatch: connect each new tab to the host its workspace is named for.
 #     Not in `all` — it types into panes, so it is opt-in on purpose.
+#     TABWATCH_DRY_RUN=1 ... service install tabwatch  # soak: logs, types nothing
 #   ./scripts/herdr-node.sh bridge [PORT]      # EXPERIMENTAL non-ssh socket bridge (mesh-only)
 #
 # Env:
@@ -27,6 +28,7 @@
 #   HERDR_BRIDGE_PORT    TCP port for `bridge` (default 7070)
 #   HERDR_BRIDGE_BIND    bind addr for `bridge` (default: this node's tailnet IP; "any"=0.0.0.0)
 #   HERDR_START_TIMEOUT  seconds to wait for the server to report running (default 15)
+#   TABWATCH_DRY_RUN     1 = install the tab watcher in dry-run (logs, never types)
 set -uo pipefail
 
 BOLD='\033[1m'; DIM='\033[2m'; GREEN='\033[32m'; YELLOW='\033[33m'; RED='\033[31m'; RESET='\033[0m'
@@ -260,6 +262,14 @@ cmd_bridge_service_uninstall() {
 cmd_tabwatch_service_install() {
   header "herdr node · tab watcher install (launchd ${TABWATCH_LABEL})"
   [ -f "$TABWATCH_PY" ] || { fail "watcher not found at $TABWATCH_PY"; exit 1; }
+  # TABWATCH_DRY_RUN=1 installs the soak: resident and restarting like the real
+  # thing, but it only logs what it would have typed. The point of running it
+  # for days is to see which tabs it reacts to, and that needs to survive
+  # reboots the way the live agent would.
+  local tabwatch_dry_arg=""
+  if [ "${TABWATCH_DRY_RUN:-0}" = "1" ]; then
+    tabwatch_dry_arg=$'\n    <string>--dry-run</string>'
+  fi
   mkdir -p "$HOME/Library/LaunchAgents" "$LOG_DIR"
   cat >"$TABWATCH_PLIST" <<PLISTEOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -271,7 +281,7 @@ cmd_tabwatch_service_install() {
   <array>
     <string>/usr/bin/env</string>
     <string>python3</string>
-    <string>${TABWATCH_PY}</string>
+    <string>${TABWATCH_PY}</string>${tabwatch_dry_arg}
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -287,7 +297,11 @@ cmd_tabwatch_service_install() {
 PLISTEOF
   ok "wrote $TABWATCH_PLIST"
   _launchd_load "$TABWATCH_PLIST" "$TABWATCH_LABEL"
-  ok "new tabs will be connected to the host their workspace is named for"
+  if [ "${TABWATCH_DRY_RUN:-0}" = "1" ]; then
+    ok "DRY RUN — decisions are logged, nothing is typed into any pane"
+  else
+    ok "new tabs will be connected to the host their workspace is named for"
+  fi
   ok "log: ${LOG_DIR}/herdr-tabwatch.out — stop with: $0 service uninstall tabwatch"
 }
 

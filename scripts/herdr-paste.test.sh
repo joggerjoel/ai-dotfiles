@@ -356,6 +356,21 @@ rm -f "$HERDR_SOCKET_PATH"
 python3 "$P" _rpc >/dev/null 2>&1
 eq "preflight: a missing socket exits 6, fast" 6 "$?"
 
+# The gate must ask the SERVER behind the socket, not whichever herdr binary
+# happens to be on PATH. Once the socket can be a forwarded one, the local
+# binary is a different machine's and vouching for it is meaningless — so
+# assert the question that gets asked, not just the answer.
+daemon ok; schema 20
+: > "$PASTE_CALLS"
+python3 "$P" _rpc >/dev/null 2>&1
+grep -q "status --json" "$PASTE_CALLS" &&
+  ok "the protocol gate asks the server, not the local binary" ||
+  ko "the protocol gate asks the server, not the local binary" \
+     "calls: $(cat "$PASTE_CALLS")"
+grep -q "api schema" "$PASTE_CALLS" &&
+  ko "and no longer reads the local bundled schema" "still calls api schema" ||
+  ok "and no longer reads the local bundled schema"
+
 daemon ok; schema 21
 python3 "$P" _rpc >/dev/null 2>&1
 eq "protocol mismatch refuses to run, exits 5" 5 "$?"
