@@ -27,6 +27,15 @@ git -C "$TMP/plugins" sparse-checkout set --no-cone pstack/skills >/dev/null
 SRC="$TMP/plugins/pstack/skills"
 [ -d "$SRC" ] || { echo "pstack/skills not found upstream — layout changed?" >&2; exit 1; }
 
+# Record which upstream commit this tree came from, mirroring
+# skills/unlazy/.upstream. Without it a re-vendor silently takes whatever main
+# holds and there is no way, afterwards, to say what moved. Kept outside
+# skills/<name>/ on purpose: the vendor loop rm -rf's each skill directory, so
+# a stamp stored in one would be destroyed by the very run that wrote it.
+STAMP="$DOT/skills-local/.upstream-pstack"
+SHA="$(git -C "$TMP/plugins" rev-parse HEAD)"
+PREV="$(cut -d' ' -f2 "$STAMP" 2>/dev/null || true)"
+
 # Upstream is Cursor, which writes display-style frontmatter names ("Poteto
 # Mode"); Claude Code requires `name:` to equal the skill's directory, and
 # preflight fails the skill when it does not. Rewriting it here — at the vendor
@@ -57,7 +66,16 @@ for dir in "$SRC"/*/; do
   count=$((count + 1))
   echo "vendored $name"
 done
-echo "vendored $count pstack skills"
+
+mkdir -p "$(dirname "$STAMP")"
+printf '%s %s\n' "$REPO" "$SHA" >"$STAMP"
+if [ -z "$PREV" ]; then
+  echo "vendored $count pstack skills at $SHA (first stamp)"
+elif [ "$PREV" = "$SHA" ]; then
+  echo "vendored $count pstack skills — upstream unchanged at $SHA"
+else
+  echo "vendored $count pstack skills — upstream moved ${PREV:0:7}..${SHA:0:7}"
+fi
 
 # Deploys from DEST, not SRC: SRC still holds the upstream frontmatter, so
 # copying from it would put the un-normalized name back into ~/.claude/skills.

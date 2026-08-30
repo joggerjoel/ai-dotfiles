@@ -18,11 +18,30 @@ END='<!-- END LOCAL DEPLOYMENT -->'
 
 command -v gh >/dev/null || { echo "need gh CLI" >&2; exit 1; }
 
+# Resolve HEAD once, then fetch every skill at that exact commit. Fetching each
+# file at a moving HEAD lets a push landing mid-run leave the vendored set
+# straddling two revisions, with nothing recording which file came from where.
+# STAMP mirrors skills/unlazy/.upstream, and lives outside skills/<name>/ because
+# one commit covers all nine skills.
+STAMP="$DOT/skills-local/.upstream-9router"
+SHA="$(gh api "repos/$REPO/commits/HEAD" --jq '.sha')"
+PREV="$(cut -d' ' -f2 "$STAMP" 2>/dev/null || true)"
+
 for s in "${SKILLS[@]}"; do
   mkdir -p "$DEST/$s"
-  gh api "repos/$REPO/contents/skills/$s/SKILL.md" --jq '.content' | base64 -d > "$DEST/$s/SKILL.md"
+  gh api "repos/$REPO/contents/skills/$s/SKILL.md?ref=$SHA" --jq '.content' | base64 -d > "$DEST/$s/SKILL.md"
   echo "vendored $s"
 done
+
+mkdir -p "$(dirname "$STAMP")"
+printf 'https://github.com/%s.git %s\n' "$REPO" "$SHA" >"$STAMP"
+if [ -z "$PREV" ]; then
+  echo "vendored ${#SKILLS[@]} 9router skills at $SHA (first stamp)"
+elif [ "$PREV" = "$SHA" ]; then
+  echo "vendored ${#SKILLS[@]} 9router skills — upstream unchanged at $SHA"
+else
+  echo "vendored ${#SKILLS[@]} 9router skills — upstream moved ${PREV:0:7}..${SHA:0:7}"
+fi
 
 # Inject the local deployment block into the main 9router skill, right after the
 # YAML frontmatter (line 4 = closing '---'). Strip any prior block first (idempotent).

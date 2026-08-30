@@ -351,6 +351,28 @@ fix-just: _control
       "curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --force --to \$HOME/.local/bin && \$HOME/.local/bin/just --version" \
       2>/dev/null | grep -E 'CHANGED|SUCCESS|UNREACHABLE|FAILED|^just '
 
+# Re-vendors every third-party skill source in one verb, so "update the skills"
+# is not three script names you have to remember. Updates the repo only — it
+# does not deploy; review the diff, commit, then `./setup.sh update` (or let the
+# fleet's update.yml do it). Skills authored in this repo are untouched: nothing
+# upstream owns them.
+# [local] pull all vendored skills from upstream (network; needs git + gh)
+vendor-skills:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{dotfiles}}
+    for s in vendor-pstack-skills.sh vendor-9router-skills.sh vendor-unlazy-skill.sh; do
+      echo "── $s"
+      bash "scripts/$s"
+    done
+    echo "── validating"
+    just fix-skills
+    echo "── what changed"
+    # Stamps are the drift record: a moved .upstream-* line names the commit
+    # range even when no SKILL.md content changed.
+    git status --short skills/ skills-local/ || true
+    echo "review the diff, then commit — this recipe does not commit or deploy"
+
 # [fix] report skills with a frontmatter name mismatch or a dead reference
 fix-skills:
     #!/usr/bin/env bash
