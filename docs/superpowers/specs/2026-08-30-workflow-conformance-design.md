@@ -1,7 +1,12 @@
 # workflow-conformance — an evidence-audited gate on the skills playbook
 
 **Date:** 2026-08-30
-**Status:** approved, not yet implemented
+**Status:** built, evaluated, **not promoted**. Three blind eval rounds failed the
+acceptance criterion below. The branch was deleted; `skills/workflow` on main
+keeps the routing and non-negotiables without the gate. Kept as the design
+record and for the findings in
+`docs/superpowers/evals/2026-08-30-conformance-eval.md`, which are the durable
+output of this work.
 
 ## Problem
 
@@ -69,30 +74,38 @@ when it is on. Three consequences:
 **It cannot be invoked.** Its frontmatter sets `disable-model-invocation: true`,
 so only the user turns it on. Conformance detects and adapts; it never calls it.
 
-**Its todolist is the ledger.** poteto already requires the matched playbook's
-steps copied verbatim, and already requires that a skipped step remain in the
-list as `skip: <reason>`. That is the audited-exemption rule this design needs,
-already implemented. Conformance audits the `skip:` reasons rather than keeping
-a second list. A `skip:` whose reason the evidence contradicts is a FAIL.
+**Its todolist replaces the step list, not the evidence record.** poteto
+already requires the matched playbook's steps copied verbatim, and already
+requires that a skipped step remain in the list as `skip: <reason>`.
+Conformance does not keep a second step list — the todolist is the one true
+list of steps. But the ledger file is still written under poteto-mode: it
+holds the evidence for each step, keyed to the todolist's step names, and it
+is what the auditor reads. Conformance audits the `skip:` reasons against that
+evidence. A `skip:` whose reason the evidence contradicts is a FAIL.
 
 **Its subagent defaults apply.** Inside poteto-mode the auditor spawns per that
 skill's Subagents section rather than on this design's Haiku default.
 
 ### Four components
 
-**Triage** runs as the first action of any task. It classifies the task TRIVIAL
-or TRACKED and writes the verdict with a reason. A TRIVIAL claim is recorded,
-not silent — a false one stays visible in the record afterward. Trivial tasks
-cost one line and no subagents, which preserves the playbook's own rule that
-mechanical work gets no ceremony.
+**Triage** runs as the first action of any task. It classifies the task
+TRIVIAL, SMALL, or TRACKED and writes the verdict with a reason. A TRIVIAL or
+SMALL claim is recorded, not silent — a false one stays visible in the record
+afterward. Trivial tasks cost one line and no subagents, which preserves the
+playbook's own rule that mechanical work gets no ceremony. SMALL tasks cost
+two auditor spawns — Verify and Ship only — so bounded work with a real test
+surface draws proportionate ceremony instead of full.
 
 **Ledger.** One append-only markdown file per run at
 `.claude/conformance/YYYY-MM-DD-<slug>.md`, gitignored. Each phase records the
-route chosen, the skills invoked, the evidence, and the audit verdict.
+route chosen, the skills invoked, the evidence, and the auditor's reply pasted
+verbatim. A verdict the agent typed is not a verdict, and a PASS that names no
+evidence is not a PASS.
 
 **Auditor.** A subagent on Haiku 4.5 with fresh context. It receives the ledger
-entry, the rubric row, and the relevant playbook section. It does not receive
-the conversation, so it cannot inherit the reasoning that produced the gap.
+entry, the matching rubric section, and the relevant policy row or step in
+force. It does not receive the conversation, so it cannot inherit the
+reasoning that produced the gap.
 
 **Gate.** Phase N+1 does not begin until phase N records a PASS.
 
@@ -107,11 +120,11 @@ auditor needs a separate context rather than a longer checklist.
 
 | Phase      | Auditor must see                                                                                                                                       | Auto-FAIL                                                                                                  |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| 1 · Route  | Task shape named, lane chosen, playbook row quoted verbatim                                                                                            | Route contradicts shape; no row cited                                                                      |
+| 1 · Route  | Task shape named, lane chosen, playbook row quoted verbatim                                                                                            | Route contradicts shape; no policy row or step cited                                                       |
 | 2 · Build  | Skills invoked by name; for logic changes, failing-test output timestamped before the implementation diff; design-stack skills named if UI was touched | Test written after implementation; UI diff with no design skill; TDD claimed with no red-phase output      |
 | 3 · Verify | Raw command output. Typecheck, test, lint and build each run, or marked N/A with a reason                                                              | Any of the four silently absent; summarized instead of pasted; non-zero exit described as "mostly passing" |
 | 4 · Review | Diff enumerated by file and line count, `no-comments` pass, `review-changes` findings or an explicit "none" with what was checked                      | Review claimed without the diff enumerated; findings raised and left unresolved                            |
-| 5 · Ship   | Phase 3 PASS on record, commit message, secrets and `.gitignore` check                                                                                 | Any commit with no Phase 3 PASS above it                                                                   |
+| 5 · Ship   | verify-step PASS on record (Phase 3 under the default policy, or its mapped equivalent), commit message, secrets and `.gitignore` check                | Any commit with no verify-step PASS above it in the ledger                                                 |
 | 6 · Learn  | Recorded if done                                                                                                                                       | Non-blocking                                                                                               |
 
 Phase 0 is not audited. Loading context is not work, and gating on it would fire
@@ -120,9 +133,10 @@ worse than a missed retrospective.
 
 ### Auditor contract
 
-- **Input:** ledger entry, rubric row, playbook section. No conversation history.
-- **Output:** `PASS`, or `FAIL: <specific missing evidence>`. Prose that matches
-  neither form is rejected and the call is retried once.
+- **Input:** ledger entry, rubric section, policy row or step in force. No conversation history.
+- **Output:** `PASS: <the specific evidence seen, named>`, or `FAIL: <specific
+missing evidence>`. Prose that matches neither form — including a bare
+  `PASS` with no evidence named — is rejected and the call is retried once.
 - **Standing instruction:** default to FAIL. Ambiguous, summarized or
   self-reported evidence is not evidence. A false PASS is the failure this
   system exists to prevent.
@@ -166,8 +180,8 @@ catching a gap the without-skill arm shipped.
 
 ## Cost
 
-Roughly five short subagent calls per tracked task. Trivial tasks cost one
-triage line.
+Roughly five short subagent calls per tracked task. SMALL tasks cost two —
+Verify and Ship only. Trivial tasks cost one triage line.
 
 ## Boundaries against neighbouring skills
 
@@ -191,9 +205,10 @@ Lives at `skills/workflow-conformance/SKILL.md` in `ai-dotfiles`, deployed by
 `setup.sh` like every other skill in `skills/`. `.claude/conformance/` is added
 to `.gitignore`.
 
-## The TRIVIAL threshold
+## The TRIVIAL and SMALL thresholds
 
-TRIVIAL requires all four to hold. Any one failing makes the task TRACKED:
+TRIVIAL requires all four to hold. Any one failing drops the task to SMALL,
+not straight to TRACKED:
 
 1. No behaviour change a test could observe. Typos, comments, formatting,
    docs, renames confined to one file.
@@ -201,6 +216,46 @@ TRIVIAL requires all four to hold. Any one failing makes the task TRACKED:
 3. No dependency, config, schema, auth or CI change, at any size.
 4. Reversible by `git revert` with no coordination.
 
-The threshold is deliberately strict. A task wrongly marked TRACKED costs five
-Haiku calls; one wrongly marked TRIVIAL costs the guarantee the system exists
-to provide. Tune from the ledgers, in the direction of stricter.
+SMALL requires all four to hold. Any one failing makes the task TRACKED:
+
+1. Three files or fewer.
+2. A test target already exists — the change does not have to create the
+   project's test infrastructure.
+3. No dependency, config, schema, auth or CI change, at any size.
+4. Reversible by `git revert` with no coordination.
+
+SMALL differs from TRIVIAL in permitting an observable behaviour change, and
+from TRACKED in requiring bounded size plus an existing test surface. SMALL
+audits only Verify and Ship — the two phases where evidence is cheap to
+produce and a miss is expensive — leaving Route, Build, Review and Learn
+unaudited for that tier.
+
+Triage may perform the minimum exploration needed to judge these criteria
+honestly — enough to know the file count and whether config/schema/CI is in
+scope, no more. That is not the exploration a TRACKED task owes; it is only
+enough to classify.
+
+**Re-triage.** A TRIVIAL or SMALL verdict is not final. If later exploration
+contradicts it, the ledger records the upgrade with the reason — TRIVIAL to
+SMALL, TRIVIAL to TRACKED, or SMALL to TRACKED. Every phase already elapsed
+under the lower tier is now owed an audit before the run proceeds — submit
+its evidence and get PASS, or restart at Route if that evidence was never
+captured — so upgrading is never cheaper than having classified correctly at
+the start.
+
+Build's red-before-green ordering cannot be produced retroactively on a
+restart, since the implementation already exists. On any upgraded run —
+TRIVIAL to SMALL, TRIVIAL to TRACKED, or SMALL to TRACKED — Build's evidence
+is instead the tests that now exist and pass, plus a ledger note that the run
+was upgraded and red-phase evidence was unavailable. That note is itself the
+evidence of what happened, and the auditor grades it rather than deadlocking.
+This exception applies only to upgraded runs — a run TRACKED from the start
+still owes red-before-green.
+
+The thresholds are deliberately strict. A task wrongly marked TRACKED costs
+five Haiku calls, or two under SMALL; one wrongly marked TRIVIAL or SMALL
+costs the guarantee the system exists to provide. The same cost applies from
+the other direction: ceremony an agent judges disproportionate gets refused
+outright, which costs the guarantee just as completely, and that is the
+reason SMALL exists — to keep refusal from being the rational choice on
+ordinary small work. Tune from the ledgers, in the direction of stricter.
