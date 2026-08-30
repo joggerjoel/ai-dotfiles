@@ -36,17 +36,47 @@ evidence quality, or a separate context, which can.
 ### One direction, one seam
 
 ```
-references/workflow-skills.md  ──▶ which skill each phase requires  (policy)
-skills/workflow-conformance/   ──▶ what evidence proves it happened  (mechanism)
+policy source (varies)        ──▶ which step each phase requires   (policy)
+skills/workflow-conformance/  ──▶ what evidence proves it happened (mechanism)
 ```
 
-The skill embeds no phase content. At triage it reads the playbook, preferring a
-project-local `workflow-skills.md` when one exists, exactly as the playbook
-already specifies. Editing the playbook updates enforcement on every machine
-`setup.sh` deploys to. Nothing is duplicated, so nothing can disagree.
+The skill embeds no phase content. It is one engine over a pluggable policy.
+Editing a policy updates enforcement on every machine `setup.sh` deploys to.
+Nothing is duplicated, so nothing can disagree.
 
-Evidence classes are stable across playbook revisions. Routing tables change;
-what proves a verify happened does not.
+Evidence classes are stable across policy revisions. Routing tables change; what
+proves a verify happened does not. That stability is what makes one engine
+sufficient for more than one policy.
+
+### Policy resolution
+
+Triage resolves exactly one policy and records which, in this order:
+
+1. `poteto-mode` active, with a matched playbook → **that playbook's steps**,
+   copied verbatim, are the audited list.
+2. A project-local `workflow-skills.md` → its phases. The machine-wide playbook
+   already grants project-local files precedence.
+3. Otherwise `references/workflow-skills.md`, phases 1 through 6.
+
+Ambiguity is resolved by recording the choice, not by guessing silently. If no
+policy resolves, that is a FAIL, not a pass.
+
+### poteto-mode interoperation
+
+`poteto-mode` is a second routing authority with its own playbooks, and it wins
+when it is on. Three consequences:
+
+**It cannot be invoked.** Its frontmatter sets `disable-model-invocation: true`,
+so only the user turns it on. Conformance detects and adapts; it never calls it.
+
+**Its todolist is the ledger.** poteto already requires the matched playbook's
+steps copied verbatim, and already requires that a skipped step remain in the
+list as `skip: <reason>`. That is the audited-exemption rule this design needs,
+already implemented. Conformance audits the `skip:` reasons rather than keeping
+a second list. A `skip:` whose reason the evidence contradicts is a FAIL.
+
+**Its subagent defaults apply.** Inside poteto-mode the auditor spawns per that
+skill's Subagents section rather than on this design's Haiku default.
 
 ### Four components
 
@@ -108,6 +138,32 @@ on one phase usually means the step is structurally blocked — no lint script
 exists, no test target — and that is a decision for the user, not a loop to
 spend tokens in.
 
+This escalation overrides `principle-never-block-on-the-human`, which is
+otherwise in force under poteto-mode. That principle governs reversible work the
+agent could simply attempt. A twice-failed audit is not a choice the agent
+declined to make; it is a capability the environment does not have. Supplying it
+is the user's call. The override is deliberately narrow: two FAILs on one step,
+nothing else.
+
+## Acceptance
+
+The skill is prose, so it has no unit tests. Two checks, both of which already
+exist in this repo or its skills:
+
+**Structural.** `just fix-skills` — frontmatter `name` matches the directory and
+every `references/<file>` link resolves. This is the validation step
+`poteto-mode/playbooks/authoring-a-skill.md` requires.
+
+**Behavioural.** A blind eval per `poteto-mode/playbooks/eval.md`. Candidates run
+an organic-looking task with and without the skill installed; the rubric is held
+back from candidates; chain-following is graded from transcripts and code shape,
+never from self-report. This is the only honest way to show the skill changes
+behaviour rather than merely reading well, and its central rule is the same one
+the auditor enforces: what an agent claims it did is not evidence it did it.
+
+Promotion criterion: the skill ships only if the eval shows the with-skill arm
+catching a gap the without-skill arm shipped.
+
 ## Cost
 
 Roughly five short subagent calls per tracked task. Trivial tasks cost one
@@ -123,6 +179,11 @@ virtue; folding conformance into it would cost that.
 
 `show-me-your-work` records a decision trail. The ledger records evidence and a
 verdict. The trail explains choices; the ledger proves work.
+
+`poteto-mode` is a policy, not a competitor. It says which steps a task owes;
+this says whether they were paid. It also self-enforces by requiring `skip:
+<reason>` on omitted steps, but that reason is self-reported, which is the
+failure mode this design exists to close. Conformance audits the reasons.
 
 ## Deployment
 
