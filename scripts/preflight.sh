@@ -149,7 +149,7 @@ probe_mcp() {
     MCP_TIMED_OUT=1
     local key
     while IFS= read -r key; do
-      [ -n "$key" ] && add_finding mcp "$key" unknown "handshake timed out after ${MCP_TIMEOUT}s" no
+      [ -n "$key" ] && add_finding mcp "$key" unknown "no handshake in ${MCP_TIMEOUT}s (cold npx cache? re-run)" no
     done < <(jq -r '.mcpServers // {} | keys[]' "$CLAUDE_JSON" 2>/dev/null)
     return
   fi
@@ -298,12 +298,16 @@ probe_skills() {
       continue
     fi
 
-    # Markdown links to relative paths inside the skill directory.
+    # Markdown links to relative paths inside the skill directory. Fenced
+    # blocks are stripped first: a skill that documents its own output format
+    # writes placeholder links like `[Tab title](url)` inside an example, and
+    # scanning those reports a dead reference for a file nobody meant to ship.
     local missing_ref=""
     while IFS= read -r ref; do
       [ -n "$ref" ] || continue
       [ -e "$dir/$ref" ] || missing_ref="$ref"
-    done < <(grep -oE '\]\([a-zA-Z0-9._/-]+\)' "$skill_md" 2>/dev/null \
+    done < <(awk '/^[[:space:]]*```/ { fence = !fence; next } !fence' "$skill_md" 2>/dev/null \
+               | grep -oE '\]\([a-zA-Z0-9._/-]+\)' \
                | sed -E 's/^\]\(//; s/\)$//' | grep -vE '^https?:')
 
     if [ -n "$missing_ref" ]; then

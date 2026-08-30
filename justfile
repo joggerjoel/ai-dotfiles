@@ -367,7 +367,9 @@ fix-skills:
       fi
       # every references/<file> link must resolve on disk. preflight reports
       # only the first miss per skill, so this lists all of them at once.
-      for ref in $(grep -oE '\(references/[^)]+\)' "$f" 2>/dev/null | tr -d '()' | sort -u); do
+      # Fenced blocks are stripped first, matching preflight: a documented
+      # example of a skill's own output is not a link that has to resolve.
+      for ref in $(awk '/^[[:space:]]*```/{fence=!fence;next} !fence' "$f" 2>/dev/null | grep -oE '\(references/[^)]+\)' | tr -d '()' | sort -u); do
         if [ ! -e "$s/$ref" ]; then
           echo "  ✘ $s: dead reference $ref"
           problems=$((problems+1))
