@@ -34,6 +34,13 @@
     # ai-dotfiles was ever installed, so its presence is not proof setup.sh ran.
     # Set true to run setup anyway on such a host.
     dotfiles_force_setup: false
+
+    # Pi declares `engines.node >= 22.19.0` and hard-fails below it with a
+    # SyntaxError about `globSync`, not a version message — so an under-floor
+    # runtime reads as a corrupt install rather than an old node. This is a
+    # FLOOR, not a pin: most of the fleet runs v26 happily and pinning would
+    # downgrade healthy hosts for no reason.
+    node_min_version: "22.19.0"
   tasks:
     # ── Stage 0: prerequisites ───────────────────────────────────────
     # Every CLI installer below pipes `curl`, and setup.sh needs git/jq. Install
@@ -71,15 +78,26 @@
           and sudo access, then re-run. Skipping all installs for this host.
       when: prereq_check.rc != 0
 
-    # Node.js runtime for Gemini CLI (npm-only, needs node >=20). Not an OS
-    # package, so bootstrap nvm + Node LTS here — as part of the deploy — when no
-    # runtime is present. Idempotent: skipped when node already resolves.
-    - name: Is a Node.js runtime available (system or nvm)?
+    # Node.js runtime for the npm-only CLIs (gemini, pi, grok). Not an OS
+    # package, so bootstrap nvm + Node LTS here — as part of the deploy — when
+    # the runtime is missing or too old. Idempotent: skipped when it is fine.
+    #
+    # This gate MUST source nvm before deciding, because every npm-global task
+    # below sources nvm before installing. An earlier version asked only
+    # `command -v node`, which a SYSTEM node satisfies — so on a host where
+    # setup.sh had installed NodeSource to /usr/bin/node, the gate passed while
+    # nvm still held a stale v20.12.2, and `npm install -g pi` landed in the
+    # stale tree. Nothing failed; pi was simply broken at runtime. The gate and
+    # its consumers must agree on which runtime they mean. (aorus2, 2026-08-30.)
+    - name: Does the runtime the npm-global installs use meet Node {{ node_min_version }}?
       ansible.builtin.shell: |
-        command -v node >/dev/null 2>&1 && exit 0
         export NVM_DIR="$HOME/.nvm"
         [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-        command -v node >/dev/null 2>&1
+        v="$(node -v 2>/dev/null)" || exit 1
+        v="${v#v}"
+        # `sort -V` puts the lower version first; the floor sorting first means
+        # the installed version is >= it. Pure shell, no semver dependency.
+        [ "$(printf '%s\n%s\n' "{{ node_min_version }}" "$v" | sort -V | head -1)" = "{{ node_min_version }}" ]
       args:
         executable: /bin/bash
       register: node_check
@@ -90,7 +108,7 @@
       changed_when: false
       failed_when: false
 
-    - name: Install nvm (when no Node.js runtime present)
+    - name: Install nvm (when the runtime is missing or under the floor)
       ansible.builtin.shell: |
         set -o pipefail
         curl {{ curl_retry }} -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.5/install.sh | bash
@@ -99,7 +117,12 @@
         creates: "{{ ansible_facts.env.HOME }}/.nvm/nvm.sh"
       when: node_check.rc != 0
 
-    - name: Install Node.js LTS via nvm (when no Node.js runtime present)
+    # `nvm alias default` matters as much as the install: the npm-global tasks
+    # below source nvm and get whatever DEFAULT resolves to, not the newest
+    # version on disk. A host can hold a modern node and still default to an
+    # ancient one — which is exactly how aorus2 kept resolving v20.12.2 with
+    # v24 sitting installed beside it.
+    - name: Install Node.js LTS via nvm (when the runtime is missing or under the floor)
       ansible.builtin.shell: |
         set -o pipefail
         export NVM_DIR="$HOME/.nvm"
@@ -109,6 +132,78 @@
       args:
         executable: /bin/bash
       when: node_check.rc != 0
+
+    # Ubuntu's stock ~/.bashrc returns early for non-interactive shells. herdr
+    # wires every pane as `ssh -t HOST 'bash -lc "<program>; ..."'` — a LOGIN
+    # but NON-interactive shell — so anything below that guard is invisible to a
+    # pane while working perfectly over an interactive ssh. nvm is the case that
+    # bites: `pi` resolves when you ssh in by hand and is "command not found" in
+    # the pane, which reads as a broken host rather than an unloaded PATH.
+    #
+    # deploy-claude-token.yml already relies on this being true, commenting that
+    # insertbefore puts its stanza "above the guard, where nvm already sits for
+    # exactly this reason". On six hosts nvm did sit there — added by hand, not
+    # by any playbook. aorus2 joined the fleet without it and proved the
+    # assumption was drift. Managed here so a new host cannot arrive missing it.
+    #
+    # Two separate questions, because they have different answers and different
+    # remedies: (1) is there a guard to insert above, and (2) is nvm ALREADY
+    # above it. The fleet's six original hosts have a hand-added nvm block
+    # carrying no ansible marker, so keying on the marker alone would append a
+    # duplicate to every one of them. Ask about the position instead — awk
+    # stops at the guard, so a hit means nvm loads before the early return,
+    # however it got there.
+    - name: Find the interactive guard in .bashrc
+      ansible.builtin.shell: grep -qE '^# If not running interactively' "$HOME/.bashrc"
+      args:
+        executable: /bin/bash
+      register: bashrc_guard
+      # A shell task is skipped under --check, so this var would have no .rc and
+      # the task it gates would skip for the wrong reason -- a dry run
+      # reporting convergence it never checked.
+      check_mode: false
+      changed_when: false
+      failed_when: false
+
+    # blockinfile APPENDS when insertbefore matches nothing, which would place
+    # the stanza below the guard — the exact failure this task exists to prevent,
+    # and silently. Fail loudly instead of writing something inert.
+    - name: Fail when .bashrc has no interactive guard to insert above
+      ansible.builtin.fail:
+        msg: >-
+          {{ inventory_hostname }}: ~/.bashrc has no "# If not running
+          interactively" guard, so nvm cannot be placed above it. This host's
+          .bashrc is non-stock — position the nvm block by hand and confirm
+          `ssh {{ inventory_hostname }} 'bash -lc "command -v pi"'` resolves.
+      when: bashrc_guard.rc is defined and bashrc_guard.rc != 0
+
+    - name: Is nvm already sourced above the interactive guard?
+      ansible.builtin.shell: |
+        awk '/^# If not running interactively/{exit} /NVM_DIR/{found=1} END{exit !found}' "$HOME/.bashrc"
+      args:
+        executable: /bin/bash
+      register: nvm_above_guard
+      # A shell task is skipped under --check, so this var would have no .rc and
+      # the task it gates would skip for the wrong reason -- a dry run
+      # reporting convergence it never checked.
+      check_mode: false
+      changed_when: false
+      failed_when: false
+
+    - name: Load nvm from above the interactive guard in .bashrc
+      ansible.builtin.blockinfile:
+        path: "{{ ansible_facts.env.HOME }}/.bashrc"
+        marker: "# {mark} ANSIBLE MANAGED — nvm for non-interactive shells"
+        insertbefore: "^# If not running interactively"
+        block: |
+          # Login-but-non-interactive shells (herdr panes: bash -lc) must reach
+          # this, so it lives above the interactive guard below.
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+        create: false
+      when:
+        - bashrc_guard.rc is defined and bashrc_guard.rc == 0
+        - nvm_above_guard.rc is defined and nvm_above_guard.rc != 0
 
     # ── Stage A: runtime ─────────────────────────────────────────────
     - name: Detect existing tmux
