@@ -16,8 +16,10 @@
 #   ./scripts/herdr-node.sh restart            # down then up
 #   ./scripts/herdr-node.sh down               # stop the server
 #   ./scripts/herdr-node.sh captain-tab        # ensure a persistent firstmate captain tab
-#   ./scripts/herdr-node.sh service install [node|bridge|all]   # launchd (default all)
-#   ./scripts/herdr-node.sh service uninstall [node|bridge|all] # remove launchd agent(s)
+#   ./scripts/herdr-node.sh service install [node|bridge|tabwatch|all]   # launchd (default all)
+#   ./scripts/herdr-node.sh service uninstall [node|bridge|tabwatch|all] # remove launchd agent(s)
+#     tabwatch: connect each new tab to the host its workspace is named for.
+#     Not in `all` — it types into panes, so it is opt-in on purpose.
 #   ./scripts/herdr-node.sh bridge [PORT]      # EXPERIMENTAL non-ssh socket bridge (mesh-only)
 #
 # Env:
@@ -48,7 +50,10 @@ LABEL="dev.herdr.node"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
 BRIDGE_LABEL="dev.herdr.bridge"
 BRIDGE_PLIST="$HOME/Library/LaunchAgents/${BRIDGE_LABEL}.plist"
+TABWATCH_LABEL="dev.herdr.tabwatch"
+TABWATCH_PLIST="$HOME/Library/LaunchAgents/${TABWATCH_LABEL}.plist"
 SCRIPT_PATH="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")"
+TABWATCH_PY="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/herdr-tabwatch.py"
 
 # Load/unload a LaunchAgent into the console user's GUI domain (works over SSH
 # when a desktop session is active), falling back to legacy load for older macOS.
@@ -247,6 +252,50 @@ cmd_bridge_service_uninstall() {
   _launchd_unload "$BRIDGE_PLIST" "$BRIDGE_LABEL"
 }
 
+# --- tab watcher --------------------------------------------------------------
+# Connects each new tab to the host its workspace is named for. Belongs on the
+# node: it subscribes to the API, which only exists here, and a copy on the
+# laptop would miss every tab opened while the lid was shut.
+
+cmd_tabwatch_service_install() {
+  header "herdr node · tab watcher install (launchd ${TABWATCH_LABEL})"
+  [ -f "$TABWATCH_PY" ] || { fail "watcher not found at $TABWATCH_PY"; exit 1; }
+  mkdir -p "$HOME/Library/LaunchAgents" "$LOG_DIR"
+  cat >"$TABWATCH_PLIST" <<PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${TABWATCH_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>python3</string>
+    <string>${TABWATCH_PY}</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>${LOG_DIR}/herdr-tabwatch.out</string>
+  <key>StandardErrorPath</key><string>${LOG_DIR}/herdr-tabwatch.err</string>
+</dict>
+</plist>
+PLISTEOF
+  ok "wrote $TABWATCH_PLIST"
+  _launchd_load "$TABWATCH_PLIST" "$TABWATCH_LABEL"
+  ok "new tabs will be connected to the host their workspace is named for"
+  ok "log: ${LOG_DIR}/herdr-tabwatch.out — stop with: $0 service uninstall tabwatch"
+}
+
+cmd_tabwatch_service_uninstall() {
+  header "herdr node · tab watcher uninstall (${TABWATCH_LABEL})"
+  _launchd_unload "$TABWATCH_PLIST" "$TABWATCH_LABEL"
+}
+
 # --- experimental non-ssh remote bridge --------------------------------------
 # Forwards the herdr Unix socket over TCP so a remote client can reach this
 # server WITHOUT ssh. socat is plaintext: this MUST ride inside a WireGuard-class
@@ -305,17 +354,19 @@ case "${1:-up}" in
         case "$svc_target" in
           node)   cmd_service_install ;;
           bridge) cmd_bridge_service_install ;;
+          tabwatch) cmd_tabwatch_service_install ;;
           all)    cmd_service_install; cmd_bridge_service_install ;;
-          *) fail "usage: $0 service install {node|bridge|all}"; exit 2 ;;
+          *) fail "usage: $0 service install {node|bridge|tabwatch|all}"; exit 2 ;;
         esac ;;
       uninstall)
         case "$svc_target" in
           node)   cmd_service_uninstall ;;
           bridge) cmd_bridge_service_uninstall ;;
+          tabwatch) cmd_tabwatch_service_uninstall ;;
           all)    cmd_bridge_service_uninstall; cmd_service_uninstall ;;
-          *) fail "usage: $0 service uninstall {node|bridge|all}"; exit 2 ;;
+          *) fail "usage: $0 service uninstall {node|bridge|tabwatch|all}"; exit 2 ;;
         esac ;;
-      *) fail "usage: $0 service {install|uninstall} [node|bridge|all]"; exit 2 ;;
+      *) fail "usage: $0 service {install|uninstall} [node|bridge|tabwatch|all]"; exit 2 ;;
     esac ;;
   bridge)   shift; cmd_bridge "${1:-}" ;;
   -h|--help|help) usage ;;

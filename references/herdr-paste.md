@@ -38,7 +38,7 @@ target's identity at that moment, prompts for the value, confirms, re-verifies
 and writes — all in one process.
 
 An earlier design had `send <pane-id>` take the id from a previous `list`. That
-is not *impossible* — `--expect-tab` below hands identity over argv, so the channel
+is not _impossible_ — `--expect-tab` below hands identity over argv, so the channel
 plainly exists. It is wrong for a different reason: it makes the unverified path
 the default and the verified one opt-in. A bare pane id is all most people would
 ever type, and a bare pane id can only support "is this id still present?",
@@ -180,6 +180,7 @@ remote ssh peers, CI output. `list` renders them into two hostile sinks:
   daemon-assigned `pane_id` beside the label, as an anchor no pane can rewrite;
   homoglyphs can still make two labels look alike, and the id is what you
   actually compare.
+
 - **Page:** HTML-escape every label. Unescaped, a session name is stored XSS on
   the exact origin holding the credential field.
 
@@ -189,12 +190,27 @@ remote ssh peers, CI output. `list` renders them into two hostile sinks:
 with another writer and leave a TUI reading a truncated paste-bracketed region.
 `send-text` + `send-keys enter` can.
 
+Re-verified against herdr **0.8.2** when the pin moved 19 → 20:
+`handle_pane_send_input` (`src/app/api/panes.rs`) calls `encode_api_input`,
+which builds a single buffer — text bytes, then the encoded keys appended —
+and passes it to one `try_send_bytes`. One buffer, one write; the guarantee
+holds. Note this had to be read from the handler, because the API schema
+describes only the _shape_ of `PaneSendInputParams` and 0.8.2's socket-api docs
+do not mention `pane.send_input` at all. **A schema diff cannot discharge this
+check** — whoever bumps the pin next has to read the handler again.
+
+One near-miss worth recording: herdr 0.8.0 added "wait briefly after sending
+text before pressing Enter", which is exactly the gap this method must not
+have. It applies to `agent.prompt`, not here — herdr's own test is named
+`agent_prompt_sends_text_then_delays_enter`. The changelog line is scoped to
+agents; do not read it as applying to `pane.send_input`.
+
 `herdr pane run` is **not** usable here: its signature is
 `herdr pane run <PANE_ID> <COMMAND>...`, so the value would be an argv element,
 world-readable via `ps` for the life of the process.
 
-The request is one JSON object per line on `$HERDR_SOCKET_PATH`
-(`~/.config/herdr/herdr.sock` here), of this shape:
+The request is one JSON object per line on the resolved socket (see **Finding
+the socket** below), of this shape:
 
     {"id":"paste-1","method":"pane.send_input",
      "params":{"pane_id":"w3:p1","text":"…","keys":["enter"]}}
@@ -216,7 +232,7 @@ analysis behind it was not. The payload is attacker-supplied by construction; wh
 "token" chooses those bytes.
 
 **Protocol pin with a producer.** `pane.send_input` and its atomicity are pinned
-to herdr **protocol 19**. At startup every verb reads `herdr api schema` and
+to herdr **protocol 20**. At startup every verb reads `herdr api schema` and
 **refuses to run** if the protocol differs, naming the expected and actual
 values. A prose note to "re-verify on a bump" is not a gate; this is.
 
@@ -295,9 +311,91 @@ and the web form is single-flight — a second submission while one is in flight
 is refused rather than queued, so a double-click cannot double-submit.
 
 **Preflight.** At startup — first of all the gates below — every verb checks
-`$HERDR_SOCKET_PATH` exists and accepts a connection, failing fast and
+the resolved socket exists and accepts a connection, failing fast and
 explicitly if not. A stale socket
 otherwise hangs or fails opaquely.
+
+## Finding the socket
+
+The documented default, `~/.config/herdr/herdr.sock`, is correct only when a
+herdr server runs on this machine. Assuming it made the relay unusable from a
+HUD laptop, which is where it is most wanted: `herdr --remote <host>` binds
+
+    $TMPDIR/herdr-remote-<pid>-<host>-<session>.sock
+
+instead, leaving the config path a **file with nothing behind it** — so the
+relay reported `Connection refused` for a session that was plainly running. The
+pid in that name is the point: it changes every time the session comes up, so
+no static config and no `HERDR_SOCKET_PATH` in a shell profile can pin it.
+`herdr status` is no help either — in remote mode it reports
+`server: not running` and points at the same dead default.
+
+`resolve_socket_path()` therefore tries, in order:
+
+1. **`$HERDR_SOCKET_PATH`**, which wins and is never second-guessed. It names
+   the delivery target for a credential. If it is dead, preflight says so —
+   quietly retargeting the paste at whatever _is_ alive would deliver a token
+   into a terminal the operator did not choose, which is the failure this
+   program exists to prevent.
+2. **The default path**, when something answers on it.
+3. **`$TMPDIR/herdr-remote-*.sock`**, probed the same way.
+
+Liveness means **"replied to a read-only request"**, never `os.path.exists` and
+— the part that cost a second debugging pass — never "accepted a connection".
+Both weaker tests are actively wrong here:
+
+- A unix socket file outlives the process that bound it. A laptop that has
+  attached a few times accumulates a drawer of them: six on the machine this
+  was diagnosed on, five dead. "Newest by mtime" is not a tiebreak either —
+  the newest file was a corpse.
+- The `herdr-remote-*` socket **accepts a connection and then never answers**.
+  It is the bridge that shuttles bytes to the node's TUI over ssh; it serves no
+  API. A connect-and-close probe calls it alive, and every verb then hangs.
+
+That second one is not merely a hang. `rpc()` turns a timeout into `Ambiguous`
+— "the write may have landed" — so a relay pointed at the bridge would tell the
+operator that a single-use credential might already be delivered when nothing
+was ever sent, and this document's own rule is that nobody retries an
+`AMBIGUOUS`. A liveness test that cannot tell a bridge from a server
+manufactures exactly the outcome the design works hardest to avoid.
+
+Exactly one must answer. **Two or more is a refusal**, not a pick, because
+guessing which terminal a credential is typed into is not a guess worth
+making — the rule `resolve_bind_address()` already follows for tailnet
+addresses, and the same argument.
+
+Zero has two distinct messages, because they send the operator to different
+places. Nothing at all means "is herdr running?". But bridges present with none
+answering means herdr **is** running and simply serves no API on this side of
+the ssh link, so the message names the node instead: the panes are there, and
+so must the relay be. Telling someone to check whether herdr is running, while
+they are looking at it, is a worse failure than the original bug.
+
+## Which machine runs it
+
+In a HUD/node split the relay belongs on the **node**. That is not a preference,
+it is where the API server and the panes are: the laptop has only the bridge.
+Running `list` on the node enumerates the fleet; running it on the laptop
+cannot, and no amount of socket discovery changes that.
+
+Working from the laptop therefore means forwarding the node's
+`~/.config/herdr/herdr.sock` over ssh and pointing `$HERDR_SOCKET_PATH` at the
+forwarded endpoint — which is why rule 1 exists and why it is never
+second-guessed.
+
+`scripts/herdr-paste-remote.sh` does exactly that, and the `just paste*`
+recipes go through it. It asks `herdr-paste.py _node` who we are attached to;
+**prints nothing when a local API server already answers**, in which case no
+tunnel is built at all (that is also the path taken when running on the node
+itself). Otherwise it opens an ssh control master, asks it for the remote
+`$HOME` rather than assuming `/Users/<me>` — the Linux nodes are `/home/<me>` —
+adds a `-L` forward, runs the one verb, and tears the tunnel down from a trap.
+
+Two details are load-bearing. The tunnel is **per-invocation**: a standing ssh
+tunnel to the machine that holds every pane is a worse standing trade than an
+ssh handshake per paste. And the wrapper must **not** `exec` the final command,
+because that replaces the shell before the trap can run and leaks both the
+tunnel and the socket.
 
 Gate order for a delivery, complete and stated once. `list` runs only the first
 two; the scripted path skips pick and confirm (identity comes from
@@ -446,7 +544,7 @@ writing.
 the operator walked away would exit 7 — "timed out with no send" — which is
 false about a write that may have landed. `serve` now tracks the last outcome
 and exits **3** if that outcome was ambiguous, 0 if a send landed, 7 only if
-nothing was ever sent. It does not exit *at* the ambiguous result: the
+nothing was ever sent. It does not exit _at_ the ambiguous result: the
 capability stays alive so the human can decide whether to retry, which is the
 whole reason ambiguity is a distinct outcome. The window keeps its purpose and
 the exit code stops lying.

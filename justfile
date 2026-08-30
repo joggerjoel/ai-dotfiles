@@ -238,23 +238,27 @@ auth-login CLI *HOSTS:
 
 # [herdr] list panes you can paste a credential into (read-only)
 paste-list:
-    @python3 {{dotfiles}}/scripts/herdr-paste.py list
+    @bash {{dotfiles}}/scripts/herdr-paste-remote.sh list
 
 # Interactive: pick a pane, paste, confirm, deliver. The value is read without
 # echo and never reaches argv, the environment, disk, or a log.
 # [herdr] paste a credential into a pane
 paste:
-    @python3 {{dotfiles}}/scripts/herdr-paste.py send
+    @bash {{dotfiles}}/scripts/herdr-paste-remote.sh send
 
 # Serves a phone-friendly page on the tailnet address only, behind a one-shot
 # capability URL, for ten minutes. Prints a QR code if `qrencode` is installed.
 # [herdr] serve the paste page for a phone (tailnet only, 10 min)
 paste-serve:
-    @python3 {{dotfiles}}/scripts/herdr-paste.py serve
+    @bash {{dotfiles}}/scripts/herdr-paste-remote.sh serve
 
 # [local] herdr-paste: unit tests (scripts/herdr-paste.test.sh)
 paste-test:
     @bash {{dotfiles}}/scripts/herdr-paste.test.sh
+
+# [local] herdr-tabwatch: unit tests (scripts/herdr-tabwatch.test.sh)
+tabwatch-test:
+    @bash {{dotfiles}}/scripts/herdr-tabwatch.test.sh
 
 # One command: prompt for the token if it is missing, prove it authenticates
 # BEFORE writing anything, store it 0600, then deploy to the fleet. Prompting

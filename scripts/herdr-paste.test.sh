@@ -82,6 +82,203 @@ python3 "$P" 2>&1 | grep -qi usage &&
 python3 "$P" bogus >/dev/null 2>&1
 eq "an unknown verb exits 2" 2 "$?"
 
+# --- socket resolution -------------------------------------------------------
+# Resolution decides which terminal a credential lands in, so it gets its own
+# sandbox: a fake HOME for the documented default and a fake TMPDIR for the
+# remote-mode sockets. Runs before the transport section exports a global
+# HERDR_SOCKET_PATH, which would otherwise mask every branch below.
+
+# Its own short root, NOT under $TMP: a unix socket path cannot exceed 104
+# bytes on macOS, and "$TMPDIR/herdrpaste-test.XXXXXX/resolve/home/.config/
+# herdr/herdr.sock" is comfortably over. A listener that silently fails to
+# bind would make every assertion below pass for the wrong reason.
+SR=$(mktemp -d "/tmp/hp-res.XXXXXX") || exit 1
+trap 'rm -rf "$TMP" "$SR"' EXIT
+mkdir -p "$SR/home/.config/herdr" "$SR/tmp"
+LISTENERS=""
+
+listen() {  # <path> [bridge] — background a listener; returns once it is bound
+  # With no second argument this is an API server: it answers a request with a
+  # JSON line, which is what liveness means here.
+  #
+  # With `bridge` it accepts the connection and then says nothing, modelling
+  # `herdr --remote`'s bridge socket. That distinction is the whole point —
+  # a probe that only connects cannot tell these two apart, and the relay
+  # hangs (then reports a false AMBIGUOUS) when it guesses wrong.
+  python3 - "$1" "${2:-api}" <<'PY' &
+import socket, sys
+p, mode = sys.argv[1], sys.argv[2]
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(p); s.listen(5)
+open(p + ".ready", "w").close()
+while True:
+    try:
+        c, _ = s.accept()
+        if mode == "api":
+            c.recv(65536)
+            c.sendall(b'{"id":"paste-probe","result":{"workspaces":[]}}\n')
+        c.close()
+    except OSError:
+        break
+PY
+  LISTENERS="$LISTENERS $!"
+  local n=0
+  while [ $n -lt 100 ]; do
+    [ -e "$1.ready" ] && break
+    sleep 0.05; n=$((n + 1))
+  done
+  # A listener that never bound would make the assertions below pass for the
+  # wrong reason — "not live" looks identical to "not there". Fail loudly.
+  if [ ! -e "$1.ready" ]; then
+    ko "listener bound at $1" "never became ready"
+    return 1
+  fi
+  rm -f "$1.ready"
+}
+
+unlisten() { for p in $LISTENERS; do kill "$p" 2>/dev/null; done; LISTENERS=""; }
+
+# A socket FILE with nothing behind it — the exact state a laptop is left in
+# after a herdr session exits. Existence must not be mistaken for liveness.
+deadsock() { python3 -c "
+import socket,sys
+s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); s.bind(sys.argv[1]); s.close()
+" "$1"; }
+
+res() {  # resolve with HERDR_SOCKET_PATH unset, inside the sandbox
+  env -u HERDR_SOCKET_PATH HOME="$SR/home" TMPDIR="$SR/tmp/" \
+    python3 "$P" _socket 2>&1
+}
+rescode() { res >/dev/null 2>&1; echo $?; }
+
+DEFAULT="$SR/home/.config/herdr/herdr.sock"
+
+# An explicit path is a delivery target, not a hint. It wins even when it is
+# dead, because silently pasting into some other session is the worse outcome.
+eq "resolve: an explicit HERDR_SOCKET_PATH wins" "/nope/explicit.sock" \
+  "$(HERDR_SOCKET_PATH=/nope/explicit.sock HOME="$SR/home" TMPDIR="$SR/tmp/" \
+     python3 "$P" _socket 2>&1)"
+
+# Nothing anywhere: the error has to name both places it looked, or the
+# operator has no idea whether to start herdr or to set the variable.
+out=$(res)
+case "$out" in
+  *"$DEFAULT"*) ok "resolve: the empty-handed error names the default path" ;;
+  *) ko "resolve: the empty-handed error names the default path" "got [$out]" ;;
+esac
+eq "resolve: nothing live exits 6 (preflight)" 6 "$(rescode)"
+
+# A stale socket file is the common case and must not satisfy resolution.
+deadsock "$DEFAULT"
+deadsock "$SR/tmp/herdr-remote-111-macstudio-default.sock"
+eq "resolve: stale socket files are not mistaken for live ones" 6 "$(rescode)"
+
+# The bridge: it ACCEPTS and then never answers. A connect-only probe calls
+# this alive, points every verb at a socket that cannot serve them, and turns
+# the resulting timeout into "the write may have landed" — the one outcome the
+# design says nobody may retry. Liveness has to mean "replied".
+BRIDGE="$SR/tmp/herdr-remote-222-macstudio-default.sock"
+rm -f "$BRIDGE"; listen "$BRIDGE" bridge
+eq "resolve: a bridge that accepts but never replies is not live" 6 "$(rescode)"
+out=$(res)
+case "$out" in
+  *"remote session"*macstudio*)
+    ok "resolve: the bridge error names the node, not 'is herdr running?'" ;;
+  *) ko "resolve: the bridge error names the node, not 'is herdr running?'" \
+        "got [$out]" ;;
+esac
+unlisten; rm -f "$BRIDGE"
+
+# The local server case: the documented default, when something answers on it.
+rm -f "$DEFAULT"; listen "$DEFAULT"
+eq "resolve: a live default socket is used" "$DEFAULT" "$(res)"
+unlisten; rm -f "$DEFAULT"
+
+# The bug this whole section exists for: herdr is up in remote mode, so the
+# default is dead and the live socket is a pid-named one in TMPDIR.
+deadsock "$DEFAULT"
+REMOTE="$SR/tmp/herdr-remote-42645-macstudio-default.sock"
+rm -f "$REMOTE"; listen "$REMOTE"
+eq "resolve: a live remote-mode socket is found when the default is dead" \
+  "$REMOTE" "$(res)"
+
+# ...and it is found by liveness, not by being newest — the stale one above is
+# still sitting in the same directory.
+[ -e "$SR/tmp/herdr-remote-111-macstudio-default.sock" ] &&
+  ok "resolve: stale neighbours remain, so liveness did the choosing" ||
+  ko "resolve: stale neighbours remain, so liveness did the choosing"
+
+# Two live sessions: refuse. Guessing which terminal a credential is typed
+# into is not a guess worth making.
+SECOND="$SR/tmp/herdr-remote-42646-aorus5-default.sock"
+rm -f "$SECOND"; listen "$SECOND"
+eq "resolve: two live sessions are refused as ambiguous" 6 "$(rescode)"
+# Exit 6 alone cannot tell "two live" from "none live", so assert the message
+# distinguishes them and names both candidates.
+out=$(res)
+case "$out" in
+  *"2 live herdr sessions"*42645*42646*)
+    ok "resolve: the ambiguous error names both live sessions" ;;
+  *) ko "resolve: the ambiguous error names both live sessions" "got [$out]" ;;
+esac
+printf '%s' "$out" | grep -q "HERDR_SOCKET_PATH" &&
+  ok "resolve: the ambiguous error says how to disambiguate" ||
+  ko "resolve: the ambiguous error says how to disambiguate"
+unlisten
+rm -f "$SR/tmp/"*.sock "$DEFAULT"
+
+# --- the remote wrapper ------------------------------------------------------
+# herdr-paste-remote.sh forwards the node's API socket here for one command.
+# ssh is stubbed: these assert which decision it made, not that ssh works.
+
+WRAP="$HERE/herdr-paste-remote.sh"
+SSHLOG="$SR/ssh.argv"
+mkdir -p "$SR/bin"
+cat > "$SR/bin/ssh" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$SSHLOG"
+# -O forward and -M -f -N return without output; \$HOME is asked for by value.
+for a in "\$@"; do [ "\$a" = 'printf %s "\$HOME"' ] && { printf /remote/home; exit 0; }; done
+exit 0
+EOF
+chmod +x "$SR/bin/ssh"
+
+wrap() {  # run the wrapper in the sandbox with a stubbed ssh
+  rm -f "$SSHLOG"
+  env -u HERDR_SOCKET_PATH HOME="$SR/home" TMPDIR="$SR/tmp/" \
+    PATH="$SR/bin:$PATH" bash "$WRAP" "$@" 2>&1
+}
+
+# A live LOCAL server means no tunnel is warranted. Building one anyway would
+# open an ssh session per paste for nothing.
+rm -f "$DEFAULT"; listen "$DEFAULT"
+out=$(wrap _socket)
+eq "wrapper: a local server is used directly" "$DEFAULT" "$out"
+[ -s "$SSHLOG" ] &&
+  ko "wrapper: no ssh when the server is local" "ran ssh: $(cat "$SSHLOG")" ||
+  ok "wrapper: no ssh when the server is local"
+unlisten; rm -f "$DEFAULT"
+
+# Attached to a node: it must forward the NODE's socket, at the remote $HOME
+# rather than this machine's, or it would tunnel to a path that exists only
+# on the laptop.
+deadsock "$DEFAULT"
+BR="$SR/tmp/herdr-remote-42645-macstudio-default.sock"
+rm -f "$BR"; listen "$BR" bridge
+wrap _socket >/dev/null 2>&1 || true
+grep -q -- "-L .*:/remote/home/.config/herdr/herdr.sock" "$SSHLOG" &&
+  ok "wrapper: forwards the node's socket at the REMOTE home" ||
+  ko "wrapper: forwards the node's socket at the REMOTE home" \
+     "argv: $(cat "$SSHLOG" 2>/dev/null)"
+grep -q "macstudio" "$SSHLOG" &&
+  ok "wrapper: targets the node named by the bridge socket" ||
+  ko "wrapper: targets the node named by the bridge socket"
+grep -q -- "-O exit" "$SSHLOG" &&
+  ok "wrapper: tears the tunnel down on the way out" ||
+  ko "wrapper: tears the tunnel down on the way out" \
+     "argv: $(cat "$SSHLOG" 2>/dev/null)"
+unlisten; rm -f "$BR" "$DEFAULT" "$SSHLOG"
+
 # --- transport ---------------------------------------------------------------
 # A stand-in daemon on a unix socket. It records the exact bytes it received so
 # the encoding assertions can inspect the wire rather than trust the sender.
@@ -92,7 +289,7 @@ export PASTE_WIRE="$TMP/wire"
 export HERDR_SOCKET_PATH="$TMP/herdr.sock"
 
 schema() { printf '{"protocol":%s}\n' "$1" > "$PASTE_FIXTURE/schema.json"; }
-schema 19
+schema 20
 
 daemon() {  # <ok|err|silent|eof>  — backgrounded; returns once it is listening
   rm -f "$HERDR_SOCKET_PATH" "$PASTE_WIRE"
@@ -162,7 +359,12 @@ eq "preflight: a missing socket exits 6, fast" 6 "$?"
 daemon ok; schema 21
 python3 "$P" _rpc >/dev/null 2>&1
 eq "protocol mismatch refuses to run, exits 5" 5 "$?"
-schema 19
+# A protocol BELOW the pin is a mismatch too — an older daemon is no safer
+# than a newer one, and only `!=` says so.
+daemon ok; schema 19
+python3 "$P" _rpc >/dev/null 2>&1
+eq "an older protocol is refused too, exits 5" 5 "$?"
+schema 20
 
 daemon ok
 python3 "$P" _rpc >/dev/null 2>&1

@@ -11,6 +11,7 @@ anything here — most of what looks fussy is load-bearing, and the reasons are
 recorded there rather than repeated in every function.
 """
 import argparse
+import glob
 import json
 import os
 import socket
@@ -18,12 +19,28 @@ import subprocess
 import sys
 import unicodedata
 
-SOCKET_PATH = os.environ.get(
-    "HERDR_SOCKET_PATH", os.path.expanduser("~/.config/herdr/herdr.sock"))
+DEFAULT_SOCKET_PATH = os.path.expanduser("~/.config/herdr/herdr.sock")
+
+# Resolved once per process by socket_path(), never assumed. See
+# resolve_socket_path() for why the default is not good enough.
+_socket_path = None
 
 # The herdr socket protocol this program was written against. Verified at
 # startup and again immediately before each write; see the spec.
-PROTOCOL = 19
+#
+# Raised 19 -> 20 for herdr 0.8.2 only after re-reading the handler, because
+# the schema cannot express the guarantee this pin protects. In 0.8.2
+# `handle_pane_send_input` (src/app/api/panes.rs) calls `encode_api_input`,
+# which builds ONE buffer — text bytes, then the encoded keys appended — and
+# hands it to a single `try_send_bytes`. Text and Enter are therefore still one
+# write and still cannot interleave with another writer, which is the whole
+# reason this method is used over send_text + send_keys.
+#
+# The 0.8.0 note about waiting between text and Enter is the `agent.prompt`
+# path, not this one — herdr's own test is named
+# `agent_prompt_sends_text_then_delays_enter`. Do not read that changelog line
+# as applying here.
+PROTOCOL = 20
 
 # Exit codes are a contract: a scripted caller branches on them, so each
 # failure class gets its own. In particular AMBIGUOUS is not ERR — "the write
@@ -63,6 +80,121 @@ class Fatal(Exception):
         super().__init__(msg)
 
 
+def answers(path, timeout=2.0):
+    """Does an API server answer on this socket right now?
+
+    A unix socket file outlives the process that bound it, so its existence
+    proves nothing — a laptop that has attached to a remote session a few times
+    accumulates a directory of them, all but one dead.
+
+    Connecting is not enough either, which cost a debugging session to learn.
+    `herdr --remote` leaves a bridge socket at
+    $TMPDIR/herdr-remote-<pid>-<host>-<session>.sock that **accepts a
+    connection and then never replies** — it shuttles bytes to the node's TUI
+    and serves no API. A connect-and-close probe calls that alive, and every
+    verb then hangs against it.
+
+    The consequence is worse than a hang. rpc() turns a timeout into
+    `Ambiguous` — "the write may have landed" — so a relay pointed at the
+    bridge would tell the operator a single-use credential might already be
+    delivered when nothing was ever sent, and the design deliberately makes
+    that outcome one nobody retries. Liveness therefore means "replies to a
+    read-only request", not "accepts a socket".
+    """
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect(path)
+        req = json.dumps({"id": "paste-probe", "method": "workspace.list",
+                          "params": {}})
+        s.sendall(req.encode() + b"\n")
+        return bool(s.makefile("rb").readline())
+    except (OSError, socket.timeout):
+        return False
+    finally:
+        try:
+            s.close()
+        except OSError:
+            pass
+
+
+def _bridge_node(path):
+    """The node name out of herdr-remote-<pid>-<host>-<session>.sock.
+
+    Split from both ends, not by index: the pid is first and the session last,
+    but a hostname may itself contain dashes, so everything between them is
+    the name. Returns None rather than a guess if the shape does not match.
+    """
+    name = os.path.basename(path)
+    if not (name.startswith("herdr-remote-") and name.endswith(".sock")):
+        return None
+    parts = name[len("herdr-remote-"):-len(".sock")].split("-")
+    return "-".join(parts[1:-1]) if len(parts) >= 3 else None
+
+
+def resolve_socket_path():
+    """Find the one live herdr socket, or refuse to run.
+
+    An explicit `$HERDR_SOCKET_PATH` wins and is never second-guessed. It names
+    the delivery target for a credential; quietly retargeting a paste at some
+    other session because the named one was dead is exactly the failure this
+    program must not have. A dead explicit path is reported by preflight, not
+    routed around here.
+
+    The documented default is right only when a server runs on this machine.
+    It is not when herdr runs in remote mode: `herdr --remote <host>` binds
+    `$TMPDIR/herdr-remote-<pid>-<host>-<session>.sock`, and the pid in that
+    name means no static config can pin it — it changes every time the session
+    comes up. That is why the default path alone leaves this program unable to
+    find a session that is plainly running.
+
+    So the last resort probes those, and exactly one must answer. Two live
+    sessions make the target ambiguous, and guessing which terminal a
+    credential is typed into is not a guess worth making — the same reason
+    resolve_bind_address() refuses two tailnet addresses.
+    """
+    explicit = os.environ.get("HERDR_SOCKET_PATH")
+    if explicit:
+        return explicit
+
+    if answers(DEFAULT_SOCKET_PATH):
+        return DEFAULT_SOCKET_PATH
+
+    tmp = os.environ.get("TMPDIR", "/tmp")
+    bridges = sorted(glob.glob(os.path.join(tmp, "herdr-remote-*.sock")))
+    live = sorted(p for p in bridges if answers(p))
+    if not live and bridges:
+        # The common HUD case, and it deserves its own sentence: herdr IS
+        # running, so "is herdr running?" would send the operator to look at
+        # the wrong thing. There is simply no API server on this side of the
+        # ssh link to paste into.
+        nodes = sorted(filter(None, {_bridge_node(p) for p in bridges}))
+        raise Fatal(EXIT_PREFLIGHT,
+                    "herdr is attached to a remote session (%s) and serves no "
+                    "API on this machine — the panes live on the node. Run "
+                    "this there, or set HERDR_SOCKET_PATH to a forwarded "
+                    "socket." % ", ".join(nodes))
+    if not live:
+        raise Fatal(EXIT_PREFLIGHT,
+                    "no live herdr socket: nothing answering at %s, and no "
+                    "remote session answered in %s. Is herdr running?"
+                    % (DEFAULT_SOCKET_PATH, tmp))
+    if len(live) > 1:
+        raise Fatal(EXIT_PREFLIGHT,
+                    "%d live herdr sessions (%s); set HERDR_SOCKET_PATH to "
+                    "name the one to paste into"
+                    % (len(live), ", ".join(os.path.basename(p) for p in live)))
+    return live[0]
+
+
+def socket_path():
+    """The resolved socket, found once and reused for the process."""
+    global _socket_path
+    if _socket_path is None:
+        _socket_path = resolve_socket_path()
+    return _socket_path
+
+
 def preflight():
     """Fail fast when the daemon is not there.
 
@@ -70,12 +202,13 @@ def preflight():
     running it earlier would let a stale socket hang before anything had a
     chance to report why.
     """
-    if not os.path.exists(SOCKET_PATH):
-        raise Fatal(EXIT_PREFLIGHT, "no herdr socket at %s" % SOCKET_PATH)
+    path = socket_path()
+    if not os.path.exists(path):
+        raise Fatal(EXIT_PREFLIGHT, "no herdr socket at %s" % path)
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.settimeout(3.0)
-        s.connect(SOCKET_PATH)
+        s.connect(path)
         s.close()
     except OSError as e:
         raise Fatal(EXIT_PREFLIGHT, "herdr socket not accepting: %s" % e)
@@ -113,7 +246,7 @@ def rpc(method, params, timeout=5.0):
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.settimeout(timeout)
     try:
-        s.connect(SOCKET_PATH)
+        s.connect(socket_path())
         s.sendall(req.encode() + b"\n")
         line = s.makefile("rb").readline()
     except socket.timeout:
@@ -192,6 +325,44 @@ def cmd_validate(_args):
     except Rejected as e:
         print("refused: %s" % e, file=sys.stderr)
         return EXIT_ERR
+    return EXIT_OK
+
+
+def cmd_node(_args):
+    """Internal verb: name the node this machine is only *attached* to.
+
+    Prints nothing when a local API server answers — the caller then needs no
+    tunnel, because resolution already finds the socket on its own. Prints the
+    node name when all we have is a bridge, which is the caller's signal to
+    forward the node's socket here.
+
+    Refuses when bridges point at more than one node, for the same reason
+    resolve_socket_path() refuses two live sessions: this decides where a
+    credential ends up.
+    """
+    if answers(DEFAULT_SOCKET_PATH):
+        return EXIT_OK
+    tmp = os.environ.get("TMPDIR", "/tmp")
+    nodes = sorted(filter(None, {_bridge_node(p) for p in
+                                 glob.glob(os.path.join(tmp,
+                                                        "herdr-remote-*.sock"))}))
+    if len(nodes) > 1:
+        raise Fatal(EXIT_PREFLIGHT,
+                    "attached to %d nodes (%s); set HERDR_SOCKET_PATH to name "
+                    "the one to paste into" % (len(nodes), ", ".join(nodes)))
+    if nodes:
+        print(nodes[0])
+    return EXIT_OK
+
+
+def cmd_socket(_args):
+    """Internal verb: report the resolved socket, without connecting further.
+
+    Resolution decides where a credential is delivered, so it is exercised on
+    its own rather than only through a verb that would also need a daemon, a
+    pane and a human to reach it.
+    """
+    print(socket_path())
     return EXIT_OK
 
 
@@ -762,6 +933,8 @@ def build_parser():
     p_serve.add_argument("--timeout", type=float, default=600.0,
                          help="seconds before the page shuts itself down")
     sub.add_parser("_validate", help=argparse.SUPPRESS)
+    sub.add_parser("_socket", help=argparse.SUPPRESS)
+    sub.add_parser("_node", help=argparse.SUPPRESS)
     p_rpc = sub.add_parser("_rpc", help=argparse.SUPPRESS)
     p_rpc.add_argument("--timeout", type=float, default=5.0)
     p_rpc.add_argument("--raw-text", action="store_true")
@@ -777,7 +950,9 @@ def main(argv=None):
         ap.print_usage(sys.stderr)
         return EXIT_USAGE
 
-    handlers = {"_validate": cmd_validate, "_rpc": cmd_rpc,
+    handlers = {"_validate": cmd_validate, "_socket": cmd_socket,
+                "_node": cmd_node,
+                "_rpc": cmd_rpc,
                 "list": cmd_list, "send": cmd_send, "serve": cmd_serve}
     handler = handlers.get(args.verb)
     if handler is None:
