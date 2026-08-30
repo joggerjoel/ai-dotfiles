@@ -680,18 +680,45 @@ get_field() {
 # user-local skills untouched. setup.sh does NOT install plugins/marketplaces —
 # those are declared in profiles/<profile>/settings.json (enabledPlugins) and
 # must be added via `claude plugin marketplace add` / `claude plugin install`.
+#
+# A skill retired from skills/ used to keep its stale copy in ~/.claude/skills/
+# forever — nothing ever removed it. A manifest (SKILLS_MANIFEST, one name per
+# line, dotfile so it never matches a `skills/*/` glob) records exactly which
+# names THIS script installed last run. Pruning only ever consults that list:
+# a name that drops out of the repo AND is in the manifest gets removed; a
+# directory never listed in the manifest (plugin-provided, user-local) is
+# never touched, even if it's absent from the repo. A missing manifest (first
+# run, or an install from before this fix) prunes nothing.
+SKILLS_MANIFEST_NAME=".installed-by-setup"
+
 install_skills() {
   [ -d "$DOTFILES_DIR/skills" ] || return 0
   mkdir -p "$CLAUDE_DIR/skills"
+  local manifest="$CLAUDE_DIR/skills/$SKILLS_MANIFEST_NAME"
+
+  if [ -f "$manifest" ]; then
+    local prev_name
+    while IFS= read -r prev_name; do
+      [ -n "$prev_name" ] || continue
+      if [ ! -d "$DOTFILES_DIR/skills/$prev_name" ] && [ -d "$CLAUDE_DIR/skills/$prev_name" ]; then
+        rm -rf "${CLAUDE_DIR:?}/skills/${prev_name:?}"
+      fi
+    done < "$manifest"
+  fi
+
   local count=0
+  local new_manifest
+  new_manifest=$(mktemp)
   for skill_dir in "$DOTFILES_DIR"/skills/*/; do
     [ -d "$skill_dir" ] || continue
     local name
     name=$(basename "$skill_dir")
     rm -rf "$CLAUDE_DIR/skills/$name"
     cp -R "$skill_dir" "$CLAUDE_DIR/skills/$name"
+    echo "$name" >> "$new_manifest"
     count=$((count+1))
   done
+  mv "$new_manifest" "$manifest"
   ok "$count skill(s) installed to ~/.claude/skills/"
 }
 

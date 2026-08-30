@@ -695,6 +695,60 @@ else
   report fail "--json --smoke stdout still parses as JSON when a smoke test fails" "$out"
 fi
 
+# --- setup.sh: install_skills prunes only manifest-listed skills ------------
+# install_skills used to only ever add/refresh — a skill deleted from
+# skills/ kept its stale copy in ~/.claude/skills/ forever. It now writes a
+# manifest of every name it installed and, on the next run, removes any
+# manifest-listed name that's gone from the repo. Directories that were never
+# in the manifest (plugin-provided, user-local) must survive even though
+# they're equally absent from the repo — pruning must never fall back to
+# "delete anything install_skills doesn't currently own".
+#
+# setup.sh is sourced, not executed, so its own `case "${1:-}"` at the bottom
+# doesn't run cmd_setup interactively: $0 is set to the real setup.sh path (so
+# its internal `dirname "$0"` resolves correctly for the one-time `source
+# "$DOTFILES_DIR/lib/integrations.sh"` at file scope), and "help" is passed as
+# the source argument so the case statement hits the harmless help branch
+# instead of falling to its `*)` default. DOTFILES_DIR/CLAUDE_DIR are then
+# repointed at throwaway fixture dirs before calling the function under test.
+SKILLS_REPO=$(mktemp -d)
+SKILLS_HOME=$(mktemp -d)
+add_cleanup_dir "$SKILLS_REPO"
+add_cleanup_dir "$SKILLS_HOME"
+mkdir -p "$SKILLS_REPO/skills/keep-me" "$SKILLS_HOME/.claude/skills/keep-me" \
+  "$SKILLS_HOME/.claude/skills/gone-skill" "$SKILLS_HOME/.claude/skills/untracked-skill"
+echo "old copy" > "$SKILLS_REPO/skills/keep-me/SKILL.md"
+echo "stale" > "$SKILLS_HOME/.claude/skills/gone-skill/SKILL.md"
+echo "not ours" > "$SKILLS_HOME/.claude/skills/untracked-skill/SKILL.md"
+printf 'keep-me\ngone-skill\n' > "$SKILLS_HOME/.claude/skills/.installed-by-setup"
+
+bash -c '
+  fake_repo="$1"
+  fake_claude="$2"
+  source "$0" help >/dev/null 2>&1
+  DOTFILES_DIR="$fake_repo"
+  CLAUDE_DIR="$fake_claude"
+  install_skills
+' "$REPO_DIR/setup.sh" "$SKILLS_REPO" "$SKILLS_HOME/.claude" >/dev/null 2>&1
+
+if [ ! -d "$SKILLS_HOME/.claude/skills/gone-skill" ]; then
+  report pass "install_skills prunes a manifest-listed skill deleted from the repo"
+else
+  report fail "install_skills prunes a manifest-listed skill deleted from the repo" "gone-skill still present"
+fi
+
+if [ -d "$SKILLS_HOME/.claude/skills/untracked-skill" ]; then
+  report pass "install_skills leaves a never-manifested skill untouched"
+else
+  report fail "install_skills leaves a never-manifested skill untouched" "untracked-skill was removed"
+fi
+
+if [ -d "$SKILLS_HOME/.claude/skills/keep-me" ]; then
+  report pass "install_skills still installs a skill present in the repo"
+else
+  report fail "install_skills still installs a skill present in the repo" "keep-me missing"
+fi
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
