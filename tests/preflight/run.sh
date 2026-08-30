@@ -695,6 +695,52 @@ else
   report fail "--json --smoke stdout still parses as JSON when a smoke test fails" "$out"
 fi
 
+# --- setup.sh: link_repo_scripts skips dotted-stem scripts ------------------
+# setup.sh links scripts/*.sh into ~/.claude/scripts/ at two call sites
+# (cmd_setup, cmd_update). Both used to be an inline four-line loop with no
+# filter, so a repo-side test helper like foo.test.sh got symlinked and would
+# deploy fleet-wide right alongside real scripts. link_repo_scripts()
+# centralizes both call sites behind the same dotted-stem filter
+# link_claude_hooks already applies to hooks/*.sh: a real script is
+# <name>.sh, anything with a dotted stem (foo.test.sh) is a repo-side helper.
+#
+# setup.sh is sourced, not executed, so its own `case "${1:-}"` at the bottom
+# doesn't run cmd_setup interactively: $0 is set to the real setup.sh path (so
+# its internal `dirname "$0"` resolves correctly for the one-time `source
+# "$DOTFILES_DIR/lib/integrations.sh"` at file scope), and "help" is passed as
+# the source argument so the case statement hits the harmless help branch
+# instead of falling to its `*)` default. DOTFILES_DIR/CLAUDE_DIR are then
+# repointed at throwaway fixture dirs before calling the function under test.
+SCRIPTS_REPO=$(mktemp -d)
+SCRIPTS_HOME=$(mktemp -d)
+add_cleanup_dir "$SCRIPTS_REPO"
+add_cleanup_dir "$SCRIPTS_HOME"
+mkdir -p "$SCRIPTS_REPO/scripts"
+printf '#!/bin/bash\necho normal\n' > "$SCRIPTS_REPO/scripts/normal-script.sh"
+printf '#!/bin/bash\necho test-helper\n' > "$SCRIPTS_REPO/scripts/normal-script.test.sh"
+chmod +x "$SCRIPTS_REPO"/scripts/*.sh
+
+bash -c '
+  fake_repo="$1"
+  fake_claude="$2"
+  source "$0" help >/dev/null 2>&1
+  DOTFILES_DIR="$fake_repo"
+  CLAUDE_DIR="$fake_claude"
+  link_repo_scripts
+' "$REPO_DIR/setup.sh" "$SCRIPTS_REPO" "$SCRIPTS_HOME/.claude" >/dev/null 2>&1
+
+if [ -e "$SCRIPTS_HOME/.claude/scripts/normal-script.sh" ]; then
+  report pass "link_repo_scripts links a normal script"
+else
+  report fail "link_repo_scripts links a normal script"
+fi
+
+if [ ! -e "$SCRIPTS_HOME/.claude/scripts/normal-script.test.sh" ]; then
+  report pass "link_repo_scripts does not link a dotted-stem script"
+else
+  report fail "link_repo_scripts does not link a dotted-stem script" "found $SCRIPTS_HOME/.claude/scripts/normal-script.test.sh"
+fi
+
 # --- setup.sh: install_skills prunes only manifest-listed skills ------------
 # install_skills used to only ever add/refresh — a skill deleted from
 # skills/ kept its stale copy in ~/.claude/skills/ forever. It now writes a

@@ -913,6 +913,23 @@ link_claude_hooks() {
   done
 }
 
+# Repo scripts (scripts/*.sh -> ~/.claude/scripts/<name>). Symlinked so a repo
+# pull updates the live script. Same dotted-stem filter as link_claude_hooks:
+# a real script is <name>.sh; foo.test.sh is a repo-side test helper, not
+# something to deploy fleet-wide. Shared by cmd_setup and cmd_update — it used
+# to be a copy-pasted loop in both places, missing the filter in each.
+link_repo_scripts() {
+  [ -d "$DOTFILES_DIR/scripts" ] || return 0
+  mkdir -p "$CLAUDE_DIR/scripts"
+  local f
+  for f in "$DOTFILES_DIR"/scripts/*.sh; do
+    [ -f "$f" ] || continue
+    case "$(basename "$f")" in *.*.*) continue ;; esac
+    link_file "$f" "$CLAUDE_DIR/scripts/$(basename "$f")"
+    chmod +x "$CLAUDE_DIR/scripts/$(basename "$f")"
+  done
+}
+
 # Codex custom prompts (codex/prompts/*.md -> ~/.codex/prompts/<name>.md,
 # typed as /<name> in the Codex TUI). Symlinked, not copied, so a repo pull
 # updates the live prompts — the Claude-side equivalents live in skills/.
@@ -1090,11 +1107,7 @@ cmd_setup() {
   chmod +x "$CLAUDE_DIR/statusline.sh"
 
   # Link scripts
-  for script in "$DOTFILES_DIR"/scripts/*.sh; do
-    [ -f "$script" ] || continue
-    link_file "$script" "$CLAUDE_DIR/scripts/$(basename "$script")"
-    chmod +x "$CLAUDE_DIR/scripts/$(basename "$script")"
-  done
+  link_repo_scripts
 
   # ── Create .env if missing ──
   if [ ! -f "$CLAUDE_DIR/.env" ]; then
@@ -1546,11 +1559,7 @@ cmd_update() {
   link_file "$DOTFILES_DIR/statusline.sh" "$CLAUDE_DIR/statusline.sh"
   chmod +x "$CLAUDE_DIR/statusline.sh"
 
-  for script in "$DOTFILES_DIR"/scripts/*.sh; do
-    [ -f "$script" ] || continue
-    link_file "$script" "$CLAUDE_DIR/scripts/$(basename "$script")"
-    chmod +x "$CLAUDE_DIR/scripts/$(basename "$script")"
-  done
+  link_repo_scripts
 
   # Re-apply the saved Supabase fork (cloud/internal). Preserves the stored
   # connection string, so this stays non-interactive on update.
