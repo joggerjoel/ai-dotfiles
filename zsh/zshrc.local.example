@@ -1,0 +1,22 @@
+# ~/.zshrc.local — sourced last by the generated ~/.zshrc (see
+# zsh/modules/local.zsh). Personal, machine-specific config that has no
+# place in this public repo: absolute paths under your home directory,
+# secrets, one-off toggles. Copy this file to ~/.zshrc.local and edit;
+# ~/.zshrc.local is never tracked by git and setup.sh never touches it.
+
+# --- Personal PATH entries for tools not covered by a zsh/modules/ file ---
+# export PATH="$HOME/.codeium/windsurf/bin:$PATH"
+# export PATH="$HOME/.opencode/bin:$PATH"
+# export PATH="$HOME/.kimi-code/bin:$PATH"
+# [[ -s "$HOME/.openclaw/completions/openclaw.zsh" ]] && source "$HOME/.openclaw/completions/openclaw.zsh"
+
+# --- Codex's github-mcp-server wants a bearer token via GITHUB_MCP_PAT.
+# Reuse the gh CLI's token instead of storing a second secret on disk.
+# if [[ -z "$GITHUB_MCP_PAT" ]] && command -v gh >/dev/null 2>&1; then
+#   export GITHUB_MCP_PAT="$(gh auth token 2>/dev/null)"
+# fi
+
+# --- firstmate crewmates run `claude` inside herdr panes and inherit this
+# shell's env. The autoresearch plugin's scout-block hook can block
+# crewmate reads mid-task; disable it here if you hit that.
+# export AR_DISABLE_SCOUT_BLOCK=1

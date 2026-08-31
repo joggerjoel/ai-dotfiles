@@ -16,6 +16,9 @@ profiles/mcp/*.json
 # Machine-specific overrides (personal config)
 .local/
 
+# Scratch report from the zsh module registry build — not a repo doc
+.zsh-modules-report.md
+
 # Local tool state (generated per-machine, not versioned)
 .serena/
 
