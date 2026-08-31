@@ -124,6 +124,61 @@ already fallen off that edge when this was written.
 That is what turns distribution from a convenience into the only sustainable
 answer.
 
+### What an expired refresh token looks like on disk
+
+When the refresh token lapses, the next `claude` start does not leave the file
+alone and it does not delete it. It **blanks the block in place**, keeping the
+metadata:
+
+    "claudeAiOauth": {
+      "accessToken": "",            <- emptied
+      "refreshToken": "",           <- emptied
+      "expiresAt": 0,               <- zeroed
+      "scopes": [...],              <- preserved
+      "subscriptionType": "max",    <- preserved
+      "rateLimitTier": "...",       <- preserved
+      "refreshTokenExpiresAt": 1786482121670   <- preserved, and in the PAST
+    }
+
+Preserved metadata beside an empty token reads like a half-finished write, which
+is why this gets mistaken for a bad deploy. It is not. Confirm with
+`refreshTokenExpiresAt`: if it is in the past, the credential expired on its own
+and the timestamp names the hour. The host says so directly, too —
+`claude -p` with the env var unset answers `Failed to authenticate: OAuth
+session expired and could not be refreshed`.
+
+The blanking happens on the first `claude` run **after** expiry, not at the
+moment of expiry, so the file mtime can trail the real event by hours. On
+aorus8: expired 2026-08-11 17:02, blanked 2026-08-12 00:48.
+
+Note the shape differs from aorus4's, where the whole `claudeAiOauth` key is
+absent and only `mcpOAuth` remains. Both mean "no usable login"; only the
+blanked form carries a date you can reason about.
+
+#### Do not blame the token push
+
+On 2026-08-12 exactly the three hosts carrying `CLAUDE_CODE_OAUTH_TOKEN`
+(aorus4, aorus6, aorus8) had broken stored credentials and the three without it
+(aorus, aorus5, aorus7) were intact. A perfect correlation, and backwards: the
+token had been pushed **to the hosts `auth-status` already reported as broken**,
+so the two facts could not fail to coincide. aorus6 blanked on 2026-07-24,
+eighteen days before the token was minted.
+
+Setting the env var does not write to `.credentials.json`. Verified by
+reproduction rather than by reading: dummy credentials in a throwaway `HOME`,
+the real token exported, `claude -p` run — the dummy came back byte-identical.
+
+Once a host is on the fleet token this blanking is expected and harmless.
+`CLAUDE_CODE_OAUTH_TOKEN` is consulted **instead of** the stored block, not as a
+fallback to it — verified on aorus8, which answers `ok` normally and returns
+`401 OAuth access token is invalid` when a bogus value is exported. So claude
+keeps working and the blanked block is dead state on disk. It is a symptom only
+on a host with no env var to fall back on.
+
+Expect it on schedule rather than as an incident: on 2026-08-12 the three hosts
+that had just been given the token were still carrying live stored credentials
+due to lapse 2026-08-23 (aorus7), 2026-08-28 (aorus5) and 2026-09-08 (aorus).
+
 ### The probe reports the refresh token, not the file
 
 `probe_claude` used to be `[ -f ~/.claude/.credentials.json ]`. That file is a
@@ -133,15 +188,47 @@ all six hosts authed while aorus4 had no `claudeAiOauth` block at all and
 aorus6's had lapsed a fortnight earlier. A status table that reports the
 opposite of the truth is worse than no status table.
 
-It now sends a classifier to the host and reads back one word. The classifier
+It now sends a classifier to the host and reads back a verdict. The classifier
 returns `missing` unless a `claudeAiOauth` block carries a refresh token whose
-`refreshTokenExpiresAt` is still ahead, and `expiring:<hours>` inside the warning
-window (`HERDR_AUTH_WARN_HOURS`, default 72). **Credentials never cross the ssh
-channel** — only the verdict does.
+`refreshTokenExpiresAt` is still ahead, `expiring:<hours>` inside the warning
+window (`HERDR_AUTH_WARN_HOURS`, default 72), and `authed:<hours>` outside it.
+**Credentials never cross the ssh channel** — only the verdict does.
 
 It is stdin-driven, so the logic is tested against real file shapes with no ssh
 at all, including the two the fleet actually produced: an mcpOAuth-only file, and
 a block whose refresh token is gone.
+
+### The table reports both credentials, not just the winning one
+
+`CLAUDE_CODE_OAUTH_TOKEN` decides who authenticates, so the probe checks for it
+— but it does **not** skip reading the file. An earlier version did, returning a
+bare `token`, on the reasoning that the stored credential no longer governs.
+That was right about precedence and wrong about the table: once all six hosts
+carried the token every row read `token`, and the status output could no longer
+distinguish a host with a month of stored credential left from one that had
+already blanked. A column with one value in it is not a status column.
+
+The probe now returns `token/<verdict>` when the env var is set and `<verdict>`
+when it is not, and `status` renders the countdown as a suffix:
+
+    aorus      authed     authed     token/26d      fleet token; 26d of stored credential left
+    aorus4     authed     authed     token/--       fleet token; nothing underneath
+    aorus7     authed     authed     token/11d
+    (a host not on the fleet token)
+    aorus9     authed     authed     authed/26d     its own login, 26d left
+    aorus9     authed     authed     exp/41h        its own login, inside the warning window
+
+Days above 48h, hours below — `0d` on the last day before a credential dies is
+exactly when the number has to be readable.
+
+Two properties the tests pin, because both are easy to get backwards:
+
+- `token/--` still tallies as **authed**. The host works; only the credential
+  underneath is gone. Counting it missing would report a healthy fleet as broken.
+- a `token/` host is **never** booked into the `expiring within Nh` line. The
+  fleet token authenticates it, so a lapsing stored credential asks nothing of
+  anyone — and the login it would send you to perform cannot be driven remotely
+  anyway. Only a host on its own credential earns a place in that list.
 
 ## claude — mint once, distribute
 
