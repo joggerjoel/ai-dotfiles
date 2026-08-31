@@ -58,6 +58,9 @@ mutate "identity probe resolved by absolute path" \
 mutate "generated plists carry /usr/sbin and /sbin" \
   "herdr-node.sh" 's|:/usr/bin:/bin:/usr/sbin:/sbin|:/usr/bin:/bin|g'
 
+mutate "an unknown identity refuses every tab" \
+  "herdr-tabwatch.py" '/if locals_ is None:/{n;s|return .*|return None|;}'
+
 mutate "an unresolvable alias is refused, not dialled" \
   "herdr-tabwatch.py" '/target is None:/{n;s|return .*|return None|;}'
 

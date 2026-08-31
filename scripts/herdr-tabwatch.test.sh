@@ -251,6 +251,17 @@ print(" ".join(sorted(m.local_names())))' "$W")
   fi
 fi
 
+# refusal_to_dial takes the identity set as an argument, so the cases that used
+# to need a fixture binary and an exported override are a function call.
+
+pure=$("$PY3" -c 'import importlib.util, sys
+spec = importlib.util.spec_from_file_location("w", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+sys.argv = [sys.argv[0]]
+spec.loader.exec_module(m)
+print("none" if m.refusal_to_dial("anything", None) else "dialled")' "$W")
+eq "nothing is dialled while this machine has no known identity" "none" "$pure"
+
 # --- refusing to guess -------------------------------------------------------
 # A tab with several panes is not the fresh tab this assumed. Typing into an
 # arbitrary one would land a command in the middle of someone's work.

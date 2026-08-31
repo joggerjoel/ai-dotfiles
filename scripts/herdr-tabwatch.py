@@ -90,7 +90,13 @@ def ssh_hosts():
 
 
 def local_names():
-    """Names that mean *this* machine, which must never be ssh'd into.
+    """Names that mean *this* machine, or None when we could not find out.
+
+    None rather than a short set, because a short set is indistinguishable from
+    a correct one at the call site and every caller then treats "I could not
+    tell" as "not us". That is the whole of the original incident. The probe
+    could not run, the set came back one name shorter, nothing raised, and the
+    node dialled itself.
 
     Lowercased and reduced to short forms, because none of the sources agree on
     case or domain: `hostname` says JoggerJoels-Mac-Studio.local, ssh config
@@ -113,10 +119,13 @@ def local_names():
         out = subprocess.run([SCUTIL, "--get", "LocalHostName"],
                              capture_output=True, text=True,
                              timeout=5).stdout.strip()
-        if out:
-            names.add(out)
-    except (OSError, subprocess.SubprocessError):
-        pass
+    except (OSError, subprocess.SubprocessError) as e:
+        log("identity probe failed (%s: %s)" % (SCUTIL, e))
+        return None
+    if not out:
+        log("identity probe returned nothing (%s)" % SCUTIL)
+        return None
+    names.add(out)
     return {n.split(".")[0].lower() for n in names if n}
 
 
@@ -136,7 +145,7 @@ def resolved_host(alias):
 def refusal_to_dial(label, locals_):
     """Why `label` must not be ssh'd into, or None when it is safe to dial.
 
-    Three answers, not two. The boolean this replaced folded "cannot tell" in
+    Four answers, not two. The identity set itself may be missing. The boolean this replaced folded "cannot tell" in
     with "safe to dial", so every way of failing to identify a machine ended in
     typing. That is the same shape as the bug above: a probe that cannot run
     weakens the guard instead of stopping it. `resolved_host` returns None on a
@@ -153,6 +162,8 @@ def refusal_to_dial(label, locals_):
     stays first for the ordinary case where a workspace is named after the
     hostname outright.
     """
+    if locals_ is None:
+        return "identity of this machine is unknown, so not dialling '%s'" % label
     if label.split(".")[0].lower() in locals_:
         return "workspace '%s' is this machine" % label
     target = resolved_host(label)
@@ -303,7 +314,8 @@ def watch():
         raise OSError("socket closed before the subscription was acknowledged")
     log("subscribed%s (%d ssh hosts, %d pre-existing tabs ignored, self=%s)"
         % (" [DRY RUN — nothing will be typed]" if DRY_RUN else "",
-           len(hosts), len(preexisting), ",".join(locals_)))
+           len(hosts), len(preexisting),
+           ",".join(sorted(locals_)) if locals_ else "UNKNOWN, refusing every tab"))
 
     for line in f:
         try:
