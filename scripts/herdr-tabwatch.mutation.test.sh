@@ -22,6 +22,15 @@ trap 'rm -rf "$TMP"' EXIT INT TERM
 ok() { printf '  PASS  %s\n' "$1"; pass=$((pass + 1)); }
 ko() { printf '  FAIL  %s%s\n' "$1" "${2:+ ($2)}"; fail=$((fail + 1)); }
 
+# Two entries only bite where scutil exists. Off macOS the probe is absent both
+# before and after the revert, so the suite cannot tell the difference and a
+# failure here would report a platform, not a regression.
+darwin_only() {
+  [ "$(uname)" = Darwin ] && return 0
+  printf '  SKIP  %s (needs macOS)\n' "$1"
+  return 1
+}
+
 # <label> <file> <sed program>
 mutate() {
   local label="$1" file="$2" prog="$3" dir out
@@ -52,12 +61,14 @@ esac
 
 printf 'Reverted fixes the suite must catch\n'
 
+darwin_only "identity probe resolved by absolute path" &&
 mutate "identity probe resolved by absolute path" \
   "herdr-tabwatch.py" 's|"/usr/sbin/scutil"|"scutil"|'
 
 mutate "generated plists carry /usr/sbin and /sbin" \
   "herdr-node.sh" 's|:/usr/bin:/bin:/usr/sbin:/sbin|:/usr/bin:/bin|g'
 
+darwin_only "an unknown identity refuses every tab" &&
 mutate "an unknown identity refuses every tab" \
   "herdr-tabwatch.py" '/if locals_ is None:/{n;s|return .*|return None|;}'
 

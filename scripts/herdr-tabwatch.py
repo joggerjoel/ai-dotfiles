@@ -38,6 +38,12 @@ SSH_SETTLE_MS = 20000
 # fewer, and an alias pointing at that name stops looking like ourselves.
 SCUTIL = "/usr/sbin/scutil"
 
+# LocalHostName is a macOS concept and scutil ships only there. Elsewhere
+# gethostname(3) is the whole of this machine's identity, so identity is
+# complete without asking, and demanding an answer would refuse every tab on a
+# Linux node rather than protect it.
+IS_DARWIN = sys.platform == "darwin"
+
 # Remembering handled tabs prevents a reconnect from re-typing into panes that
 # were already connected. Bounded because this process is meant to run for
 # weeks.
@@ -106,6 +112,8 @@ def local_names():
     full = socket.gethostname()
     for n in (full, full.split(".")[0]):
         names.add(n)
+    if not IS_DARWIN:
+        return {n.split(".")[0].lower() for n in names if n}
     # `scutil` is the only source that knows LocalHostName, and LocalHostName is
     # what this fleet's ssh aliases resolve to, so it is the probe that decides
     # whether an alias is us. `hostname -s` is not consulted: it prints the
