@@ -124,6 +124,7 @@ Host *-jump
 Host $SELF
 Host selfalias
 Host scutilalias
+Host unresolvable
 EOF
 
 # The macstudio shape, made deterministic. On this fleet the box answers to
@@ -157,6 +158,7 @@ if [ "\$1" = "-G" ]; then
   case "\$2" in
     selfalias|$SELF) echo "hostname $SELF" ;;
     scutilalias)     echo "hostname $FAKE_LHN" ;;
+    unresolvable)    exit 0 ;;
     *)               echo "hostname \$2.example.net" ;;
   esac
   exit 0
@@ -245,6 +247,17 @@ eq "an alias only scutil can recognise is not dialled, on the daemon's PATH" \
 grep -q "is this machine" "$TMP/out" &&
   ok "and names it as ourselves rather than a mystery skip" ||
   ko "and names it as ourselves rather than a mystery skip" \
+     "out: $(cat "$TMP/out")"
+
+# An allowlisted alias that ssh cannot resolve is the third answer the old
+# boolean had nowhere to put. A missing ssh, a timeout, or a config naming no
+# hostname all reach here, and all of them used to mean "elsewhere, go ahead".
+
+daemon unresolvable 1 && run_watch
+eq "an allowlisted alias ssh cannot resolve is not dialled" 0 "$(sent)"
+grep -q "cannot resolve" "$TMP/out" &&
+  ok "and says it refused rather than claiming the box is ours" ||
+  ko "and says it refused rather than claiming the box is ours" \
      "out: $(cat "$TMP/out")"
 
 # --- refusing to guess -------------------------------------------------------

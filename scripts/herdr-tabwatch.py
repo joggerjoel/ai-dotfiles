@@ -130,8 +130,15 @@ def resolved_host(alias):
     return None
 
 
-def is_this_machine(label, locals_):
-    """Would ssh'ing to `label` land us back where we started?
+def refusal_to_dial(label, locals_):
+    """Why `label` must not be ssh'd into, or None when it is safe to dial.
+
+    Three answers, not two. The boolean this replaced folded "cannot tell" in
+    with "safe to dial", so every way of failing to identify a machine ended in
+    typing. That is the same shape as the bug above: a probe that cannot run
+    weakens the guard instead of stopping it. `resolved_host` returns None on a
+    missing ssh, a timeout, or a config that names no hostname, and each of
+    those used to mean "elsewhere, go ahead".
 
     Comparing the label to the hostname is not enough, and assuming otherwise
     is how the node ends up ssh'ing into itself. The workspace is called
@@ -144,9 +151,13 @@ def is_this_machine(label, locals_):
     hostname outright.
     """
     if label.split(".")[0].lower() in locals_:
-        return True
+        return "workspace '%s' is this machine" % label
     target = resolved_host(label)
-    return bool(target and target.split(".")[0].lower() in locals_)
+    if target is None:
+        return "cannot resolve '%s', so not assuming it is elsewhere" % label
+    if target.split(".")[0].lower() in locals_:
+        return "workspace '%s' is this machine, via %s" % (label, target)
+    return None
 
 
 def workspace_labels():
@@ -251,8 +262,9 @@ def handle_tab(tab, hosts, locals_, preexisting):
         return "%s: '%s' is not an ssh host" % (tab_id, label)
     # After the allowlist, not before: resolving costs an ssh -G, and a label
     # that is not a host we may dial never needs resolving at all.
-    if is_this_machine(label, locals_):
-        return "%s: workspace '%s' is this machine" % (tab_id, label)
+    refusal = refusal_to_dial(label, locals_)
+    if refusal:
+        return "%s: %s" % (tab_id, refusal)
 
     pane_id = pane_of_tab(tab_id)
     if not pane_id:
