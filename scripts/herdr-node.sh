@@ -185,7 +185,7 @@ cmd_service_install() {
          file-access guard that blocks crewmate reads mid-task; disable it for
          panes here so the firstmate checkout stays pristine (no fm-spawn.sh edit). -->
     <key>AR_DISABLE_SCOUT_BLOCK</key><string>1</string>
-    <key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <!-- Restart only on ABNORMAL exit. A plain KeepAlive=true would respawn the
@@ -234,7 +234,7 @@ cmd_bridge_service_install() {
   <dict>
     <key>HERDR_SESSION</key><string>${SESSION}</string>
     <key>HERDR_BRIDGE_PORT</key><string>${BRIDGE_PORT}</string>
-    <key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -285,7 +285,7 @@ cmd_tabwatch_service_install() {
   </array>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
