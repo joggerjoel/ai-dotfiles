@@ -1644,6 +1644,14 @@ cmd_update() {
   # Re-mirror the agent-agnostic ones into Codex
   install_codex_skills
 
+  # skillspector's skill is fetched from upstream, not vendored, so install_skills
+  # above never sees it — and ensure_dependencies (which would) doesn't run on an
+  # update. Without this the fleet gets the scanner binary from agents-update.sh
+  # but no guide telling agents to run it, which is how it shipped the first time.
+  # Guarded on the CLI: no scanner on this host means the skill would only
+  # document a command that isn't there.
+  command -v skillspector &>/dev/null && fetch_skillspector_skill
+
   # Re-install repo-owned slash commands
   install_commands
 
