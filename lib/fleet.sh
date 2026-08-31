@@ -8,10 +8,7 @@ FLEET_GROUP="aorus_ai"
 # Consulted only where inventory.local.yml is absent. That file is gitignored
 # because this repo is public, so a worker checkout has no fleet list of its
 # own and still needs one to answer --help or run a single named host.
-#
-# Transcribed verbatim from herdr-auth.sh and claude-token.sh, which carry an
-# identical copy each. The next commit asks the inventory whether it is right.
-FLEET_HOSTS_FALLBACK="aorus aorus4 aorus5 aorus6 aorus7 aorus8"
+FLEET_HOSTS_FALLBACK="aorus aorus2 aorus4 aorus5 aorus6 aorus7 aorus8"
 
 # The fleet, space separated, read from the inventory group when that file is
 # readable. The inventory is what ansible actually deploys against, so a second
