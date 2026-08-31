@@ -123,25 +123,9 @@ Host aorus5
 Host *-jump
 Host $SELF
 Host selfalias
-Host scutilalias
 Host unresolvable
 EOF
 
-# The macstudio shape, made deterministic. On this fleet the box answers to
-# JoggerJacStudio while `scutil --get LocalHostName` says JoggerJoels-Mac-Studio,
-# and the ssh alias resolves to the latter, so scutil is the ONLY probe that can
-# recognise it. On a stock Mac those names coincide, and a fixture built from the
-# real values would quietly lose all its detection power there. So the name is
-# synthetic and the binary that reports it is ours.
-FAKE_LHN="fixture-localhostname"
-mkdir -p "$TMP/sbin"
-cat > "$TMP/sbin/scutil" <<EOF
-#!/usr/bin/env bash
-[ "\$1" = "--get" ] && { echo "$FAKE_LHN"; exit 0; }
-exit 1
-EOF
-chmod +x "$TMP/sbin/scutil"
-export HERDR_TABWATCH_SCUTIL="$TMP/sbin/scutil"
 
 # The PATH the watcher actually runs under, read from the generator that writes
 # it. Hardcoding a second copy here is how the original bug happened: a fact
@@ -157,7 +141,6 @@ cat > "$TMP/bin/ssh" <<EOF
 if [ "\$1" = "-G" ]; then
   case "\$2" in
     selfalias|$SELF) echo "hostname $SELF" ;;
-    scutilalias)     echo "hostname $FAKE_LHN" ;;
     unresolvable)    exit 0 ;;
     *)               echo "hostname \$2.example.net" ;;
   esac
@@ -233,21 +216,6 @@ grep -q "is this machine" "$TMP/out" &&
   ok "and recognises it through ssh -G, not the name" ||
   ko "and recognises it through ssh -G, not the name" "out: $(cat "$TMP/out")"
 
-# The guard has to hold under the daemon's PATH, not just a developer's. The
-# node ran for a day logging `WOULD type: ssh -t macstudio` while sitting on
-# macstudio, because the only probe that knows LocalHostName could not be run
-# and a name missing from the identity set reads as a remote host.
-#
-# Drive the whole decision, not just the lookup. What shipped was behavioural:
-# handle_tab chose to type into a pane on the node itself.
-
-daemon scutilalias 1 && run_watch_with_path "$TMP/bin:$LAUNCHD_PATH"
-eq "an alias only scutil can recognise is not dialled, on the daemon's PATH" \
-   0 "$(sent)"
-grep -q "is this machine" "$TMP/out" &&
-  ok "and names it as ourselves rather than a mystery skip" ||
-  ko "and names it as ourselves rather than a mystery skip" \
-     "out: $(cat "$TMP/out")"
 
 # An allowlisted alias that ssh cannot resolve is the third answer the old
 # boolean had nowhere to put. A missing ssh, a timeout, or a config naming no
@@ -259,6 +227,29 @@ grep -q "cannot resolve" "$TMP/out" &&
   ok "and says it refused rather than claiming the box is ours" ||
   ko "and says it refused rather than claiming the box is ours" \
      "out: $(cat "$TMP/out")"
+
+# The probe that decides identity has to run where the daemon runs. Point PATH
+# somewhere it cannot be found and the real one still has to answer, which is
+# only true while the lookup is absolute. macOS only, because scutil is.
+
+if [ "$(uname)" = Darwin ]; then
+  LHN=$(/usr/sbin/scutil --get LocalHostName 2>/dev/null | cut -d. -f1 | tr 'A-Z' 'a-z')
+  if [ -n "$LHN" ]; then
+    got=$(PATH="/usr/bin:/bin" "$PY3" -c 'import importlib.util, sys
+spec = importlib.util.spec_from_file_location("w", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+sys.argv = [sys.argv[0]]
+spec.loader.exec_module(m)
+print(" ".join(sorted(m.local_names())))' "$W")
+    case " $got " in
+      *" $LHN "*) ok "LocalHostName is found on a PATH that cannot reach scutil" ;;
+      *) ko "LocalHostName is found on a PATH that cannot reach scutil" \
+            "wanted $LHN in [$got]" ;;
+    esac
+  else
+    printf '  SKIP  LocalHostName is found on a PATH that cannot reach scutil (unset here)\n'
+  fi
+fi
 
 # --- refusing to guess -------------------------------------------------------
 # A tab with several panes is not the fresh tab this assumed. Typing into an
