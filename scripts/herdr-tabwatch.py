@@ -148,9 +148,11 @@ def refusal_to_dial(label, locals_):
     Four answers, not two. The identity set itself may be missing. The boolean this replaced folded "cannot tell" in
     with "safe to dial", so every way of failing to identify a machine ended in
     typing. That is the same shape as the bug above: a probe that cannot run
-    weakens the guard instead of stopping it. `resolved_host` returns None on a
-    missing ssh, a timeout, or a config that names no hostname, and each of
-    those used to mean "elsewhere, go ahead".
+    weakens the guard instead of stopping it. `resolved_host` returns None when ssh cannot be
+    run or does not answer, and that used to mean "elsewhere, go ahead". Note
+    it is not the case for a name that does not resolve: `ssh -G` expands
+    config without consulting DNS, so it prints `hostname <alias>` for a host
+    that will never answer, and that reaches connect_pane by design.
 
     Comparing the label to the hostname is not enough, and assuming otherwise
     is how the node ends up ssh'ing into itself. The workspace is called

@@ -18,8 +18,12 @@ set -uo pipefail
 DOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DOT" || exit 1
 
-# preflight names itself; every other suite is a *.test.sh and is found.
-SUITES="tests/preflight/run.sh $(ls hooks/*.test.sh scripts/*.test.sh 2>/dev/null)"
+# preflight names itself; every other suite is a *.test.sh and is found. Left as
+# patterns for the loop below to expand, not captured through `ls`: an unmatched
+# pattern then survives as itself, misses the -f test, and is reported as a
+# missing suite. Captured output would collapse to the empty string and the
+# runner would exit 0 having run only preflight.
+SUITES="tests/preflight/run.sh hooks/*.test.sh scripts/*.test.sh"
 
 if [ -t 1 ]; then BOLD=$'\033[1m'; RED=$'\033[31m'; GREEN=$'\033[32m'; DIM=$'\033[2m'; RESET=$'\033[0m'
 else BOLD=""; RED=""; GREEN=""; DIM=""; RESET=""; fi

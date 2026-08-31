@@ -210,12 +210,13 @@ grep -q "is this machine" "$TMP/out" &&
   ko "and recognises it through ssh -G, not the name" "out: $(cat "$TMP/out")"
 
 
-# An allowlisted alias that ssh cannot resolve is the third answer the old
-# boolean had nowhere to put. A missing ssh, a timeout, or a config naming no
-# hostname all reach here, and all of them used to mean "elsewhere, go ahead".
+# An allowlisted alias ssh cannot answer for is the third case the old boolean
+# had nowhere to put. The stub prints nothing, standing in for ssh missing or
+# not answering. A name that merely fails to resolve is not this case: `ssh -G`
+# expands config without DNS and prints the alias back.
 
 daemon unresolvable 1 && run_watch
-eq "an allowlisted alias ssh cannot resolve is not dialled" 0 "$(sent)"
+eq "an allowlisted alias ssh cannot answer for is not dialled" 0 "$(sent)"
 grep -q "cannot resolve" "$TMP/out" &&
   ok "and says it refused rather than claiming the box is ours" ||
   ko "and says it refused rather than claiming the box is ours" \
