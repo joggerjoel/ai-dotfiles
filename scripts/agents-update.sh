@@ -5,7 +5,8 @@ set -uo pipefail
 # agents-update.sh — upgrade the sibling agent CLIs, when installed:
 #   codex (OpenAI), cursor-agent (Cursor), opencode, gemini (Google), pi (Earendil),
 #   grok (xAI), kimi (Moonshot Kimi Code),
-#   cortex (Snowflake Cortex Code), headroom (context-optimization proxy).
+#   cortex (Snowflake Cortex Code), headroom (context-optimization proxy),
+#   skillspector (NVIDIA agent-skill security scanner).
 # Also reports (but never updates) the 9router gateway — a Docker
 # service on the fleet, not a local CLI; see the block at the bottom.
 #
@@ -353,6 +354,30 @@ elif [ -x "$HOME/.local/bin/headroom" ]; then
   block_cli "headroom" "installed but neither pipx nor uv found — can't upgrade it"
 else
   block_cli "headroom" "skipped (pipx/uv not available)"
+fi
+
+# skillspector scans agent skills for prompt injection, exfiltration and
+# supply-chain risk before they get installed. Registered here, not just in
+# setup.sh's ensure_dependencies, because that only runs on a full setup:
+# ansible-ai/update.yml drives existing hosts through `setup.sh update` +
+# this script, so a CLI absent from here never converges on the fleet.
+#
+# uv-only (no pipx branch): it ships as a git install, and pipx would resolve a
+# different package. Registering it on a host that lacks it is safe — a missing
+# CLI is reported, not installed, unless AGENTS_AUTO_INSTALL=1, so the fleet
+# does not silently gain a scanner mid-update.
+#
+# No latest-version lookup: installed from a branch ref, so there is no
+# published version to diff against. That leaves it "latest unknown", which
+# upgrades every run — the documented behaviour for uncheckable CLIs.
+if [ -n "$UV" ]; then
+  register_cli "skillspector" "$HOME/.local/bin/skillspector" \
+    "\"$UV\" tool upgrade skillspector" \
+    "\"$UV\" tool install 'git+https://github.com/NVIDIA/skillspector.git'"
+elif [ -x "$HOME/.local/bin/skillspector" ]; then
+  block_cli "skillspector" "installed but uv not found — can't upgrade it"
+else
+  block_cli "skillspector" "skipped (uv not available)"
 fi
 
 # ── Wave 1: survey (read-only) ───────────────────────────────────

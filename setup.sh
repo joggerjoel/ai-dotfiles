@@ -463,6 +463,60 @@ fetch_cass_skill() {
   fi
 }
 
+# skillspector — NVIDIA's security scanner for agent skills. Scans a skill
+# bundle for prompt injection, data exfiltration, over-broad permissions and
+# supply-chain risk BEFORE it gets installed. Every host gets it: skills arrive
+# per-machine (a plugin install, a clone into ~/.claude/skills), so the gate has
+# to sit where the install happens.
+#
+# Python, so it rides on `uv tool` — ensure_uv runs earlier in
+# ensure_dependencies, and the guard below keeps this a no-op if that failed.
+# CLI only: the `[mcp]` extra pulls in FastMCP to serve `skillspector mcp`, and
+# nothing in this stack calls it. Add it here if that changes.
+#
+# The agent-facing SKILL.md is fetched at install time rather than vendored into
+# skills/, same as cass — but for a different reason. SkillSpector is Apache-2.0,
+# so committing it would be perfectly legal; it would just rot. Upstream revises
+# the skill in lockstep with the scanner, and a stale vendored copy would tell
+# agents to run checks the installed binary no longer has.
+ensure_skillspector() {
+  if command -v skillspector &>/dev/null; then
+    ok "skillspector present"
+  elif ! command -v uv &>/dev/null; then
+    warn "skillspector skipped — uv unavailable (non-fatal)"
+    return 0
+  else
+    warn "skillspector missing — installing via uv tool..."
+    if uv tool install "git+https://github.com/NVIDIA/skillspector.git" >/dev/null 2>&1; then
+      ok "skillspector installed (~/.local/bin)"
+    else
+      warn "skillspector install failed — uv tool install git+https://github.com/NVIDIA/skillspector.git (non-fatal)"
+      return 0
+    fi
+  fi
+  fetch_skillspector_skill
+}
+
+# Pull the agent-facing skill straight from upstream onto this host. The
+# directory is named for the skill's own frontmatter `name:` (skill-inspector),
+# NOT for the CLI — Claude Code warns when a skill directory and its declared
+# name disagree.
+fetch_skillspector_skill() {
+  local dest="$CLAUDE_DIR/skills/skill-inspector"
+  mkdir -p "$dest"
+  if curl -fsSL --max-time 20 \
+    "https://raw.githubusercontent.com/NVIDIA/SkillSpector/main/skills/skill-inspector/SKILL.md" \
+    -o "$dest/SKILL.md.tmp" 2>/dev/null && [ -s "$dest/SKILL.md.tmp" ]; then
+    mv "$dest/SKILL.md.tmp" "$dest/SKILL.md"
+    ok "skillspector skill fetched → ~/.claude/skills/skill-inspector/"
+  else
+    rm -f "$dest/SKILL.md.tmp"
+    [ -f "$dest/SKILL.md" ] \
+      && warn "skillspector skill fetch failed — keeping the existing copy" \
+      || warn "skillspector skill fetch failed — agents lose the usage guide (non-fatal)"
+  fi
+}
+
 ensure_just() {
   command -v just &>/dev/null && { ok "just present"; return 0; }
   if [ "$PKG_MANAGER" = "brew" ]; then
@@ -605,6 +659,7 @@ ensure_dependencies() {
   ensure_openspec # spec-driven change proposals (npm; needs node >= 20.19)
   ensure_beads   # agent issue tracking + dependency memory (npm, all hosts)
   ensure_cass    # search this host's coding-agent session history (brew or installer)
+  ensure_skillspector  # scan agent skills for malicious patterns before install (uv tool)
   ensure_herdr   # firstmate session backend (macOS/brew only — no-ops on Linux)
   ensure_herdr_renderers  # bat/delta/glow — herdr-file-viewer content panes
   ensure_just    # fleet command runner (cross-platform: brew or install.sh)

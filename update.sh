@@ -10,7 +10,8 @@ set -euo pipefail
 #   3. Upgrade Claude Code to latest (native `claude update`, or npm
 #      if that's how it was installed).
 #   4. Upgrade the sibling agent CLIs when present — codex,
-#      cursor-agent, cortex, opencode, gemini, pi, grok, headroom
+#      cursor-agent, cortex, opencode, gemini, pi, grok, headroom,
+#      skillspector
 #      (scripts/agents-update.sh, the same script ansible-ai/update.yml
 #      runs on the fleet; also reports 9router gateway status).
 #      Run from a terminal it prompts ([U]pgrade/[P]in/[s]kip) only for a
@@ -73,7 +74,7 @@ for arg in "$@"; do
     -h|--help)
       echo "Usage: ./update.sh [--all] [--dry-run] [--claude-only] [--no-prune]"
       echo "  Backs up config to backup/<timestamp>/ then upgrades Claude Code"
-      echo "  and the sibling agent CLIs (codex, cursor-agent, cortex, opencode, gemini, pi, grok, headroom)."
+      echo "  and the sibling agent CLIs (codex, cursor-agent, cortex, opencode, gemini, pi, grok, headroom, skillspector)."
       echo "  --all also runs ansible-ai/update.yml against the fleet servers afterward."
       exit 0 ;;
     *) warn "Unknown flag: $arg (ignored)" ;;
@@ -405,6 +406,44 @@ if [ "$RUN_AGENTS" = "yes" ] && cass --version &>/dev/null; then
     else
       rm -f "$HOME/.claude/skills/cass/SKILL.md.tmp"
       warn "cass skill fetch failed — keeping the existing copy (non-fatal)"
+    fi
+  fi
+fi
+
+# ── 3g. skillspector (agent-skill security scanner) ──────────────
+# Upgrades only what setup.sh already installed — a host without skillspector is
+# left alone rather than silently gaining a tool mid-update, same rule as cass.
+#
+# Installed from a git ref rather than a PyPI pin, so `uv tool upgrade` re-resolves
+# the branch head every run — there is no version to compare against beforehand,
+# which is why this upgrades unconditionally instead of checking first.
+#
+# The skill is re-fetched from upstream every run rather than versioned in the
+# repo — upstream revises it alongside the scanner, so a pinned copy would drift
+# out of step with the binary actually installed here. See ensure_skillspector.
+if [ "$RUN_AGENTS" = "yes" ] && command -v skillspector &>/dev/null; then
+  header "skillspector (skill scanner)"
+  ss_before="$(skillspector --version 2>/dev/null | head -1)"
+  if [ "$DRY_RUN" = "yes" ]; then
+    skip "Would upgrade skillspector (currently ${ss_before:-unknown})"
+  else
+    uv tool upgrade skillspector >/dev/null 2>&1 || true
+    ss_after="$(skillspector --version 2>/dev/null | head -1)"
+    [ "$ss_before" = "$ss_after" ] \
+      && ok "skillspector: already latest (${ss_after:-unknown})" \
+      || ok "skillspector: ${ss_before:-unknown} → ${ss_after:-unknown}"
+
+    # Refresh the agent-facing skill; keep the existing copy if upstream is down.
+    mkdir -p "$HOME/.claude/skills/skill-inspector"
+    if curl -fsSL --max-time 20 \
+      "https://raw.githubusercontent.com/NVIDIA/SkillSpector/main/skills/skill-inspector/SKILL.md" \
+      -o "$HOME/.claude/skills/skill-inspector/SKILL.md.tmp" 2>/dev/null \
+      && [ -s "$HOME/.claude/skills/skill-inspector/SKILL.md.tmp" ]; then
+      mv "$HOME/.claude/skills/skill-inspector/SKILL.md.tmp" "$HOME/.claude/skills/skill-inspector/SKILL.md"
+      ok "skillspector skill refreshed"
+    else
+      rm -f "$HOME/.claude/skills/skill-inspector/SKILL.md.tmp"
+      warn "skillspector skill fetch failed — keeping the existing copy (non-fatal)"
     fi
   fi
 fi

@@ -89,7 +89,7 @@
     # Runs AFTER the repo refresh so the freshly-pulled script is used.
     # scripts/agents-update.sh is the single source of truth for the CLI
     # list — ./update.sh runs the same script locally.
-    - name: Upgrade the sibling agent CLIs (codex, cursor, cortex, opencode, gemini, pi, grok, kimi, headroom; reports 9router)
+    - name: Upgrade the sibling agent CLIs (codex, cursor, cortex, opencode, gemini, pi, grok, kimi, headroom, skillspector; reports 9router)
       ansible.builtin.command: bash scripts/agents-update.sh
       args:
         chdir: "{{ dotfiles_dir }}"
