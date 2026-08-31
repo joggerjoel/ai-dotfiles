@@ -2,8 +2,11 @@
 # run-all-tests.sh — every test suite in this repo, one command.
 #
 # The single source of truth for "did I break anything": `just test-all` and CI
-# both call this, so the two cannot drift. Adding a suite here is the only step
-# needed to get it covered in both places.
+# both call this, so the two cannot drift. The suite list is globbed rather than
+# written down: it was a hand-kept transcription of exactly that glob, and
+# herdr-tabwatch.test.sh sat outside it from the day it was written, passing
+# locally and guarding nothing. A list someone has to remember to append is a
+# convention, and this repo has already proved the convention does not hold.
 #
 # Deliberately NOT `set -e`: one failing suite must not hide the others. Results
 # are collected and the exit status is set at the end.
@@ -15,17 +18,8 @@ set -uo pipefail
 DOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DOT" || exit 1
 
-SUITES="
-tests/preflight/run.sh
-hooks/cache-guard.test.sh
-hooks/injection-guard.test.sh
-scripts/claude-token.test.sh
-scripts/fleet.test.sh
-scripts/herdr-auth.test.sh
-scripts/herdr-paste.test.sh
-scripts/herdr-tmux.test.sh
-scripts/herdr-wire-space.test.sh
-"
+# preflight names itself; every other suite is a *.test.sh and is found.
+SUITES="tests/preflight/run.sh $(ls hooks/*.test.sh scripts/*.test.sh 2>/dev/null)"
 
 if [ -t 1 ]; then BOLD=$'\033[1m'; RED=$'\033[31m'; GREEN=$'\033[32m'; DIM=$'\033[2m'; RESET=$'\033[0m'
 else BOLD=""; RED=""; GREEN=""; DIM=""; RESET=""; fi
