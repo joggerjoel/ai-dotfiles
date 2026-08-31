@@ -2,6 +2,10 @@
 # Wire every tab of a herdr space to its program. The tab's label IS the program,
 # with one alias: the `cursor` tab runs `agent` (cursor-agent).
 #
+# A label may instead be an AGENT label, `@model[:subdir]` — `@claude`,
+# `@claude:reachpro`. Those run in a working directory: the explicit `:subdir`,
+# or the space's own topic (`aorus2:reachpro`), under ~/Developer.
+#
 # herdr's API (tab.create / workspace.create) accepts only cwd/env/label/focus —
 # there is no "command" field, so a new tab always spawns a plain login shell.
 # Execution is a separate step against the live pane, which is why this script
@@ -35,6 +39,46 @@ done
 case "$POLICY" in bare|fallback|reconnect) ;; *) echo "bad policy: $POLICY" >&2; exit 2 ;; esac
 
 # --- tab label -> program ---------------------------------------------------
+#
+# A label starting with `@` names an AGENT, and may carry a working directory
+# after a colon: `@claude:reachpro`. Without one it inherits the space's topic
+# (`aorus2:reachpro` -> reachpro), so a project is declared once — in the space
+# label — instead of in every tab. `@claude` in a space with no topic just uses
+# the base directory.
+#
+# The `@` exists to keep this grammar unambiguous. Labels without it are
+# untouched, so `tmux`, `htop`, `router-att` and tmux-session labels such as
+# `07-dice-broadcast` keep meaning exactly what they meant before.
+
+# Left unexpanded on purpose: the remote HOME is not this machine's, so the
+# path must expand on the far side, inside `bash -lc`.
+AGENT_BASE_DIR='$HOME/Developer'
+
+space_topic() {   # "aorus2:reachpro" -> "reachpro";  "aorus5" -> ""
+  case "$SPACE_LABEL" in
+    *:*) printf '%s' "${SPACE_LABEL#*:}" ;;
+    *)   printf '' ;;
+  esac
+}
+
+# Empty for any label that is not an agent label — the caller uses that to
+# decide whether to prepend a `cd` at all.
+dir_for_tab() {
+  # In a tmux space the label is a session name; `@` carries no meaning there.
+  [ -n "$ATTACH_TMUX" ] && { printf ''; return; }
+  case "$1" in
+    @*) ;;
+    *)  printf ''; return ;;
+  esac
+  local sub
+  case "$1" in
+    *:*) sub="${1#*:}" ;;      # explicit, overrides the space topic
+    *)   sub="$(space_topic)" ;;
+  esac
+  if [ -n "$sub" ]; then printf '%s/%s' "$AGENT_BASE_DIR" "$sub"
+  else                   printf '%s' "$AGENT_BASE_DIR"
+  fi
+}
 
 program_for_tab() {
   # In a tmux space the label IS a session name, so no alias applies — a
@@ -43,12 +87,16 @@ program_for_tab() {
     printf 'tmux attach -t %s' "$(sq "$1")"
     return
   fi
-  case "$1" in
+  local label="$1"
+  case "$label" in
+    @*) label="${label#@}"; label="${label%%:*}" ;;  # @claude:dir -> claude
+  esac
+  case "$label" in
     cursor) echo "agent" ;;   # `agent` and `cursor-agent` are the same binary
     tmux)   echo "tmux new-session -A -s herdr" ;;  # attach-or-create; bare
                                                     # `tmux` spawned a new
                                                     # session on every wiring
-    *)      echo "$1" ;;      # claude, codex, pi run under their own name
+    *)      echo "$label" ;;  # claude, codex, pi run under their own name
   esac
 }
 
@@ -65,6 +113,11 @@ sq() {  # single-quote a string for safe embedding in a shell command line
 
 command_for_tab() {
   local prog; prog="$(program_for_tab "$1")"
+
+  # Prepend the cd before the policy wrappers, so a `fallback` shell also lands
+  # in the project directory rather than in $HOME.
+  local dir; dir="$(dir_for_tab "$1")"
+  [ -n "$dir" ] && prog="cd $dir && $prog"
 
   if [ -z "$SSH_HOST" ]; then                      # local space
     case "$POLICY" in
