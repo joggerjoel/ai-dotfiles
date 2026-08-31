@@ -23,8 +23,10 @@ ROOT=$(cd "$HERE/.." && pwd)
 
 ENV_FILE="${HERDR_CLAUDE_ENV:-$HOME/.claude/.env}"
 PLAYBOOK="$ROOT/ansible-ai/deploy-claude-token.yml"
-REAL_INVENTORY="$ROOT/ansible-ai/inventory.local.yml"
-HOSTS_DEFAULT="aorus aorus4 aorus5 aorus6 aorus7 aorus8"
+REAL_INVENTORY="${AI_DOTFILES_INVENTORY:-$ROOT/ansible-ai/inventory.local.yml}"
+# shellcheck source=../lib/fleet.sh
+. "$ROOT/lib/fleet.sh"
+HOSTS_DEFAULT="$(fleet_hosts "$REAL_INVENTORY")"
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
 

@@ -22,7 +22,13 @@ set -uo pipefail
 # HERDR_AUTH_HOSTS would expand against files in the cwd instead of naming hosts.
 set -f
 
-HOSTS_DEFAULT="aorus aorus4 aorus5 aorus6 aorus7 aorus8"
+HERE=$(cd "$(dirname "$0")" && pwd)
+ROOT=$(cd "$HERE/.." && pwd)
+# shellcheck source=../lib/fleet.sh
+. "$ROOT/lib/fleet.sh"
+
+FLEET_INVENTORY="${AI_DOTFILES_INVENTORY:-$ROOT/ansible-ai/inventory.local.yml}"
+HOSTS_DEFAULT="$(fleet_hosts "$FLEET_INVENTORY")"
 HOSTS_STR="${HERDR_AUTH_HOSTS:-$HOSTS_DEFAULT}"
 
 SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=8"
