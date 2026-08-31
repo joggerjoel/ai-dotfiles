@@ -479,15 +479,22 @@ fetch_cass_skill() {
 # so committing it would be perfectly legal; it would just rot. Upstream revises
 # the skill in lockstep with the scanner, and a stale vendored copy would tell
 # agents to run checks the installed binary no longer has.
+# Both binaries are resolved with an explicit ~/.local/bin fallback, not just
+# `command -v`: provision-ai.yml runs this through ansible, whose non-login shell
+# leaves ~/.local/bin off PATH — the same reason agents-update.sh has resolve_tool.
 ensure_skillspector() {
-  if command -v skillspector &>/dev/null; then
+  local uv_bin
+  uv_bin="$(command -v uv 2>/dev/null || true)"
+  [ -n "$uv_bin" ] || { [ -x "$HOME/.local/bin/uv" ] && uv_bin="$HOME/.local/bin/uv"; }
+
+  if command -v skillspector &>/dev/null || [ -x "$HOME/.local/bin/skillspector" ]; then
     ok "skillspector present"
-  elif ! command -v uv &>/dev/null; then
+  elif [ -z "$uv_bin" ]; then
     warn "skillspector skipped — uv unavailable (non-fatal)"
     return 0
   else
     warn "skillspector missing — installing via uv tool..."
-    if uv tool install "git+https://github.com/NVIDIA/skillspector.git" >/dev/null 2>&1; then
+    if "$uv_bin" tool install "git+https://github.com/NVIDIA/skillspector.git" >/dev/null 2>&1; then
       ok "skillspector installed (~/.local/bin)"
     else
       warn "skillspector install failed — uv tool install git+https://github.com/NVIDIA/skillspector.git (non-fatal)"
@@ -1649,8 +1656,11 @@ cmd_update() {
   # update. Without this the fleet gets the scanner binary from agents-update.sh
   # but no guide telling agents to run it, which is how it shipped the first time.
   # Guarded on the CLI: no scanner on this host means the skill would only
-  # document a command that isn't there.
-  command -v skillspector &>/dev/null && fetch_skillspector_skill
+  # document a command that isn't there. The absolute-path arm is load-bearing —
+  # ansible runs this in a non-login shell where ~/.local/bin is off PATH, so
+  # `command -v` alone silently skipped the fetch on every fleet host.
+  { command -v skillspector &>/dev/null || [ -x "$HOME/.local/bin/skillspector" ]; } \
+    && fetch_skillspector_skill
 
   # Re-install repo-owned slash commands
   install_commands
