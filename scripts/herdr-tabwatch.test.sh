@@ -123,7 +123,31 @@ Host aorus5
 Host *-jump
 Host $SELF
 Host selfalias
+Host scutilalias
 EOF
+
+# The macstudio shape, made deterministic. On this fleet the box answers to
+# JoggerJacStudio while `scutil --get LocalHostName` says JoggerJoels-Mac-Studio,
+# and the ssh alias resolves to the latter, so scutil is the ONLY probe that can
+# recognise it. On a stock Mac those names coincide, and a fixture built from the
+# real values would quietly lose all its detection power there. So the name is
+# synthetic and the binary that reports it is ours.
+FAKE_LHN="fixture-localhostname"
+mkdir -p "$TMP/sbin"
+cat > "$TMP/sbin/scutil" <<EOF
+#!/usr/bin/env bash
+[ "\$1" = "--get" ] && { echo "$FAKE_LHN"; exit 0; }
+exit 1
+EOF
+chmod +x "$TMP/sbin/scutil"
+export HERDR_TABWATCH_SCUTIL="$TMP/sbin/scutil"
+
+# The PATH the watcher actually runs under, read from the generator that writes
+# it. Hardcoding a second copy here is how the original bug happened: a fact
+# about the daemon's environment lived somewhere nothing checked.
+LAUNCHD_PATH=$(grep -o '<key>PATH</key><string>[^<]*' "$HERE/herdr-node.sh" |
+               head -1 | sed 's/.*<string>//; s|${HOME}|'"$HOME"'|g')
+[ -n "$LAUNCHD_PATH" ] || { echo "cannot read the plist PATH from herdr-node.sh"; exit 1; }
 
 # Stub ssh so `ssh -G` resolution is ours. `selfalias` is the macstudio shape:
 # an alias that is nothing like the hostname but points back at this machine.
@@ -132,6 +156,7 @@ cat > "$TMP/bin/ssh" <<EOF
 if [ "\$1" = "-G" ]; then
   case "\$2" in
     selfalias|$SELF) echo "hostname $SELF" ;;
+    scutilalias)     echo "hostname $FAKE_LHN" ;;
     *)               echo "hostname \$2.example.net" ;;
   esac
   exit 0
@@ -141,8 +166,10 @@ EOF
 chmod +x "$TMP/bin/ssh"
 export PATH="$TMP/bin:$PATH"
 
-run_watch() {  # let the watcher process exactly one event, then stop it
-  python3 "$W" >"$TMP/out" 2>&1 &
+PY3=$(command -v python3)
+
+run_watch_with_path() {  # process one event under an explicit PATH, then stop
+  PATH="$1" "$PY3" "$W" >"$TMP/out" 2>&1 &
   local pid=$!
   local n=0
   while [ $n -lt 60 ]; do
@@ -152,6 +179,8 @@ run_watch() {  # let the watcher process exactly one event, then stop it
   kill "$pid" 2>/dev/null
   wait "$pid" 2>/dev/null
 }
+
+run_watch() { run_watch_with_path "$PATH"; }
 
 # grep -c prints 0 and exits 1 when it matches nothing; the substitution still
 # captures the 0, so no `|| echo 0` — that appended a SECOND zero and made
@@ -201,6 +230,22 @@ eq "an ssh ALIAS pointing back at this machine is not dialled" 0 "$(sent)"
 grep -q "is this machine" "$TMP/out" &&
   ok "and recognises it through ssh -G, not the name" ||
   ko "and recognises it through ssh -G, not the name" "out: $(cat "$TMP/out")"
+
+# The guard has to hold under the daemon's PATH, not just a developer's. The
+# node ran for a day logging `WOULD type: ssh -t macstudio` while sitting on
+# macstudio, because the only probe that knows LocalHostName could not be run
+# and a name missing from the identity set reads as a remote host.
+#
+# Drive the whole decision, not just the lookup. What shipped was behavioural:
+# handle_tab chose to type into a pane on the node itself.
+
+daemon scutilalias 1 && run_watch_with_path "$TMP/bin:$LAUNCHD_PATH"
+eq "an alias only scutil can recognise is not dialled, on the daemon's PATH" \
+   0 "$(sent)"
+grep -q "is this machine" "$TMP/out" &&
+  ok "and names it as ourselves rather than a mystery skip" ||
+  ko "and names it as ourselves rather than a mystery skip" \
+     "out: $(cat "$TMP/out")"
 
 # --- refusing to guess -------------------------------------------------------
 # A tab with several panes is not the fresh tab this assumed. Typing into an
