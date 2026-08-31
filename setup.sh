@@ -1881,6 +1881,9 @@ case "${1:-}" in
   env)      cmd_env "${2:-}" "${3:-}" ;;
   cache)    cmd_cache "${2:-}" "${3:-}" ;;
   supabase) configure_supabase "${2:-}" ;;
+  # Install/upgrade only the zsh module registry. Re-running is the upgrade
+  # path, so repeating this is safe and it never touches the agent CLIs.
+  zsh)      detect_os >/dev/null; detect_pkg_manager; install_zsh_modules ;;
   # Hold a sibling agent CLI at its installed version. Pins are plain state,
   # not a prompt, so one set here also holds on unattended upgrade runs
   # (ansible-ai/update.yml, cron) — configure them before those run.
@@ -1898,6 +1901,7 @@ case "${1:-}" in
     echo "  ./setup.sh              Initial setup (profile + integrations)"
     echo "  ./setup.sh add <name>   Add/enable a single MCP integration"
     echo "  ./setup.sh list         Show all integrations and their status"
+    echo "  ./setup.sh zsh          Install or upgrade only the zsh module registry"
     echo "  ./setup.sh env KEY [v]  Add an API key to ~/.claude/.env"
     echo "  ./setup.sh cache [p]    cache-guard policy (subscription|api|custom <s>|off,"
     echo "                          or mode: observe|warn|protect; no arg shows current)"
