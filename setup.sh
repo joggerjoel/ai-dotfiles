@@ -1655,12 +1655,13 @@ cmd_update() {
   # above never sees it — and ensure_dependencies (which would) doesn't run on an
   # update. Without this the fleet gets the scanner binary from agents-update.sh
   # but no guide telling agents to run it, which is how it shipped the first time.
-  # Guarded on the CLI: no scanner on this host means the skill would only
-  # document a command that isn't there. The absolute-path arm is load-bearing —
-  # ansible runs this in a non-login shell where ~/.local/bin is off PATH, so
-  # `command -v` alone silently skipped the fetch on every fleet host.
-  { command -v skillspector &>/dev/null || [ -x "$HOME/.local/bin/skillspector" ]; } \
-    && fetch_skillspector_skill
+  # Deliberately NOT guarded on the CLI being present. update.yml runs this
+  # step BEFORE agents-update.sh, which is what installs skillspector — so on a
+  # host's first pass the guard saw no binary, skipped, and the CLI landed
+  # seconds later, leaving the fleet with a scanner and no skill until someone
+  # updated twice. Fetching unconditionally converges in a single pass; the
+  # worst case is a 7KB guide on a host whose install failed.
+  fetch_skillspector_skill
 
   # Re-install repo-owned slash commands
   install_commands
