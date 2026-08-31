@@ -245,6 +245,83 @@ ensure_uv() {
     || fail "uv install failed — see https://astral.sh/uv"
 }
 
+ensure_zsh() {
+  command -v zsh &>/dev/null && { ok "zsh present"; return 0; }
+  if [ "$PKG_MANAGER" = "unknown" ]; then
+    fail "zsh missing and package manager unknown — install it manually"
+    return 0
+  fi
+  warn "zsh missing — installing..."
+  pkg_install zsh >/dev/null 2>&1
+  command -v zsh &>/dev/null && ok "zsh installed" \
+    || fail "zsh install failed — install manually, then re-run"
+}
+
+# Shared clone-or-pull for git-checkout dependencies (zinit, oh-my-zsh,
+# powerlevel10k, and the omz custom plugins below): `git pull --ff-only` on
+# an existing checkout is the upgrade path, and a fresh clone is the install
+# path. A failed pull (local edits, diverged history) warns and leaves the
+# checkout as-is instead of discarding anything.
+# Usage: git_clone_or_pull <dir> <url> <label> [extra `git clone` args...]
+git_clone_or_pull() {
+  local dir="$1" url="$2" label="$3"
+  shift 3
+  if [ -d "$dir/.git" ]; then
+    ok "$label present"
+    git -C "$dir" pull --ff-only >/dev/null 2>&1 \
+      || warn "$label: git pull --ff-only failed — left as-is (local changes?)"
+    return 0
+  fi
+  warn "$label missing — installing..."
+  mkdir -p "$(dirname "$dir")"
+  git clone "$@" "$url" "$dir" >/dev/null 2>&1 \
+    && ok "$label installed" \
+    || fail "$label install failed — git clone $url $dir"
+}
+
+ensure_zinit() {
+  local dir="$HOME/.local/share/zinit/zinit.git"
+  # chmod g-rwX on the parent dir is zinit's own hardening step (it refuses
+  # to load from a group-writable path); harmless to re-apply every run, not
+  # just on a fresh install.
+  mkdir -p "$(dirname "$dir")" && chmod g-rwX "$(dirname "$dir")"
+  git_clone_or_pull "$dir" "https://github.com/zdharma-continuum/zinit" "zinit"
+}
+
+ensure_omz() {
+  local dir="$HOME/.oh-my-zsh"
+  git_clone_or_pull "$dir" "https://github.com/ohmyzsh/ohmyzsh.git" "oh-my-zsh" --depth=1
+}
+
+ensure_p10k() {
+  local dir="$HOME/.oh-my-zsh/custom/themes/powerlevel10k"
+  git_clone_or_pull "$dir" "https://github.com/romkatv/powerlevel10k.git" "powerlevel10k" --depth=1
+}
+
+# The three third-party oh-my-zsh plugins zsh/modules/plugins.zsh's `plugins=()`
+# list depends on (zsh-autosuggestions, zsh-syntax-highlighting,
+# zsh-completions — see the comment there for which of the six are bundled
+# with omz core vs. third-party). Table-driven so a new plugin is one line,
+# not a copy-pasted function. Must run after ensure_omz — it writes into
+# oh-my-zsh's custom/ dir — which modules.conf's row order (40, after omz's
+# 20 and p10k's 30) guarantees via install_zsh_modules.
+ensure_omz_plugins() {
+  local custom="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
+  if [ ! -d "$HOME/.oh-my-zsh" ]; then
+    warn "oh-my-zsh not present — skipping custom plugin install"
+    return 0
+  fi
+  local name url
+  while IFS='|' read -r name url; do
+    [ -n "$name" ] || continue
+    git_clone_or_pull "$custom/plugins/$name" "$url" "$name" --depth=1
+  done <<'PLUGINS'
+zsh-autosuggestions|https://github.com/zsh-users/zsh-autosuggestions
+zsh-syntax-highlighting|https://github.com/zsh-users/zsh-syntax-highlighting
+zsh-completions|https://github.com/zsh-users/zsh-completions
+PLUGINS
+}
+
 ensure_claude() {
   command -v claude &>/dev/null && { ok "Claude Code installed"; return 0; }
   warn "Claude Code missing — installing via npm..."
@@ -658,6 +735,7 @@ ensure_dependencies() {
   done
 
   # Assumed tooling (best-effort; warns but continues on failure).
+  ensure_zsh     # login shell the zsh/ module registry targets
   ensure_node    # Claude Code + npx MCP servers
   ensure_gh      # GitHub CLI (tool-priority default)
   ensure_bun     # JS/TS package manager
@@ -1029,18 +1107,97 @@ link_repo_scripts() {
   done
 }
 
-# tmuxp session configs (tmux/*.yaml -> ~/.tmux/<name>.yaml). Symlinked so a
-# repo pull updates the live session definition. tmuxp only auto-discovers
-# ~/.tmuxp/ and ./.tmuxp.yaml, so these load by explicit path:
-#   tmuxp load ~/.tmux/server-metrics.yaml
+# tmuxp session configs (tmux/*.yaml -> ~/.tmuxp/<name>.yaml). Symlinked so a
+# repo pull updates the live session definition. ~/.tmuxp/ is tmuxp's own
+# workspace dir, so these load by bare name:
+#   tmuxp load server-metrics
+# Legacy installs deployed to ~/.tmux/ (tmux's plugin dir, which tmuxp never
+# searched); those symlinks are cleaned up below.
 link_tmux_sessions() {
   [ -d "$DOTFILES_DIR/tmux" ] || return 0
-  mkdir -p "$HOME/.tmux"
+  mkdir -p "$HOME/.tmuxp"
   local f
   for f in "$DOTFILES_DIR"/tmux/*.yaml; do
     [ -f "$f" ] || continue
-    link_file "$f" "$HOME/.tmux/$(basename "$f")"
+    link_file "$f" "$HOME/.tmuxp/$(basename "$f")"
+    # Remove the legacy ~/.tmux/ symlink, but only if it still points at this
+    # repo -- never touch a real file or a link the user placed there.
+    local legacy="$HOME/.tmux/$(basename "$f")"
+    if [ -L "$legacy" ] && [ "$(readlink "$legacy")" = "$f" ]; then
+      rm -f "$legacy"
+    fi
   done
+  rmdir "$HOME/.tmux" 2>/dev/null || true
+}
+
+# ── zsh module registry ──────────────────────────────────────────
+# zsh/modules.conf is the single source of truth for load order, runtime
+# guard, OS applicability, and install action — both this generator and each
+# module's install step (install_fn) read the same table, nothing here
+# hardcodes the module list.
+generate_zshrc() {
+  local os_filter
+  case "$(detect_os)" in
+    macOS) os_filter="darwin" ;;
+    *)     os_filter="linux" ;;   # Linux, or an unrecognized OS: best-effort
+  esac
+
+  local dst="$HOME/.zshrc"
+  if [ -e "$dst" ]; then
+    local backup
+    backup="$HOME/.zshrc.backup.$(date +%Y%m%d_%H%M%S)"
+    cp -L "$dst" "$backup" 2>/dev/null || cp "$dst" "$backup"
+    ok "Backed up existing ~/.zshrc -> $backup"
+  fi
+
+  local tmp
+  tmp="$(mktemp)"
+  {
+    echo "# Generated by ai-dotfiles/setup.sh from zsh/modules.conf — DO NOT EDIT BY HAND."
+    echo "# Edit zsh/modules.conf and the files under zsh/modules/, then run: ./setup.sh update"
+    echo "# Personal, machine-specific additions go in ~/.zshrc.local (see zsh/zshrc.local.example)."
+  } > "$tmp"
+
+  local order name guard os install_fn
+  while IFS='|' read -r order name os install_fn guard; do
+    [[ "$order" =~ ^[0-9]+$ ]] || continue
+    [ "$os" = "both" ] || [ "$os" = "$os_filter" ] || continue
+    {
+      echo ""
+      echo "# --- $name ---"
+      if [ "$guard" = "-" ]; then
+        echo "source \"$DOTFILES_DIR/zsh/modules/$name.zsh\""
+      else
+        echo "if $guard; then"
+        echo "  source \"$DOTFILES_DIR/zsh/modules/$name.zsh\""
+        echo "fi"
+      fi
+    } >> "$tmp"
+  done < <(grep -vE '^\s*#|^\s*$' "$DOTFILES_DIR/zsh/modules.conf")
+
+  mv "$tmp" "$dst"
+  ok "Generated ~/.zshrc from zsh/modules.conf ($(wc -l < "$dst" | tr -d ' ') lines)"
+}
+
+# Runs each module's install/upgrade step (the install_fn column), then
+# regenerates ~/.zshrc. Table-driven: a new module with an installer needs
+# only a modules.conf row and a matching ensure_* function, no change here.
+install_zsh_modules() {
+  header "zsh modules"
+  ensure_zsh
+
+  local order name guard os install_fn
+  while IFS='|' read -r order name os install_fn guard; do
+    [[ "$order" =~ ^[0-9]+$ ]] || continue
+    [ "$install_fn" = "-" ] && continue
+    if declare -f "$install_fn" >/dev/null; then
+      "$install_fn"
+    else
+      warn "modules.conf: '$name' references unknown install_fn '$install_fn'"
+    fi
+  done < <(grep -vE '^\s*#|^\s*$' "$DOTFILES_DIR/zsh/modules.conf")
+
+  generate_zshrc
 }
 
 # Codex custom prompts (codex/prompts/*.md -> ~/.codex/prompts/<name>.md,
@@ -1222,8 +1379,11 @@ cmd_setup() {
   # Link scripts
   link_repo_scripts
 
-  # Link tmuxp session configs (tmux/*.yaml -> ~/.tmux/)
+  # Link tmuxp session configs (tmux/*.yaml -> ~/.tmuxp/)
   link_tmux_sessions
+
+  # Install/upgrade the zsh module registry and generate ~/.zshrc
+  install_zsh_modules
 
   # ── Create .env if missing ──
   if [ ! -f "$CLAUDE_DIR/.env" ]; then
@@ -1689,8 +1849,11 @@ cmd_update() {
 
   link_repo_scripts
 
-  # Link tmuxp session configs (tmux/*.yaml -> ~/.tmux/)
+  # Link tmuxp session configs (tmux/*.yaml -> ~/.tmuxp/)
   link_tmux_sessions
+
+  # Re-run each zsh module's install/upgrade step and regenerate ~/.zshrc
+  install_zsh_modules
 
   # Re-apply the saved Supabase fork (cloud/internal). Preserves the stored
   # connection string, so this stays non-interactive on update.
@@ -1801,6 +1964,9 @@ case "${1:-}" in
   env)      cmd_env "${2:-}" "${3:-}" ;;
   cache)    cmd_cache "${2:-}" "${3:-}" ;;
   supabase) configure_supabase "${2:-}" ;;
+  # Install/upgrade only the zsh module registry. Re-running is the upgrade
+  # path, so repeating this is safe and it never touches the agent CLIs.
+  zsh)      detect_os >/dev/null; detect_pkg_manager; install_zsh_modules ;;
   # Hold a sibling agent CLI at its installed version. Pins are plain state,
   # not a prompt, so one set here also holds on unattended upgrade runs
   # (ansible-ai/update.yml, cron) — configure them before those run.
@@ -1818,6 +1984,7 @@ case "${1:-}" in
     echo "  ./setup.sh              Initial setup (profile + integrations)"
     echo "  ./setup.sh add <name>   Add/enable a single MCP integration"
     echo "  ./setup.sh list         Show all integrations and their status"
+    echo "  ./setup.sh zsh          Install or upgrade only the zsh module registry"
     echo "  ./setup.sh env KEY [v]  Add an API key to ~/.claude/.env"
     echo "  ./setup.sh cache [p]    cache-guard policy (subscription|api|custom <s>|off,"
     echo "                          or mode: observe|warn|protect; no arg shows current)"
