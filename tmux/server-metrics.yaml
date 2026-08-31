@@ -1,0 +1,17 @@
+# Three-pane system monitor session, deployed to ~/.tmux/ by setup.sh.
+#
+#   tmuxp load ~/.tmux/server-metrics.yaml
+#
+# main-vertical rather than tiled: glances truncates its network/disk/sensors
+# sections vertically long before it truncates horizontally, so it gets the
+# full-height left pane and htop/top stack on the right.
+session_name: server-metrics
+windows:
+  - window_name: metrics
+    layout: main-vertical
+    options:
+      main-pane-width: 60%
+    panes:
+      - shell_command: glances
+      - shell_command: htop
+      - shell_command: top

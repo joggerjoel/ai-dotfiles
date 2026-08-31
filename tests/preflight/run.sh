@@ -741,6 +741,64 @@ else
   report fail "link_repo_scripts does not link a dotted-stem script" "found $SCRIPTS_HOME/.claude/scripts/normal-script.test.sh"
 fi
 
+# --- setup.sh: link_tmux_sessions deploys tmuxp configs to ~/.tmux ----------
+# tmux/*.yaml holds tmuxp session definitions (server-metrics: glances/htop/
+# top). They deploy as symlinks into ~/.tmux/ so a repo pull updates the live
+# session definition, and the loop is *.yaml-only: a README or any other
+# non-config dropped into tmux/ must not land in ~/.tmux/, which is a
+# load-by-path directory where every file is expected to be a tmuxp config.
+#
+# link_tmux_sessions writes to $HOME/.tmux, not $CLAUDE_DIR, so HOME is the
+# variable the fixture repoints — and it is set before the source so nothing
+# at setup.sh file scope can touch the real home. Sourcing convention is the
+# same as the link_repo_scripts fixture above.
+TMUXCFG_REPO=$(mktemp -d)
+TMUXCFG_HOME=$(mktemp -d)
+add_cleanup_dir "$TMUXCFG_REPO"
+add_cleanup_dir "$TMUXCFG_HOME"
+mkdir -p "$TMUXCFG_REPO/tmux"
+printf 'session_name: fixture\n' > "$TMUXCFG_REPO/tmux/fixture.yaml"
+printf 'not a session config\n' > "$TMUXCFG_REPO/tmux/README.md"
+
+bash -c '
+  HOME="$2"
+  source "$0" help >/dev/null 2>&1
+  DOTFILES_DIR="$1"
+  link_tmux_sessions
+' "$REPO_DIR/setup.sh" "$TMUXCFG_REPO" "$TMUXCFG_HOME" >/dev/null 2>&1
+
+if [ -L "$TMUXCFG_HOME/.tmux/fixture.yaml" ]; then
+  report pass "link_tmux_sessions symlinks a tmuxp config into ~/.tmux"
+else
+  report fail "link_tmux_sessions symlinks a tmuxp config into ~/.tmux"
+fi
+
+if [ ! -e "$TMUXCFG_HOME/.tmux/README.md" ]; then
+  report pass "link_tmux_sessions ignores non-yaml files in tmux/"
+else
+  report fail "link_tmux_sessions ignores non-yaml files in tmux/" "found $TMUXCFG_HOME/.tmux/README.md"
+fi
+
+# A repo checkout without a tmux/ directory must be a clean no-op. The guard
+# returns before the mkdir, so no empty ~/.tmux is left behind.
+TMUXCFG_BARE_REPO=$(mktemp -d)
+TMUXCFG_BARE_HOME=$(mktemp -d)
+add_cleanup_dir "$TMUXCFG_BARE_REPO"
+add_cleanup_dir "$TMUXCFG_BARE_HOME"
+
+bash -c '
+  HOME="$2"
+  source "$0" help >/dev/null 2>&1
+  DOTFILES_DIR="$1"
+  link_tmux_sessions
+' "$REPO_DIR/setup.sh" "$TMUXCFG_BARE_REPO" "$TMUXCFG_BARE_HOME" >/dev/null 2>&1
+
+if [ ! -d "$TMUXCFG_BARE_HOME/.tmux" ]; then
+  report pass "link_tmux_sessions is a no-op when the repo has no tmux/"
+else
+  report fail "link_tmux_sessions is a no-op when the repo has no tmux/" "created $TMUXCFG_BARE_HOME/.tmux"
+fi
+
 # --- setup.sh: install_skills prunes only manifest-listed skills ------------
 # install_skills used to only ever add/refresh — a skill deleted from
 # skills/ kept its stale copy in ~/.claude/skills/ forever. It now writes a

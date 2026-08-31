@@ -208,6 +208,8 @@ How the dotfiles layer assembles itself (the machinery `just`/`setup.sh` drive f
 you won't touch this directly). Two profiles — **Desktop** (full browser tooling) and **VPS**
 (headless, Docker/systemctl perms).
 Your `~/.claude/CLAUDE.md` is assembled from `base/` + `profiles/<profile>/` + gitignored `.local/`.
+`tmux/` holds tmuxp session definitions, symlinked into `~/.tmux/` on setup — e.g.
+`tmuxp load ~/.tmux/server-metrics.yaml` opens a three-pane glances / htop / top monitor.
 
 ```bash
 ./setup.sh              # Initial setup (profile + skills + plugins + MCP)

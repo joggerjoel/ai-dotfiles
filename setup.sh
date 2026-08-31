@@ -506,6 +506,42 @@ ensure_repo_tools() {
   done
 }
 
+# The tmuxp session configs in tmux/ are inert without their runtime: tmuxp
+# reads the YAML, tmux hosts the panes, and the panes run the monitors. Same
+# package name on brew and apt for tmux/htop/glances, so pkg_install covers
+# both; failures warn rather than abort, matching ensure_repo_tools. A host
+# without a metrics session is still a working dotfiles install.
+ensure_tmux_stack() {
+  local tool
+  for tool in tmux htop glances; do
+    if command -v "$tool" &>/dev/null; then
+      ok "$tool present"
+    else
+      warn "$tool missing — installing..."
+      # Check the outcome, not the package manager's exit code: brew and apt
+      # both exit 0 on no-ops that leave nothing on PATH.
+      pkg_install "$tool" >/dev/null 2>&1 || true
+      command -v "$tool" &>/dev/null && ok "$tool installed" \
+        || warn "$tool install failed — install manually (non-fatal)"
+    fi
+  done
+
+  # tmuxp gets its own branch: apt's package lags upstream and is missing on
+  # some releases, so fall back to the uv-managed install (ensure_uv has
+  # already run, and uv drops the binary in ~/.local/bin).
+  if command -v tmuxp &>/dev/null; then
+    ok "tmuxp present"
+  else
+    warn "tmuxp missing — installing (tmux session manager)..."
+    pkg_install tmuxp >/dev/null 2>&1 || true
+    if ! command -v tmuxp &>/dev/null && command -v uv &>/dev/null; then
+      uv tool install tmuxp >/dev/null 2>&1 || true
+    fi
+    command -v tmuxp &>/dev/null && ok "tmuxp installed" \
+      || warn "tmuxp install failed — uv tool install tmuxp (non-fatal)"
+  fi
+}
+
 ensure_serena_dashboard_off() {
   mkdir -p "$(dirname "$SERENA_CONFIG")"
 
@@ -573,6 +609,7 @@ ensure_dependencies() {
   ensure_herdr_renderers  # bat/delta/glow — herdr-file-viewer content panes
   ensure_just    # fleet command runner (cross-platform: brew or install.sh)
   ensure_repo_tools  # fzf (herdr launcher pickers) + shellcheck (just lint)
+  ensure_tmux_stack  # tmux + tmuxp + monitors for the tmux/ session configs
   ensure_serena_dashboard_off  # suppress serena's browser dashboard popup
 }
 
@@ -930,6 +967,20 @@ link_repo_scripts() {
   done
 }
 
+# tmuxp session configs (tmux/*.yaml -> ~/.tmux/<name>.yaml). Symlinked so a
+# repo pull updates the live session definition. tmuxp only auto-discovers
+# ~/.tmuxp/ and ./.tmuxp.yaml, so these load by explicit path:
+#   tmuxp load ~/.tmux/server-metrics.yaml
+link_tmux_sessions() {
+  [ -d "$DOTFILES_DIR/tmux" ] || return 0
+  mkdir -p "$HOME/.tmux"
+  local f
+  for f in "$DOTFILES_DIR"/tmux/*.yaml; do
+    [ -f "$f" ] || continue
+    link_file "$f" "$HOME/.tmux/$(basename "$f")"
+  done
+}
+
 # Codex custom prompts (codex/prompts/*.md -> ~/.codex/prompts/<name>.md,
 # typed as /<name> in the Codex TUI). Symlinked, not copied, so a repo pull
 # updates the live prompts — the Claude-side equivalents live in skills/.
@@ -1108,6 +1159,9 @@ cmd_setup() {
 
   # Link scripts
   link_repo_scripts
+
+  # Link tmuxp session configs (tmux/*.yaml -> ~/.tmux/)
+  link_tmux_sessions
 
   # ── Create .env if missing ──
   if [ ! -f "$CLAUDE_DIR/.env" ]; then
@@ -1560,6 +1614,9 @@ cmd_update() {
   chmod +x "$CLAUDE_DIR/statusline.sh"
 
   link_repo_scripts
+
+  # Link tmuxp session configs (tmux/*.yaml -> ~/.tmux/)
+  link_tmux_sessions
 
   # Re-apply the saved Supabase fork (cloud/internal). Preserves the stored
   # connection string, so this stays non-interactive on update.
