@@ -257,51 +257,69 @@ ensure_zsh() {
     || fail "zsh install failed — install manually, then re-run"
 }
 
-# zinit/oh-my-zsh/powerlevel10k are git clones, so re-running the installer
-# is the upgrade path: `git pull --ff-only` on an existing checkout rather
-# than reinstalling. A failed pull (local edits, diverged history) warns and
-# leaves the checkout as-is instead of discarding anything.
-ensure_zinit() {
-  local dir="$HOME/.local/share/zinit/zinit.git"
-  if [ -f "$dir/zinit.zsh" ]; then
-    ok "zinit present"
+# Shared clone-or-pull for git-checkout dependencies (zinit, oh-my-zsh,
+# powerlevel10k, and the omz custom plugins below): `git pull --ff-only` on
+# an existing checkout is the upgrade path, and a fresh clone is the install
+# path. A failed pull (local edits, diverged history) warns and leaves the
+# checkout as-is instead of discarding anything.
+# Usage: git_clone_or_pull <dir> <url> <label> [extra `git clone` args...]
+git_clone_or_pull() {
+  local dir="$1" url="$2" label="$3"
+  shift 3
+  if [ -d "$dir/.git" ]; then
+    ok "$label present"
     git -C "$dir" pull --ff-only >/dev/null 2>&1 \
-      || warn "zinit: git pull --ff-only failed — left as-is (local changes?)"
+      || warn "$label: git pull --ff-only failed — left as-is (local changes?)"
     return 0
   fi
-  warn "zinit missing — installing..."
+  warn "$label missing — installing..."
+  mkdir -p "$(dirname "$dir")"
+  git clone "$@" "$url" "$dir" >/dev/null 2>&1 \
+    && ok "$label installed" \
+    || fail "$label install failed — git clone $url $dir"
+}
+
+ensure_zinit() {
+  local dir="$HOME/.local/share/zinit/zinit.git"
+  # chmod g-rwX on the parent dir is zinit's own hardening step (it refuses
+  # to load from a group-writable path); harmless to re-apply every run, not
+  # just on a fresh install.
   mkdir -p "$(dirname "$dir")" && chmod g-rwX "$(dirname "$dir")"
-  git clone https://github.com/zdharma-continuum/zinit "$dir" >/dev/null 2>&1 \
-    && ok "zinit installed" \
-    || fail "zinit install failed — git clone https://github.com/zdharma-continuum/zinit $dir"
+  git_clone_or_pull "$dir" "https://github.com/zdharma-continuum/zinit" "zinit"
 }
 
 ensure_omz() {
   local dir="$HOME/.oh-my-zsh"
-  if [ -d "$dir/.git" ]; then
-    ok "oh-my-zsh present"
-    git -C "$dir" pull --ff-only >/dev/null 2>&1 \
-      || warn "oh-my-zsh: git pull --ff-only failed — left as-is (local changes?)"
-    return 0
-  fi
-  warn "oh-my-zsh missing — installing..."
-  git clone --depth=1 https://github.com/ohmyzsh/ohmyzsh.git "$dir" >/dev/null 2>&1 \
-    && ok "oh-my-zsh installed" \
-    || fail "oh-my-zsh install failed — git clone https://github.com/ohmyzsh/ohmyzsh.git $dir"
+  git_clone_or_pull "$dir" "https://github.com/ohmyzsh/ohmyzsh.git" "oh-my-zsh" --depth=1
 }
 
 ensure_p10k() {
   local dir="$HOME/.oh-my-zsh/custom/themes/powerlevel10k"
-  if [ -d "$dir/.git" ]; then
-    ok "powerlevel10k present"
-    git -C "$dir" pull --ff-only >/dev/null 2>&1 \
-      || warn "powerlevel10k: git pull --ff-only failed — left as-is (local changes?)"
+  git_clone_or_pull "$dir" "https://github.com/romkatv/powerlevel10k.git" "powerlevel10k" --depth=1
+}
+
+# The three third-party oh-my-zsh plugins zsh/modules/plugins.zsh's `plugins=()`
+# list depends on (zsh-autosuggestions, zsh-syntax-highlighting,
+# zsh-completions — see the comment there for which of the six are bundled
+# with omz core vs. third-party). Table-driven so a new plugin is one line,
+# not a copy-pasted function. Must run after ensure_omz — it writes into
+# oh-my-zsh's custom/ dir — which modules.conf's row order (40, after omz's
+# 20 and p10k's 30) guarantees via install_zsh_modules.
+ensure_omz_plugins() {
+  local custom="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
+  if [ ! -d "$HOME/.oh-my-zsh" ]; then
+    warn "oh-my-zsh not present — skipping custom plugin install"
     return 0
   fi
-  warn "powerlevel10k missing — installing..."
-  git clone --depth=1 https://github.com/romkatv/powerlevel10k.git "$dir" >/dev/null 2>&1 \
-    && ok "powerlevel10k installed" \
-    || fail "powerlevel10k install failed — git clone https://github.com/romkatv/powerlevel10k.git $dir"
+  local name url
+  while IFS='|' read -r name url; do
+    [ -n "$name" ] || continue
+    git_clone_or_pull "$custom/plugins/$name" "$url" "$name" --depth=1
+  done <<'PLUGINS'
+zsh-autosuggestions|https://github.com/zsh-users/zsh-autosuggestions
+zsh-syntax-highlighting|https://github.com/zsh-users/zsh-syntax-highlighting
+zsh-completions|https://github.com/zsh-users/zsh-completions
+PLUGINS
 }
 
 ensure_claude() {
