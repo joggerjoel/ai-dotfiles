@@ -20,6 +20,7 @@ tests/preflight/run.sh
 hooks/cache-guard.test.sh
 hooks/injection-guard.test.sh
 scripts/claude-token.test.sh
+scripts/fleet.test.sh
 scripts/herdr-auth.test.sh
 scripts/herdr-paste.test.sh
 scripts/herdr-tmux.test.sh
