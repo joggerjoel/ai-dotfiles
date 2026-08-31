@@ -741,14 +741,16 @@ else
   report fail "link_repo_scripts does not link a dotted-stem script" "found $SCRIPTS_HOME/.claude/scripts/normal-script.test.sh"
 fi
 
-# --- setup.sh: link_tmux_sessions deploys tmuxp configs to ~/.tmux ----------
+# --- setup.sh: link_tmux_sessions deploys tmuxp configs to ~/.tmuxp ---------
 # tmux/*.yaml holds tmuxp session definitions (server-metrics: glances/htop/
-# top). They deploy as symlinks into ~/.tmux/ so a repo pull updates the live
-# session definition, and the loop is *.yaml-only: a README or any other
-# non-config dropped into tmux/ must not land in ~/.tmux/, which is a
-# load-by-path directory where every file is expected to be a tmuxp config.
+# top). They deploy as symlinks into ~/.tmuxp/ so a repo pull updates the live
+# session definition. ~/.tmuxp/ is tmuxp's own workspace dir, so a config there
+# loads by bare name; the earlier destination ~/.tmux/ is tmux's plugin dir,
+# which tmuxp never searched. The loop is *.yaml-only: a README or any other
+# non-config dropped into tmux/ must not land in ~/.tmuxp/, where every file is
+# expected to be a tmuxp config.
 #
-# link_tmux_sessions writes to $HOME/.tmux, not $CLAUDE_DIR, so HOME is the
+# link_tmux_sessions writes to $HOME/.tmuxp, not $CLAUDE_DIR, so HOME is the
 # variable the fixture repoints — and it is set before the source so nothing
 # at setup.sh file scope can touch the real home. Sourcing convention is the
 # same as the link_repo_scripts fixture above.
@@ -767,20 +769,100 @@ bash -c '
   link_tmux_sessions
 ' "$REPO_DIR/setup.sh" "$TMUXCFG_REPO" "$TMUXCFG_HOME" >/dev/null 2>&1
 
-if [ -L "$TMUXCFG_HOME/.tmux/fixture.yaml" ]; then
-  report pass "link_tmux_sessions symlinks a tmuxp config into ~/.tmux"
+if [ -L "$TMUXCFG_HOME/.tmuxp/fixture.yaml" ]; then
+  report pass "link_tmux_sessions symlinks a tmuxp config into ~/.tmuxp"
 else
-  report fail "link_tmux_sessions symlinks a tmuxp config into ~/.tmux"
+  report fail "link_tmux_sessions symlinks a tmuxp config into ~/.tmuxp"
 fi
 
-if [ ! -e "$TMUXCFG_HOME/.tmux/README.md" ]; then
+if [ ! -e "$TMUXCFG_HOME/.tmuxp/README.md" ]; then
   report pass "link_tmux_sessions ignores non-yaml files in tmux/"
 else
-  report fail "link_tmux_sessions ignores non-yaml files in tmux/" "found $TMUXCFG_HOME/.tmux/README.md"
+  report fail "link_tmux_sessions ignores non-yaml files in tmux/" "found $TMUXCFG_HOME/.tmuxp/README.md"
+fi
+
+# --- setup.sh: link_tmux_sessions cleans up the legacy ~/.tmux deploy -------
+# Installs made before the move have a ~/.tmux/<name>.yaml symlink pointing at
+# this repo. Leaving it behind means two paths claim to be the live config and
+# only one tracks the repo. Removing it is a delete in the user's home, so the
+# guard is deliberately narrow: symlink AND resolving to the very file we just
+# linked. Anything else in ~/.tmux — a real file, a link the user made to their
+# own config — is not ours to delete, and neither is a non-empty ~/.tmux.
+TMUXLEG_REPO=$(mktemp -d)
+TMUXLEG_HOME=$(mktemp -d)
+TMUXLEG_OTHER=$(mktemp -d)
+add_cleanup_dir "$TMUXLEG_REPO"
+add_cleanup_dir "$TMUXLEG_HOME"
+add_cleanup_dir "$TMUXLEG_OTHER"
+mkdir -p "$TMUXLEG_REPO/tmux" "$TMUXLEG_HOME/.tmux"
+printf 'session_name: ours\n'    > "$TMUXLEG_REPO/tmux/ours.yaml"
+printf 'session_name: theirs\n'  > "$TMUXLEG_REPO/tmux/realfile.yaml"
+printf 'session_name: foreign\n' > "$TMUXLEG_REPO/tmux/foreign.yaml"
+printf 'session_name: elsewhere\n' > "$TMUXLEG_OTHER/elsewhere.yaml"
+# ours: the legacy link this repo owns -> must go.
+ln -s "$TMUXLEG_REPO/tmux/ours.yaml" "$TMUXLEG_HOME/.tmux/ours.yaml"
+# realfile: a regular file the user put there -> must survive.
+printf 'hand written\n' > "$TMUXLEG_HOME/.tmux/realfile.yaml"
+# foreign: a symlink to something that is not this repo -> must survive.
+ln -s "$TMUXLEG_OTHER/elsewhere.yaml" "$TMUXLEG_HOME/.tmux/foreign.yaml"
+
+bash -c '
+  HOME="$2"
+  source "$0" help >/dev/null 2>&1
+  DOTFILES_DIR="$1"
+  link_tmux_sessions
+' "$REPO_DIR/setup.sh" "$TMUXLEG_REPO" "$TMUXLEG_HOME" >/dev/null 2>&1
+
+if [ ! -e "$TMUXLEG_HOME/.tmux/ours.yaml" ]; then
+  report pass "link_tmux_sessions removes a legacy ~/.tmux link into this repo"
+else
+  report fail "link_tmux_sessions removes a legacy ~/.tmux link into this repo" "still present"
+fi
+
+if [ -f "$TMUXLEG_HOME/.tmux/realfile.yaml" ] && [ ! -L "$TMUXLEG_HOME/.tmux/realfile.yaml" ]; then
+  report pass "link_tmux_sessions leaves a real file in ~/.tmux alone"
+else
+  report fail "link_tmux_sessions leaves a real file in ~/.tmux alone" "deleted or replaced"
+fi
+
+if [ -L "$TMUXLEG_HOME/.tmux/foreign.yaml" ]; then
+  report pass "link_tmux_sessions leaves a foreign ~/.tmux symlink alone"
+else
+  report fail "link_tmux_sessions leaves a foreign ~/.tmux symlink alone" "deleted"
+fi
+
+# rmdir refuses a non-empty directory, so survivors keep ~/.tmux alive. If this
+# ever regresses to rm -rf, the two assertions above go red with it.
+if [ -d "$TMUXLEG_HOME/.tmux" ]; then
+  report pass "link_tmux_sessions keeps a non-empty ~/.tmux"
+else
+  report fail "link_tmux_sessions keeps a non-empty ~/.tmux" "removed a directory with survivors"
+fi
+
+# ...and when the legacy link was the only thing in it, the empty dir goes too.
+TMUXEMPTY_REPO=$(mktemp -d)
+TMUXEMPTY_HOME=$(mktemp -d)
+add_cleanup_dir "$TMUXEMPTY_REPO"
+add_cleanup_dir "$TMUXEMPTY_HOME"
+mkdir -p "$TMUXEMPTY_REPO/tmux" "$TMUXEMPTY_HOME/.tmux"
+printf 'session_name: only\n' > "$TMUXEMPTY_REPO/tmux/only.yaml"
+ln -s "$TMUXEMPTY_REPO/tmux/only.yaml" "$TMUXEMPTY_HOME/.tmux/only.yaml"
+
+bash -c '
+  HOME="$2"
+  source "$0" help >/dev/null 2>&1
+  DOTFILES_DIR="$1"
+  link_tmux_sessions
+' "$REPO_DIR/setup.sh" "$TMUXEMPTY_REPO" "$TMUXEMPTY_HOME" >/dev/null 2>&1
+
+if [ ! -d "$TMUXEMPTY_HOME/.tmux" ]; then
+  report pass "link_tmux_sessions removes ~/.tmux once it is empty"
+else
+  report fail "link_tmux_sessions removes ~/.tmux once it is empty" "directory remains"
 fi
 
 # A repo checkout without a tmux/ directory must be a clean no-op. The guard
-# returns before the mkdir, so no empty ~/.tmux is left behind.
+# returns before the mkdir, so no empty ~/.tmuxp is left behind.
 TMUXCFG_BARE_REPO=$(mktemp -d)
 TMUXCFG_BARE_HOME=$(mktemp -d)
 add_cleanup_dir "$TMUXCFG_BARE_REPO"
@@ -793,10 +875,10 @@ bash -c '
   link_tmux_sessions
 ' "$REPO_DIR/setup.sh" "$TMUXCFG_BARE_REPO" "$TMUXCFG_BARE_HOME" >/dev/null 2>&1
 
-if [ ! -d "$TMUXCFG_BARE_HOME/.tmux" ]; then
+if [ ! -d "$TMUXCFG_BARE_HOME/.tmuxp" ]; then
   report pass "link_tmux_sessions is a no-op when the repo has no tmux/"
 else
-  report fail "link_tmux_sessions is a no-op when the repo has no tmux/" "created $TMUXCFG_BARE_HOME/.tmux"
+  report fail "link_tmux_sessions is a no-op when the repo has no tmux/" "created $TMUXCFG_BARE_HOME/.tmuxp"
 fi
 
 # --- setup.sh: install_skills prunes only manifest-listed skills ------------

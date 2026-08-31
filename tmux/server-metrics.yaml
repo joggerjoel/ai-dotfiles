@@ -1,6 +1,6 @@
-# Three-pane system monitor session, deployed to ~/.tmux/ by setup.sh.
+# Three-pane system monitor session, deployed to ~/.tmuxp/ by setup.sh.
 #
-#   tmuxp load ~/.tmux/server-metrics.yaml
+#   tmuxp load server-metrics
 #
 # main-vertical rather than tiled: glances truncates its network/disk/sensors
 # sections vertically long before it truncates horizontally, so it gets the

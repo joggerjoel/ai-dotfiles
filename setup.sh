@@ -1045,18 +1045,27 @@ link_repo_scripts() {
   done
 }
 
-# tmuxp session configs (tmux/*.yaml -> ~/.tmux/<name>.yaml). Symlinked so a
-# repo pull updates the live session definition. tmuxp only auto-discovers
-# ~/.tmuxp/ and ./.tmuxp.yaml, so these load by explicit path:
-#   tmuxp load ~/.tmux/server-metrics.yaml
+# tmuxp session configs (tmux/*.yaml -> ~/.tmuxp/<name>.yaml). Symlinked so a
+# repo pull updates the live session definition. ~/.tmuxp/ is tmuxp's own
+# workspace dir, so these load by bare name:
+#   tmuxp load server-metrics
+# Legacy installs deployed to ~/.tmux/ (tmux's plugin dir, which tmuxp never
+# searched); those symlinks are cleaned up below.
 link_tmux_sessions() {
   [ -d "$DOTFILES_DIR/tmux" ] || return 0
-  mkdir -p "$HOME/.tmux"
+  mkdir -p "$HOME/.tmuxp"
   local f
   for f in "$DOTFILES_DIR"/tmux/*.yaml; do
     [ -f "$f" ] || continue
-    link_file "$f" "$HOME/.tmux/$(basename "$f")"
+    link_file "$f" "$HOME/.tmuxp/$(basename "$f")"
+    # Remove the legacy ~/.tmux/ symlink, but only if it still points at this
+    # repo -- never touch a real file or a link the user placed there.
+    local legacy="$HOME/.tmux/$(basename "$f")"
+    if [ -L "$legacy" ] && [ "$(readlink "$legacy")" = "$f" ]; then
+      rm -f "$legacy"
+    fi
   done
+  rmdir "$HOME/.tmux" 2>/dev/null || true
 }
 
 # ── zsh module registry ──────────────────────────────────────────
@@ -1088,7 +1097,7 @@ generate_zshrc() {
   } > "$tmp"
 
   local order name guard os install_fn
-  while IFS='|' read -r order name guard os install_fn; do
+  while IFS='|' read -r order name os install_fn guard; do
     [[ "$order" =~ ^[0-9]+$ ]] || continue
     [ "$os" = "both" ] || [ "$os" = "$os_filter" ] || continue
     {
@@ -1116,7 +1125,7 @@ install_zsh_modules() {
   ensure_zsh
 
   local order name guard os install_fn
-  while IFS='|' read -r order name guard os install_fn; do
+  while IFS='|' read -r order name os install_fn guard; do
     [[ "$order" =~ ^[0-9]+$ ]] || continue
     [ "$install_fn" = "-" ] && continue
     if declare -f "$install_fn" >/dev/null; then
@@ -1308,7 +1317,7 @@ cmd_setup() {
   # Link scripts
   link_repo_scripts
 
-  # Link tmuxp session configs (tmux/*.yaml -> ~/.tmux/)
+  # Link tmuxp session configs (tmux/*.yaml -> ~/.tmuxp/)
   link_tmux_sessions
 
   # Install/upgrade the zsh module registry and generate ~/.zshrc
@@ -1766,7 +1775,7 @@ cmd_update() {
 
   link_repo_scripts
 
-  # Link tmuxp session configs (tmux/*.yaml -> ~/.tmux/)
+  # Link tmuxp session configs (tmux/*.yaml -> ~/.tmuxp/)
   link_tmux_sessions
 
   # Re-run each zsh module's install/upgrade step and regenerate ~/.zshrc
