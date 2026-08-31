@@ -52,7 +52,7 @@ herdr workspace list >/dev/null 2>&1 || { echo "herdr server not reachable" >&2;
 # TABS=a,b,c            default tab list for every space below it
 # <label> <host|local> [tabs]   one space; tabs override the default
 
-DEFAULT_TABS="claude,codex,cursor,pi,tmux"
+DEFAULT_TABS="@claude,@codex,@cursor,@pi,tmux"
 SPACES=()   # "label|host|tabs"
 
 while read -r line || [ -n "$line" ]; do

@@ -1116,13 +1116,13 @@ link_repo_scripts() {
 link_tmux_sessions() {
   [ -d "$DOTFILES_DIR/tmux" ] || return 0
   mkdir -p "$HOME/.tmuxp"
-  local f
+  local f legacy
   for f in "$DOTFILES_DIR"/tmux/*.yaml; do
     [ -f "$f" ] || continue
     link_file "$f" "$HOME/.tmuxp/$(basename "$f")"
     # Remove the legacy ~/.tmux/ symlink, but only if it still points at this
     # repo -- never touch a real file or a link the user placed there.
-    local legacy="$HOME/.tmux/$(basename "$f")"
+    legacy="$HOME/.tmux/$(basename "$f")"
     if [ -L "$legacy" ] && [ "$(readlink "$legacy")" = "$f" ]; then
       rm -f "$legacy"
     fi
