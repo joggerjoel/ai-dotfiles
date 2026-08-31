@@ -592,12 +592,13 @@
     "enabled": true,
     "mode": "hold"
   },
+  "skipDangerousModePermissionPrompt": true,
   "skipWorkflowUsageWarning": true,
   "editorMode": "normal",
   "preferredNotifChannel": "auto",
   "autoCompactEnabled": false,
+  "remoteControlAtStartup": true,
   "skipAutoPermissionPrompt": true,
   "voiceEnabled": true,
-  "skipDangerousModePermissionPrompt": true,
-  "remoteControlAtStartup": true
+  "tui": "fullscreen"
 }
