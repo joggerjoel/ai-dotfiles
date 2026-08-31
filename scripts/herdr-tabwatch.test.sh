@@ -123,7 +123,10 @@ Host aorus5
 Host *-jump
 Host $SELF
 Host selfalias
+Host unresolvable
 EOF
+
+
 
 # Stub ssh so `ssh -G` resolution is ours. `selfalias` is the macstudio shape:
 # an alias that is nothing like the hostname but points back at this machine.
@@ -132,6 +135,7 @@ cat > "$TMP/bin/ssh" <<EOF
 if [ "\$1" = "-G" ]; then
   case "\$2" in
     selfalias|$SELF) echo "hostname $SELF" ;;
+    unresolvable)    exit 0 ;;
     *)               echo "hostname \$2.example.net" ;;
   esac
   exit 0
@@ -141,8 +145,10 @@ EOF
 chmod +x "$TMP/bin/ssh"
 export PATH="$TMP/bin:$PATH"
 
-run_watch() {  # let the watcher process exactly one event, then stop it
-  python3 "$W" >"$TMP/out" 2>&1 &
+PY3=$(command -v python3)
+
+run_watch() {  # process one event, then stop
+  "$PY3" "$W" >"$TMP/out" 2>&1 &
   local pid=$!
   local n=0
   while [ $n -lt 60 ]; do
@@ -152,6 +158,7 @@ run_watch() {  # let the watcher process exactly one event, then stop it
   kill "$pid" 2>/dev/null
   wait "$pid" 2>/dev/null
 }
+
 
 # grep -c prints 0 and exits 1 when it matches nothing; the substitution still
 # captures the 0, so no `|| echo 0` — that appended a SECOND zero and made
@@ -201,6 +208,66 @@ eq "an ssh ALIAS pointing back at this machine is not dialled" 0 "$(sent)"
 grep -q "is this machine" "$TMP/out" &&
   ok "and recognises it through ssh -G, not the name" ||
   ko "and recognises it through ssh -G, not the name" "out: $(cat "$TMP/out")"
+
+
+# An allowlisted alias ssh cannot answer for is the third case the old boolean
+# had nowhere to put. The stub prints nothing, standing in for ssh missing or
+# not answering. A name that merely fails to resolve is not this case: `ssh -G`
+# expands config without DNS and prints the alias back.
+
+daemon unresolvable 1 && run_watch
+eq "an allowlisted alias ssh cannot answer for is not dialled" 0 "$(sent)"
+grep -q "cannot resolve" "$TMP/out" &&
+  ok "and says it refused rather than claiming the box is ours" ||
+  ko "and says it refused rather than claiming the box is ours" \
+     "out: $(cat "$TMP/out")"
+
+# The probe that decides identity has to run where the daemon runs. Point PATH
+# somewhere it cannot be found and the real one still has to answer, which is
+# only true while the lookup is absolute. macOS only, because scutil is.
+
+if [ "$(uname)" = Darwin ]; then
+  LHN=$(/usr/sbin/scutil --get LocalHostName 2>/dev/null | cut -d. -f1 | tr 'A-Z' 'a-z')
+  if [ -n "$LHN" ]; then
+    got=$(PATH="/usr/bin:/bin" "$PY3" -c 'import importlib.util, sys
+spec = importlib.util.spec_from_file_location("w", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+sys.argv = [sys.argv[0]]
+spec.loader.exec_module(m)
+print(" ".join(sorted(m.local_names())))' "$W")
+    case " $got " in
+      *" $LHN "*) ok "LocalHostName is found on a PATH that cannot reach scutil" ;;
+      *) ko "LocalHostName is found on a PATH that cannot reach scutil" \
+            "wanted $LHN in [$got]" ;;
+    esac
+  else
+    printf '  SKIP  LocalHostName is found on a PATH that cannot reach scutil (unset here)\n'
+  fi
+fi
+
+# refusal_to_dial takes the identity set as an argument, so the cases that used
+# to need a fixture binary and an exported override are a function call.
+
+pure=$("$PY3" -c 'import importlib.util, sys
+spec = importlib.util.spec_from_file_location("w", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+sys.argv = [sys.argv[0]]
+spec.loader.exec_module(m)
+print("none" if m.refusal_to_dial("anything", None) else "dialled")' "$W")
+eq "nothing is dialled while this machine has no known identity" "none" "$pure"
+
+# The agents run under a PATH this repo writes, and the incident was that PATH
+# missing the directory holding the identity probe. Read the one definition the
+# plists interpolate, so this cannot pass by checking a different daemon's copy.
+
+agent_path=$(sed -n 's/^AGENT_PATH="\(.*\)"$/\1/p' "$HERE/herdr-node.sh" | head -1)
+[ -n "$agent_path" ] || ko "the generated agent PATH is readable from herdr-node.sh"
+for d in /usr/sbin /sbin; do
+  case ":$agent_path:" in
+    *":$d:"*) ok "the generated agent PATH keeps $d" ;;
+    *)        ko "the generated agent PATH keeps $d" "got [$agent_path]" ;;
+  esac
+done
 
 # --- refusing to guess -------------------------------------------------------
 # A tab with several panes is not the fresh tab this assumed. Typing into an

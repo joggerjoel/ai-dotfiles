@@ -33,6 +33,17 @@ SOCKET_PATH = os.environ.get(
 # is nothing while the cost of giving up early is a half-typed command.
 SSH_SETTLE_MS = 20000
 
+# On the SIP-sealed system volume at a fixed path, on every Mac. Not looked up
+# through PATH: a probe that cannot run does not raise, it returns one name
+# fewer, and an alias pointing at that name stops looking like ourselves.
+SCUTIL = "/usr/sbin/scutil"
+
+# LocalHostName is a macOS concept and scutil ships only there. Elsewhere
+# gethostname(3) is the whole of this machine's identity, so identity is
+# complete without asking, and demanding an answer would refuse every tab on a
+# Linux node rather than protect it.
+IS_DARWIN = sys.platform == "darwin"
+
 # Remembering handled tabs prevents a reconnect from re-typing into panes that
 # were already connected. Bounded because this process is meant to run for
 # weeks.
@@ -85,7 +96,13 @@ def ssh_hosts():
 
 
 def local_names():
-    """Names that mean *this* machine, which must never be ssh'd into.
+    """Names that mean *this* machine, or None when we could not find out.
+
+    None rather than a short set, because a short set is indistinguishable from
+    a correct one at the call site and every caller then treats "I could not
+    tell" as "not us". That is the whole of the original incident. The probe
+    could not run, the set came back one name shorter, nothing raised, and the
+    node dialled itself.
 
     Lowercased and reduced to short forms, because none of the sources agree on
     case or domain: `hostname` says JoggerJoels-Mac-Studio.local, ssh config
@@ -95,14 +112,28 @@ def local_names():
     full = socket.gethostname()
     for n in (full, full.split(".")[0]):
         names.add(n)
-    for cmd in (["scutil", "--get", "LocalHostName"], ["hostname", "-s"]):
-        try:
-            out = subprocess.run(cmd, capture_output=True, text=True,
-                                 timeout=5).stdout.strip()
-            if out:
-                names.add(out)
-        except (OSError, subprocess.SubprocessError):
-            pass
+    if not IS_DARWIN:
+        return {n.split(".")[0].lower() for n in names if n}
+    # `scutil` is the only source that knows LocalHostName, and LocalHostName is
+    # what this fleet's ssh aliases resolve to, so it is the probe that decides
+    # whether an alias is us. `hostname -s` is not consulted: it prints the
+    # short form of gethostname(3), which the lines above already hold.
+    #
+    # Absolute so that the guard cannot be reopened by anything that writes an
+    # environment, which the generated plists do. This was an env var for one
+    # revision, so the suite could point it at a fixture, and that override then
+    # ran in every test and left the real path exercised by none of them.
+    try:
+        out = subprocess.run([SCUTIL, "--get", "LocalHostName"],
+                             capture_output=True, text=True,
+                             timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as e:
+        log("identity probe failed (%s: %s)" % (SCUTIL, e))
+        return None
+    if not out:
+        log("identity probe returned nothing (%s)" % SCUTIL)
+        return None
+    names.add(out)
     return {n.split(".")[0].lower() for n in names if n}
 
 
@@ -119,8 +150,17 @@ def resolved_host(alias):
     return None
 
 
-def is_this_machine(label, locals_):
-    """Would ssh'ing to `label` land us back where we started?
+def refusal_to_dial(label, locals_):
+    """Why `label` must not be ssh'd into, or None when it is safe to dial.
+
+    Four answers, not two. The identity set itself may be missing. The boolean this replaced folded "cannot tell" in
+    with "safe to dial", so every way of failing to identify a machine ended in
+    typing. That is the same shape as the bug above: a probe that cannot run
+    weakens the guard instead of stopping it. `resolved_host` returns None when ssh cannot be
+    run or does not answer, and that used to mean "elsewhere, go ahead". Note
+    it is not the case for a name that does not resolve: `ssh -G` expands
+    config without consulting DNS, so it prints `hostname <alias>` for a host
+    that will never answer, and that reaches connect_pane by design.
 
     Comparing the label to the hostname is not enough, and assuming otherwise
     is how the node ends up ssh'ing into itself. The workspace is called
@@ -132,10 +172,16 @@ def is_this_machine(label, locals_):
     stays first for the ordinary case where a workspace is named after the
     hostname outright.
     """
+    if locals_ is None:
+        return "identity of this machine is unknown, so not dialling '%s'" % label
     if label.split(".")[0].lower() in locals_:
-        return True
+        return "workspace '%s' is this machine" % label
     target = resolved_host(label)
-    return bool(target and target.split(".")[0].lower() in locals_)
+    if target is None:
+        return "cannot resolve '%s', so not assuming it is elsewhere" % label
+    if target.split(".")[0].lower() in locals_:
+        return "workspace '%s' is this machine, via %s" % (label, target)
+    return None
 
 
 def workspace_labels():
@@ -240,8 +286,9 @@ def handle_tab(tab, hosts, locals_, preexisting):
         return "%s: '%s' is not an ssh host" % (tab_id, label)
     # After the allowlist, not before: resolving costs an ssh -G, and a label
     # that is not a host we may dial never needs resolving at all.
-    if is_this_machine(label, locals_):
-        return "%s: workspace '%s' is this machine" % (tab_id, label)
+    refusal = refusal_to_dial(label, locals_)
+    if refusal:
+        return "%s: %s" % (tab_id, refusal)
 
     pane_id = pane_of_tab(tab_id)
     if not pane_id:
@@ -277,7 +324,8 @@ def watch():
         raise OSError("socket closed before the subscription was acknowledged")
     log("subscribed%s (%d ssh hosts, %d pre-existing tabs ignored, self=%s)"
         % (" [DRY RUN — nothing will be typed]" if DRY_RUN else "",
-           len(hosts), len(preexisting), ",".join(locals_)))
+           len(hosts), len(preexisting),
+           ",".join(sorted(locals_)) if locals_ else "UNKNOWN, refusing every tab"))
 
     for line in f:
         try:
