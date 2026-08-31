@@ -42,6 +42,14 @@ header(){ echo -e "\n${BOLD}$1${RESET}"; }
 # `command -v herdr` would spuriously fail (the fleet-proven fix).
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"
 
+# One definition for every generated plist. launchd's own default for a user
+# agent is /usr/bin:/bin:/usr/sbin:/sbin; these agents also need brew and
+# ~/.local/bin, and the three heredocs below used to carry that hand-written
+# each. Dropping the sbin pair from all three is what stopped the tab watcher
+# reaching /usr/sbin/scutil, and a copy per heredoc is how three of them go
+# wrong together and stay that way.
+AGENT_PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
 SESSION="${HERDR_SESSION:-default}"
 BRIDGE_PORT="${HERDR_BRIDGE_PORT:-7070}"
 BRIDGE_BIND="${HERDR_BRIDGE_BIND:-}"
@@ -185,7 +193,7 @@ cmd_service_install() {
          file-access guard that blocks crewmate reads mid-task; disable it for
          panes here so the firstmate checkout stays pristine (no fm-spawn.sh edit). -->
     <key>AR_DISABLE_SCOUT_BLOCK</key><string>1</string>
-    <key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PATH</key><string>${AGENT_PATH}</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <!-- Restart only on ABNORMAL exit. A plain KeepAlive=true would respawn the
@@ -234,7 +242,7 @@ cmd_bridge_service_install() {
   <dict>
     <key>HERDR_SESSION</key><string>${SESSION}</string>
     <key>HERDR_BRIDGE_PORT</key><string>${BRIDGE_PORT}</string>
-    <key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PATH</key><string>${AGENT_PATH}</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -285,7 +293,7 @@ cmd_tabwatch_service_install() {
   </array>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key><string>${HOME}/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PATH</key><string>${AGENT_PATH}</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

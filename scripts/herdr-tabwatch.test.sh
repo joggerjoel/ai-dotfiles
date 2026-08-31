@@ -127,12 +127,6 @@ Host unresolvable
 EOF
 
 
-# The PATH the watcher actually runs under, read from the generator that writes
-# it. Hardcoding a second copy here is how the original bug happened: a fact
-# about the daemon's environment lived somewhere nothing checked.
-LAUNCHD_PATH=$(grep -o '<key>PATH</key><string>[^<]*' "$HERE/herdr-node.sh" |
-               head -1 | sed 's/.*<string>//; s|${HOME}|'"$HOME"'|g')
-[ -n "$LAUNCHD_PATH" ] || { echo "cannot read the plist PATH from herdr-node.sh"; exit 1; }
 
 # Stub ssh so `ssh -G` resolution is ours. `selfalias` is the macstudio shape:
 # an alias that is nothing like the hostname but points back at this machine.
@@ -153,8 +147,8 @@ export PATH="$TMP/bin:$PATH"
 
 PY3=$(command -v python3)
 
-run_watch_with_path() {  # process one event under an explicit PATH, then stop
-  PATH="$1" "$PY3" "$W" >"$TMP/out" 2>&1 &
+run_watch() {  # process one event, then stop
+  "$PY3" "$W" >"$TMP/out" 2>&1 &
   local pid=$!
   local n=0
   while [ $n -lt 60 ]; do
@@ -165,7 +159,6 @@ run_watch_with_path() {  # process one event under an explicit PATH, then stop
   wait "$pid" 2>/dev/null
 }
 
-run_watch() { run_watch_with_path "$PATH"; }
 
 # grep -c prints 0 and exits 1 when it matches nothing; the substitution still
 # captures the 0, so no `|| echo 0` — that appended a SECOND zero and made
@@ -261,6 +254,19 @@ sys.argv = [sys.argv[0]]
 spec.loader.exec_module(m)
 print("none" if m.refusal_to_dial("anything", None) else "dialled")' "$W")
 eq "nothing is dialled while this machine has no known identity" "none" "$pure"
+
+# The agents run under a PATH this repo writes, and the incident was that PATH
+# missing the directory holding the identity probe. Read the one definition the
+# plists interpolate, so this cannot pass by checking a different daemon's copy.
+
+agent_path=$(sed -n 's/^AGENT_PATH="\(.*\)"$/\1/p' "$HERE/herdr-node.sh" | head -1)
+[ -n "$agent_path" ] || ko "the generated agent PATH is readable from herdr-node.sh"
+for d in /usr/sbin /sbin; do
+  case ":$agent_path:" in
+    *":$d:"*) ok "the generated agent PATH keeps $d" ;;
+    *)        ko "the generated agent PATH keeps $d" "got [$agent_path]" ;;
+  esac
+done
 
 # --- refusing to guess -------------------------------------------------------
 # A tab with several panes is not the fresh tab this assumed. Typing into an
