@@ -1,0 +1,39 @@
+{{ ansible_managed | comment }}
+# Rendered from ansible-ai/templates/node_exporter.service.j2.
+# Edit the template, never this file: the next converge run overwrites it.
+#
+# The textfile directory is the whole reason this template exists. The fleet's
+# previous units read simply `ExecStart=/usr/local/bin/node_exporter`, and
+# node_exporter's textfile collector is compiled in and enabled but reads
+# nothing until its directory is named. Without the flag below, the
+# listening-port metric is written every five minutes and never scraped.
+[Unit]
+Description=Node Exporter
+Documentation=https://github.com/prometheus/node_exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=node_exporter
+Group=node_exporter
+Type=simple
+Restart=on-failure
+RestartSec=5s
+ExecStart=/usr/local/bin/node_exporter \
+    --web.listen-address={{ obs.node_exporter.listen_address }} \
+    --collector.textfile.directory={{ obs.node_exporter.textfile_dir }}
+
+# The exporter reads /proc and /sys and needs nothing else. These are the
+# hardening options that do not break those reads.
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,24 @@
+{{ ansible_managed | comment }}
+# Rendered from ansible-ai/templates/node-listening-ports.service.j2.
+#
+# Oneshot, fired by node-listening-ports.timer. Runs as root because `ss -p`
+# only names processes the caller owns: unprivileged, every socket belonging to
+# another user reports proc="unknown", which looks like data rather than like a
+# permissions problem.
+[Unit]
+Description=Publish listening TCP ports as a node_exporter textfile metric
+Documentation=https://github.com/prometheus/node_exporter#textfile-collector
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/node-listening-ports.sh --dir {{ obs.node_exporter.textfile_dir }}
+
+# The script writes one file into one directory and reads /proc. Nothing else.
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths={{ obs.node_exporter.textfile_dir }}
+PrivateTmp=true
+LockPersonality=true

@@ -1,0 +1,271 @@
+---
+# Fleet observability. Three plays, because one host pattern cannot serve three
+# jobs.
+#
+#   1. exporter  aorus_ai:local_ai   node_exporter + the listening-port collector
+#   2. stack     observability_ai    grafana, prometheus, loki, promtail
+#   3. migrate   observability_ai    the one-time takeover, tagged `never`
+#
+# Every version, port, image and retention window is read from observability.yml.
+# Nothing is written down twice.
+#
+#   Normal run   just fleet-update            (imports this behind tag `observability`)
+#   This alone   ansible-playbook deploy-observability.yml
+#   Exporters    ansible-playbook deploy-observability.yml --tags exporter
+#   Preview      ansible-playbook deploy-observability.yml --check --diff
+#   Takeover     ansible-playbook deploy-observability.yml --tags migrate
+#
+# The migrate play carries ansible's `never` tag, so no routine run can reach it.
+# It restarts a live stack on a host that also runs 18 stubhub-minter
+# containers, so it has to be asked for by name.
+
+# ── 1. Exporters, every host ──────────────────────────────────────
+- name: Converge node_exporter and the listening-port collector
+  hosts: aorus_ai:local_ai
+  gather_facts: true
+  ignore_unreachable: true
+  tags: [exporter]
+  vars:
+    obs: "{{ lookup('file', playbook_dir ~ '/observability.yml') | from_yaml }}"
+
+  tasks:
+    # ignore_unreachable marches absent hosts into the tasks below, where any
+    # fact lookup fails with a message that reads like a broken task rather than
+    # a dead host. update.yml already learned this; the recap books an absent
+    # host as ignored=1, never as unreachable=1, so say it out loud.
+    - name: Say plainly that a host was unreachable
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} UNREACHABLE, nothing was converged here"
+      when: ansible_facts == {}
+
+    - name: Stop cleanly on hosts we could not reach
+      ansible.builtin.meta: end_host
+      when: ansible_facts == {}
+
+    # ── Linux ────────────────────────────────────────────────────
+    - name: Converge node_exporter on Linux
+      when: ansible_system == 'Linux'
+      become: true
+      block:
+        - name: Ensure the node_exporter system user exists
+          ansible.builtin.user:
+            name: node_exporter
+            system: true
+            shell: /usr/sbin/nologin
+            create_home: false
+
+        # Resolved by absolute path, not by `command -v`. A non-login shell's
+        # PATH omits /usr/local/bin, which is how macstudio was reported as
+        # having no exporter while one ran there as root.
+        - name: Read the installed node_exporter version
+          ansible.builtin.shell: |
+            set -o pipefail
+            if [ -x /usr/local/bin/node_exporter ]; then
+              /usr/local/bin/node_exporter --version 2>&1 | head -1 | awk '{print $3}'
+            else
+              echo absent
+            fi
+          args: { executable: /bin/bash }
+          register: ne_installed
+          changed_when: false
+          check_mode: false
+
+        - name: Report the version change a real run would make
+          ansible.builtin.debug:
+            msg: >-
+              {{ inventory_hostname }}: node_exporter
+              {{ ne_installed.stdout | trim }} would become
+              {{ obs.node_exporter.version }} (download, verify checksum, install).
+          when:
+            - ne_installed.stdout | trim != obs.node_exporter.version
+            - ansible_check_mode
+
+        # Skipped under --check on purpose. get_url does not fetch in check
+        # mode, so unarchive would then fail on a file that was never written,
+        # and the preview this playbook documents would always end in a red
+        # failure that means nothing.
+        - name: Install or upgrade node_exporter
+          when:
+            - ne_installed.stdout | trim != obs.node_exporter.version
+            - not ansible_check_mode
+          block:
+            - name: Download the release tarball and its checksums
+              ansible.builtin.get_url:
+                url: "{{ item }}"
+                dest: "/tmp/{{ item | basename }}"
+                mode: "0644"
+              loop:
+                - "{{ ne_base_url }}/node_exporter-{{ obs.node_exporter.version }}.linux-{{ ne_arch }}.tar.gz"
+                - "{{ ne_base_url }}/sha256sums.txt"
+              vars:
+                ne_base_url: "https://github.com/prometheus/node_exporter/releases/download/v{{ obs.node_exporter.version }}"
+                ne_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+            # An unverified binary installed as a root-run service is how a
+            # compromised mirror becomes a compromised fleet. Fail rather than
+            # install on a mismatch.
+            - name: Verify the tarball against the published checksum
+              ansible.builtin.shell: |
+                set -o pipefail
+                cd /tmp
+                grep " node_exporter-{{ obs.node_exporter.version }}.linux-{{ ne_arch }}.tar.gz$" sha256sums.txt \
+                  | sha256sum -c -
+              args: { executable: /bin/bash }
+              vars:
+                ne_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+              changed_when: false
+
+            - name: Unpack the verified tarball
+              ansible.builtin.unarchive:
+                src: "/tmp/node_exporter-{{ obs.node_exporter.version }}.linux-{{ ne_arch }}.tar.gz"
+                dest: /tmp
+                remote_src: true
+              vars:
+                ne_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+            # root:root on purpose. The fleet's binaries were owned by the
+            # login user while the service runs as node_exporter, so anyone who
+            # could write that file could replace a root-installed service.
+            - name: Install the binary
+              ansible.builtin.copy:
+                src: "/tmp/node_exporter-{{ obs.node_exporter.version }}.linux-{{ ne_arch }}/node_exporter"
+                dest: /usr/local/bin/node_exporter
+                remote_src: true
+                owner: root
+                group: root
+                mode: "0755"
+              vars:
+                ne_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+              notify: restart node_exporter
+
+            - name: Remove the download artifacts
+              ansible.builtin.file:
+                path: "{{ item }}"
+                state: absent
+              loop:
+                - "/tmp/node_exporter-{{ obs.node_exporter.version }}.linux-{{ ne_arch }}.tar.gz"
+                - "/tmp/node_exporter-{{ obs.node_exporter.version }}.linux-{{ ne_arch }}"
+                - /tmp/sha256sums.txt
+              vars:
+                ne_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+        # The textfile collector is compiled in and enabled by default; only its
+        # directory is unset, which is why every unit on this fleet publishes
+        # nothing from it.
+        - name: Ensure the textfile collector directory exists
+          ansible.builtin.file:
+            path: "{{ obs.node_exporter.textfile_dir }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Install the listening-port collector
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/../scripts/node-listening-ports.sh"
+            dest: /usr/local/bin/node-listening-ports.sh
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Render the node_exporter unit
+          ansible.builtin.template:
+            src: templates/node_exporter.service.j2
+            dest: /etc/systemd/system/node_exporter.service
+            owner: root
+            group: root
+            mode: "0644"
+          notify: restart node_exporter
+
+        - name: Render the listening-port collector unit and timer
+          ansible.builtin.template:
+            src: "templates/{{ item }}.j2"
+            dest: "/etc/systemd/system/{{ item }}"
+            owner: root
+            group: root
+            mode: "0644"
+          loop:
+            - node-listening-ports.service
+            - node-listening-ports.timer
+          vars:
+            collector: "{{ obs.node_exporter.textfile_collectors | selectattr('name', 'eq', 'listening_ports') | first }}"
+          notify: reload systemd
+
+        - name: Enable node_exporter
+          ansible.builtin.systemd:
+            name: node_exporter
+            enabled: true
+            state: started
+            daemon_reload: true
+
+        # Both of these depend on files a check run never wrote, so systemd
+        # would fail to find a unit that does not exist yet and the preview
+        # would end red for no real reason.
+        - name: Enable the listening-port timer
+          ansible.builtin.systemd:
+            name: node-listening-ports.timer
+            enabled: true
+            state: started
+            daemon_reload: true
+          when: not ansible_check_mode
+
+        # Without this the metric does not appear until the timer first fires,
+        # so a converge run would report success while the dashboard stayed
+        # empty for up to the timer interval.
+        - name: Produce the listening-port metric once now
+          ansible.builtin.command: /usr/local/bin/node-listening-ports.sh --dir {{ obs.node_exporter.textfile_dir }}
+          changed_when: false
+          when: not ansible_check_mode
+
+    # ── macOS ────────────────────────────────────────────────────
+    # Homebrew installs whatever the formula ships and cannot pin a version, so
+    # these hosts are report-only by design. Reporting the gap is honest;
+    # claiming convergence would not be.
+    - name: Converge node_exporter on macOS
+      when: ansible_system == 'Darwin'
+      block:
+        - name: Install node_exporter with homebrew
+          community.general.homebrew:
+            name: node_exporter
+            state: present
+          become: false
+
+        - name: Start node_exporter with brew services
+          ansible.builtin.command: brew services start node_exporter
+          register: brew_svc
+          changed_when: "'Successfully started' in brew_svc.stdout"
+          failed_when: false
+          become: false
+
+        - name: Read what homebrew actually installed
+          ansible.builtin.shell: |
+            set -o pipefail
+            for c in /opt/homebrew/bin/node_exporter /usr/local/bin/node_exporter; do
+              [ -x "$c" ] && { "$c" --version 2>&1 | head -1 | awk '{print $3}'; exit 0; }
+            done
+            echo absent
+          args: { executable: /bin/bash }
+          register: ne_mac
+          changed_when: false
+          check_mode: false
+
+        - name: Report the version gap homebrew cannot close
+          ansible.builtin.debug:
+            msg: >-
+              {{ inventory_hostname }} runs node_exporter {{ ne_mac.stdout | trim }},
+              manifest pins {{ obs.node_exporter.version }}. Homebrew cannot install
+              an arbitrary version, so this host is report-only.
+          when: ne_mac.stdout | trim != obs.node_exporter.version
+
+  handlers:
+    - name: reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+      become: true
+
+    - name: restart node_exporter
+      ansible.builtin.systemd:
+        name: node_exporter
+        state: restarted
+        daemon_reload: true
+      become: true

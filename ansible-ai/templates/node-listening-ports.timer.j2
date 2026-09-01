@@ -1,0 +1,19 @@
+{{ ansible_managed | comment }}
+# Rendered from ansible-ai/templates/node-listening-ports.timer.j2.
+[Unit]
+Description=Refresh the listening-port metric every {{ collector.interval }}
+Documentation=https://github.com/prometheus/node_exporter#textfile-collector
+
+[Timer]
+# Fire shortly after boot so the metric is not missing for a full interval on a
+# freshly rebooted host.
+OnBootSec=1min
+OnUnitActiveSec={{ collector.interval }}
+# Ten machines running the same timer would otherwise all fire on the same
+# second. The jitter costs nothing and spreads the writes.
+RandomizedDelaySec=15s
+AccuracySec=10s
+Unit=node-listening-ports.service
+
+[Install]
+WantedBy=timers.target
