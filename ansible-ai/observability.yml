@@ -68,18 +68,30 @@ node_exporter:
 #   aorus  :9104 mysql     http 200, scraped, but mysql_up 0
 #   aorus  :15692 rabbitmq http 200, NO scrape job at all
 #   aorus4 :9187 postgres  no listener, exporter does not exist
+# `detect` drives `observability.sh discover`, which reads the
+# node_listening_port metric off each host and proposes group membership from
+# what is actually bound. Introspection rather than a prompt: asking a human
+# which hosts run redis is how the answer goes stale, and this fleet had two
+# redis exporters running unnoticed.
+#
+#   service  the port the service itself listens on. Evidence the host has a
+#            role at all, whether or not anything is exporting it.
+#   exporter the port prometheus would scrape. Its absence next to a present
+#            service port is the actionable finding: a role with no exporter.
 exporters:
   redis:
     group: redis_ai
     job: redis
     port: 9121
     present: true
+    detect: { service: 6379, exporter: 9121 }
     dashboard: { gnet_id: 763, revision: 6 }
   mysql:
     group: mysql_ai
     job: mysql
     port: 9104
     present: true
+    detect: { service: 3306, exporter: 9104 }
     dashboard: { gnet_id: 7362, revision: 5 }
   # RabbitMQ needs no separate exporter. 15692 is the built-in
   # rabbitmq_prometheus plugin, already enabled and already answering.
@@ -88,6 +100,7 @@ exporters:
     job: rabbitmq
     port: 15692
     present: true
+    detect: { service: 5672, exporter: 15692 }
     dashboard: { gnet_id: 10991, revision: 15 }
   # The only one that has to be installed rather than merely scraped.
   #
@@ -106,6 +119,7 @@ exporters:
     job: postgres
     port: 9187
     present: false
+    detect: { service: 5432, exporter: 9187 }
     dashboard: { gnet_id: 9628, revision: 8 }
 
 dashboards:

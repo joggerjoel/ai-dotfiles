@@ -313,6 +313,21 @@ sys.exit(0 if len(hosts) == 1 else 1)
     printf '  SKIP  every exporter group exists in the inventory (no inventory here)\n'
   fi
 
+  # discover matches bound ports against these, so an exporter without them is
+  # invisible to introspection and its group silently stays hand-maintained.
+  if python3 -c "
+import sys, yaml
+d = yaml.safe_load(open('$REAL_MANIFEST'))
+bad = [k for k, v in d['exporters'].items()
+       if not ((v.get('detect') or {}).get('service') and (v.get('detect') or {}).get('exporter'))]
+if bad: print('no detect block:', bad, file=sys.stderr)
+sys.exit(1 if bad else 0)
+"; then
+    ok "every exporter declares service and exporter ports for discovery"
+  else
+    ko "every exporter declares service and exporter ports for discovery"
+  fi
+
   # A collector naming a script that does not exist renders a timer that fails
   # on every fire, and a missing metric reads identically to a host with no
   # listening sockets.

@@ -208,8 +208,112 @@ cmd_check() {
   return 1
 }
 
+# ── discover ─────────────────────────────────────────────────────
+# Reads the node_listening_port metric off each host and proposes inventory
+# group membership from what is actually bound.
+#
+# Introspection, not a prompt. Asking which hosts run redis is how the answer
+# goes stale: this fleet had redis exporters answering on aorus2 and aorus4 for
+# an unknown length of time while the hand-written scrape list named only aorus.
+# A question produces an answer that was true once. This produces one that is
+# true now.
+#
+# Prints YAML to paste into the inventory rather than writing it. The inventory
+# is the source of truth for what gets deployed where, so a tool that edits it
+# unattended can silently enrol a host in a role nobody chose.
+
+# Fetches the listening ports of one host as "port proc" lines. Uses the metric
+# the exporter play installs, so discovery costs one scrape and no port scan.
+host_ports() {
+  local host="$1" url
+  if [ "$host" = "localhost" ]; then
+    url="http://127.0.0.1:9100/metrics"
+  else
+    url="http://${host}:9100/metrics"
+  fi
+  curl -s -m 6 "$url" 2>/dev/null \
+    | sed -n 's/^node_listening_port{.*port="\([0-9]*\)".*proc="\([^"]*\)".*$/\1 \2/p'
+}
+
+cmd_discover() {
+  manifest_validate || return 2
+
+  local roles
+  roles="$(python3 - "$MANIFEST" <<'PY'
+import sys, yaml
+with open(sys.argv[1]) as fh:
+    m = yaml.safe_load(fh)
+for name, e in m.get('exporters', {}).items():
+    d = e.get('detect') or {}
+    print(f"{name}\t{e['group']}\t{d.get('service','')}\t{d.get('exporter','')}")
+PY
+)" || return 2
+
+  local hosts; hosts="$(fleet_hosts "$INVENTORY")"
+
+  header "Discovered infrastructure roles"
+  printf "  %-10s %-11s %-9s %s\n" HOST ROLE SERVICE EXPORTER
+  printf "  %-10s %-11s %-9s %s\n" "──────────" "───────────" "─────────" "────────"
+
+  local tmp; tmp="$(mktemp)"
+  local host ports role group svc exp line silent=0
+
+  for host in $hosts; do
+    # `|| ports=""` is load-bearing. curl exits 7 against a host with no
+    # listener, pipefail propagates it, and set -e then killed the loop after
+    # the last reachable host, so the proposed-groups section never printed at
+    # all. An unreachable host must be a row, not the end of the run.
+    ports="$(host_ports "$host")" || ports=""
+    if [ -z "$ports" ]; then
+      # No metric means the exporter play has not reached this host yet. Say so
+      # rather than reporting the host as running nothing, which reads the same
+      # as a host with no infrastructure.
+      printf "  %-10s ${DIM}no node_listening_port metric; run the exporter play here first${RESET}\n" "$host"
+      silent=$((silent + 1))
+      continue
+    fi
+    while IFS=$'\t' read -r role group svc exp; do
+      [ -n "$role" ] || continue
+      local has_svc=no has_exp=no
+      printf '%s\n' "$ports" | awk -v p="$svc" '$1==p{f=1} END{exit !f}' && has_svc=yes
+      printf '%s\n' "$ports" | awk -v p="$exp" '$1==p{f=1} END{exit !f}' && has_exp=yes
+      [ "$has_svc" = yes ] || [ "$has_exp" = yes ] || continue
+      echo "$group $host" >> "$tmp"
+      if [ "$has_exp" = yes ]; then
+        printf "  %-10s %-11s %-9s ${GREEN}%s${RESET}\n" "$host" "$role" "$has_svc" "yes"
+      else
+        printf "  %-10s %-11s %-9s ${YELLOW}%s${RESET}\n" "$host" "$role" "$has_svc" "MISSING"
+      fi
+    done <<< "$roles"
+  done
+
+  echo
+  header "Proposed inventory groups"
+  if [ ! -s "$tmp" ]; then
+    warn "nothing discovered"
+    rm -f "$tmp"
+    return 1
+  fi
+  local g
+  for g in $(cut -d' ' -f1 "$tmp" | sort -u); do
+    echo "  ${g}:"
+    echo "    hosts:"
+    grep "^${g} " "$tmp" | cut -d' ' -f2 | sort -u | sed 's/^/      /;s/$/:/'
+  done
+  rm -f "$tmp"
+
+  echo
+  if [ "$silent" -gt 0 ]; then
+    warn "$silent hosts published no metric, so their roles are unknown, not absent."
+  fi
+  echo -e "  ${DIM}Paste into ansible-ai/inventory.local.yml. Nothing was written.${RESET}"
+  echo -e "  ${DIM}A MISSING exporter means the service runs but nothing scrapes it.${RESET}"
+}
+
 usage() {
-  echo "Usage: observability.sh check [--host <name>] [--manifest <f>] [--inventory <f>]"
+  echo "Usage: observability.sh <check|discover> [--host <name>] [--manifest <f>] [--inventory <f>]"
+  echo "  check     read-only audit of node_exporter versions; exits 1 on drift"
+  echo "  discover  propose inventory groups from what each host is actually binding"
 }
 
 # ── Main ─────────────────────────────────────────────────────────
@@ -228,8 +332,9 @@ main() {
   done
 
   case "$cmd" in
-    check) cmd_check ;;
-    *)     usage; exit 2 ;;
+    check)    cmd_check ;;
+    discover) cmd_discover ;;
+    *)        usage; exit 2 ;;
   esac
 }
 
