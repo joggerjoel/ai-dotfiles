@@ -1,0 +1,75 @@
+---
+# Desired state for the fleet observability stack. This file is the only place
+# a version is written down. The deploy playbook, scripts/observability.sh,
+# update.sh, and scripts/observability.test.sh all read it, so bumping a
+# version here is the whole change.
+#
+# What consumes what:
+#   node_exporter  every host in aorus_ai + local_ai
+#   dashboards     provisioned into the `infra` provider on the Grafana host
+#   stack          containers on the observability_ai host only
+#
+# Scrape targets are deliberately absent. They are generated from the ansible
+# inventory (see templates/prometheus.yml.j2), because a hand-written host list
+# is the drift lib/fleet.sh exists to prevent, and the list this replaces had
+# already gone stale by omitting both macs.
+
+# Checked against github.com/prometheus/node_exporter releases on 2026-09-01.
+# The fleet sat on 1.10.2 until this landed.
+node_exporter:
+  version: "1.12.1"
+  listen_address: ":9100"
+  # Linux installs the release tarball under a systemd unit. macOS uses
+  # homebrew, whose formula can lag upstream; the reconciler reports the gap
+  # rather than failing, since brew will not install an arbitrary version.
+  macos_method: homebrew
+
+# Pinned by revision, not "latest". A dashboard changes when someone bumps a
+# revision in this file and not when grafana.com publishes one.
+# Revision 45 was current on 2026-09-01.
+dashboards:
+  - name: node-exporter-full
+    gnet_id: 1860
+    revision: 45
+    folder: Fleet
+    datasource: prometheus
+
+# Images are pinned to what aorus7 already runs, so taking ownership of the
+# stack does not also upgrade it. Version bumps are a separate, reviewable
+# change.
+#
+# Ports: 3000 belongs to an unrelated node process on aorus7, which is why
+# grafana has always been on 3002. Keeping 3002 preserves existing bookmarks.
+# Only grafana needs to leave the host.
+stack:
+  dir: /opt/observability
+  network: recon-network
+  grafana:
+    image: "grafana/grafana:12.3.3"
+    port: 3002
+    bind: "0.0.0.0"
+    volume: recon-monitoring_grafana_data
+  prometheus:
+    image: "prom/prometheus:v3.9.1"
+    port: 9090
+    bind: "127.0.0.1"
+    volume: recon-monitoring_prometheus_data
+  loki:
+    image: "grafana/loki:3.6.0"
+    port: 3100
+    bind: "127.0.0.1"
+    volume: recon-monitoring_loki_data
+
+# The stubhub-recon-gui repo owns these paths. ai-dotfiles reads them and never
+# writes them: the dashboards mount read-only, and the scrape jobs are pulled in
+# through prometheus `scrape_config_files`. Writing into another repo's working
+# tree would let a git checkout there silently revert the fleet config.
+foreign:
+  recon_monitoring_dir: "~/Developer/stubhub-recon-gui/monitoring"
+  dashboard_providers:
+    - { name: Recon, folder: Recon, path: grafana/dashboards/json }
+    - {
+        name: Ticket Exchange,
+        folder: Ticket Exchange,
+        path: grafana/dashboards/json,
+      }
