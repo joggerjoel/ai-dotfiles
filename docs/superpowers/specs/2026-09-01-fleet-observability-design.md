@@ -158,6 +158,14 @@ Linux hosts get a systemd unit; macOS gets a LaunchDaemon. Both install the
 same verified release tarball, so both pin an exact version. All three Macs are
 arm64.
 
+A converged Mac is not an equivalent Mac, and reporting one as `current` without
+saying so is misleading. macstudio exposes 99 metric families against aorus5's
+330, because darwin has no `/proc`. CPU, load, filesystem, network and disk
+panels work. Memory panels do not: darwin emits `node_memory_total_bytes` where
+Node Exporter Full queries the Linux `node_memory_Mem*` names, so a large part
+of that dashboard is blank for macOS hosts. Proper Mac memory panels need a
+small custom dashboard against the darwin metric names.
+
 Homebrew was the first choice and it was wrong on three counts. brew is not on
 a non-login ssh PATH. macstudio already ran a LaunchDaemon that `brew services`
 would have fought. And a formula tracks upstream rather than the manifest: it
@@ -171,8 +179,16 @@ existing bookmarks keep working. Prometheus and Loki stay on loopback, because
 nothing outside the host reads them directly. `node_exporter` listens on
 `:9100`, which is what the seven Ubuntu hosts already do.
 
-Tailscale binding was the first choice and it is not available. No fleet host
-runs Tailscale except `macair`, which reaches the tailnet by hostname.
+Tailscale binding was the first choice and it is not available, but the reason
+recorded here was wrong for a while and worth correcting. macair is not the only
+host on the tailnet: macstudio answers `tailscale ip -4` with 100.69.192.40.
+What actually rules the tailnet out is aorus7, which runs Prometheus and has no
+Tailscale, so it cannot resolve a tailnet name no matter who else is on it.
+
+That distinction matters for macair. Its `scrape_skip` is correct today, but the
+fix is not "wait for a stable LAN address" as first written. Installing Tailscale
+on aorus7 would make macair scrapeable immediately, and two of ten hosts are
+already on the tailnet.
 
 ### Keep Loki scoped to aorus7
 
