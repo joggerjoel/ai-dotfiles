@@ -50,6 +50,64 @@ node_exporter:
 # Pinned by revision, not "latest". A dashboard changes when someone bumps a
 # revision in this file and not when grafana.com publishes one.
 # Revision 45 was current on 2026-09-01.
+# Infrastructure exporters, one entry per service role.
+#
+# Placement is an inventory group, exactly like observability_ai. A host runs
+# redis, so it joins redis_ai, so prometheus scrapes it and the dashboard fills
+# in. There is no second list.
+#
+# `present: true` means the exporter is already installed and the only missing
+# piece was a scrape job. That was the case for three of these four: the
+# exporters have been up and answering while prometheus never asked.
+#
+# Measured from aorus7 on 2026-09-01, which is the host that would do the
+# scraping:
+#   aorus  :9121 redis     http 200, scraped, redis_up 1
+#   aorus2 :9121 redis     http 200, NOT scraped
+#   aorus4 :9121 redis     http 200, NOT scraped
+#   aorus  :9104 mysql     http 200, scraped, but mysql_up 0
+#   aorus  :15692 rabbitmq http 200, NO scrape job at all
+#   aorus4 :9187 postgres  no listener, exporter does not exist
+exporters:
+  redis:
+    group: redis_ai
+    job: redis
+    port: 9121
+    present: true
+    dashboard: { gnet_id: 763, revision: 6 }
+  mysql:
+    group: mysql_ai
+    job: mysql
+    port: 9104
+    present: true
+    dashboard: { gnet_id: 7362, revision: 5 }
+  # RabbitMQ needs no separate exporter. 15692 is the built-in
+  # rabbitmq_prometheus plugin, already enabled and already answering.
+  rabbitmq:
+    group: rabbitmq_ai
+    job: rabbitmq
+    port: 15692
+    present: true
+    dashboard: { gnet_id: 10991, revision: 15 }
+  # The only one that has to be installed rather than merely scraped.
+  #
+  # Dashboard 9628 rather than 24298. 24298 queries pg_exporter_build_info and
+  # pg_exporter_collector_*, which are internals of Vonng's pg_exporter, a
+  # different program from the prometheus-community postgres_exporter. Pointing
+  # 24298 at postgres_exporter leaves most of it blank. 9628 uses only metrics
+  # postgres_exporter actually emits and has 12.7M downloads against 3k.
+  #
+  # aorus4 runs three separate databases: supabase-db (15.8.1),
+  # pinmap-supabase-db (17.6.1) and realtime-ivr-db (postgres:16). One exporter
+  # per database, so this needs three targets and three sets of credentials,
+  # not one.
+  postgres:
+    group: postgres_ai
+    job: postgres
+    port: 9187
+    present: false
+    dashboard: { gnet_id: 9628, revision: 8 }
+
 dashboards:
   - name: node-exporter-full
     gnet_id: 1860

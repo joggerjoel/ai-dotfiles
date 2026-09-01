@@ -249,6 +249,70 @@ sys.exit(0 if all(pinned(x) for x in d['dashboards']) else 1)
     ko "every dashboard is pinned, by revision or by a repo file"
   fi
 
+  # Every exporter role must name the inventory group that places it. Without
+  # one, the scrape job has no hosts to generate from and the dashboard stays
+  # empty for the same reason it is empty today.
+  if python3 -c "
+import sys, yaml
+d = yaml.safe_load(open('$REAL_MANIFEST'))
+need = ('group', 'job', 'port', 'dashboard')
+bad = [k for k, v in d['exporters'].items() if not all(f in v for f in need)]
+if bad: print('incomplete:', bad, file=sys.stderr)
+sys.exit(1 if bad else 0)
+"; then
+    ok "every exporter names a group, job, port and dashboard"
+  else
+    ko "every exporter names a group, job, port and dashboard"
+  fi
+
+  # Same pinning rule as the fleet dashboards. An unpinned revision tracks
+  # whatever grafana.com publishes next.
+  if python3 -c "
+import sys, yaml
+d = yaml.safe_load(open('$REAL_MANIFEST'))
+bad = [k for k, v in d['exporters'].items()
+       if not (v['dashboard'].get('gnet_id') and v['dashboard'].get('revision'))]
+sys.exit(1 if bad else 0)
+"; then
+    ok "every exporter dashboard is pinned by id and revision"
+  else
+    ko "every exporter dashboard is pinned by id and revision"
+  fi
+
+  # The groups the manifest names must exist in the inventory, or the generated
+  # scrape job silently renders with no targets.
+  INV="$ROOT/ansible-ai/inventory.local.yml"
+  if [ -r "$INV" ]; then
+    if python3 -c "
+import sys, yaml
+d = yaml.safe_load(open('$REAL_MANIFEST'))
+inv = yaml.safe_load(open('$INV'))
+missing = [v['group'] for v in d['exporters'].values() if v['group'] not in inv]
+if missing: print('absent from inventory:', missing, file=sys.stderr)
+sys.exit(1 if missing else 0)
+"; then
+      ok "every exporter group exists in the inventory"
+    else
+      ko "every exporter group exists in the inventory"
+    fi
+
+    # The group the whole design hangs on. It was designed, written about at
+    # length, and never actually added, which the exporter-group check above
+    # did not cover.
+    if python3 -c "
+import sys, yaml
+inv = yaml.safe_load(open('$INV'))
+hosts = (inv.get('observability_ai') or {}).get('hosts') or {}
+sys.exit(0 if len(hosts) == 1 else 1)
+"; then
+      ok "observability_ai exists and names exactly one host"
+    else
+      ko "observability_ai exists and names exactly one host"
+    fi
+  else
+    printf '  SKIP  every exporter group exists in the inventory (no inventory here)\n'
+  fi
+
   # A collector naming a script that does not exist renders a timer that fails
   # on every fire, and a missing metric reads identically to a host with no
   # listening sockets.
