@@ -138,6 +138,33 @@ sys.exit(1 if any(p.startswith('~') for p in paths) else 0)
     ko "no foreign path uses an unexpandable ~"
   fi
 
+  # Recon declares its volumes bare, so they are project-owned and a
+  # `docker compose down -v` in that repo deletes them. Nothing in our compose
+  # file can stop that, so the stack must not sit on them at all.
+  if python3 -c "
+import sys, yaml
+d = yaml.safe_load(open('$REAL_MANIFEST'))
+svcs = [v for k, v in d['stack'].items() if isinstance(v, dict)]
+bad = [s['volume'] for s in svcs if s.get('volume', '').startswith('recon-')]
+sys.exit(1 if bad else 0)
+"; then
+    ok "no service runs on a recon-owned volume"
+  else
+    ko "no service runs on a recon-owned volume"
+  fi
+
+  # Copy, never move. The untouched originals are the rollback.
+  if python3 -c "
+import sys, yaml
+d = yaml.safe_load(open('$REAL_MANIFEST'))
+svcs = [v for k, v in d['stack'].items() if isinstance(v, dict)]
+sys.exit(0 if all('migrate_from' in s for s in svcs) else 1)
+"; then
+    ok "every service names the volume its data is copied from"
+  else
+    ko "every service names the volume its data is copied from"
+  fi
+
   # A dashboard without a revision tracks whatever grafana.com publishes, which
   # makes the deploy non-reproducible.
   if python3 -c "

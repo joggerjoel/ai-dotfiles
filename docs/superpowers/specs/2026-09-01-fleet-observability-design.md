@@ -73,7 +73,7 @@ files. The split repeats in three places.
 | --- | --- | --- |
 | Dashboards | The `infra` provider, in the Fleet folder | The `Recon` and `Ticket Exchange` providers, bind-mounted read only |
 | Prometheus | `prometheus.yml`, holding the fleet jobs | `/etc/prometheus/extra/*.yml`, pulled in by `scrape_config_files` |
-| Compose | `/opt/observability/docker-compose.yml` | The named volumes and `recon-network`, both declared `external: true` |
+| Compose | `/opt/observability/docker-compose.yml` and the `obs_*` volumes | Its own `recon-monitoring_*` volumes, plus `recon-network`, which both stacks share |
 
 Grafana 12.3.3 already runs three dashboard providers, one of them an
 `Infrastructure` provider reading `dashboards/infra`. Prometheus 3.9.1 supports
@@ -273,7 +273,10 @@ Convergence itself is not a subcommand. Ansible owns it.
 
 Running twice must reach the same state as running once.
 
-The exporter reconciler compares versions before acting. Dashboard sync
+`docker volume create` on an existing volume is a no-op, and the volume copy
+runs only inside the migration play, which the `never` tag keeps out of every
+routine run. A second migration is blocked by the marker file. The exporter
+reconciler compares versions before acting. Dashboard sync
 validates that a download is JSON carrying the expected `uid` before it hashes
 or writes anything, so a 404 body or a rate-limit page cannot overwrite a
 working dashboard, and a fetch failure leaves the existing file untouched.
@@ -299,38 +302,45 @@ it by name.
 
 Fail closed. If any check fails, change nothing and report which one.
 
-1. The three named volumes exist exactly as spelled in the manifest. A
-   mismatched name makes Docker create a new empty volume instead of failing,
-   which is a silent path to the data loss this migration promises cannot
-   happen.
-2. `recon-network` exists.
-3. The recon monitoring directory exists at the absolute path in the manifest.
+1. Every `migrate_from` volume in the manifest exists, spelled exactly. Docker
+   creates an empty volume for an unknown name instead of failing, so a typo
+   would copy nothing and the new stack would come up blank while reporting
+   success.
+2. `/var/lib/docker` has room for the copy. It is about 92 MB today, against
+   788 GB free, so this check exists to catch a full disk rather than a large
+   copy.
+3. `recon-network` exists.
+4. The recon monitoring directory exists at the absolute path in the manifest.
    Compose does not expand `~` in a bind-mount source, and an empty mount
    combined with `disableDeletion: false` makes Grafana delete the 20 dashboards
    it had provisioned.
-4. Recon's scrape jobs have already been extracted into the `extra/` directory.
+5. Recon's scrape jobs have already been extracted into the `extra/` directory.
    This is work in the recon repo, not here, and the migration will not proceed
    without it. Skipping it silently drops recon's redis and mysql jobs.
-5. A Grafana admin password and a `GF_SECURITY_SECRET_KEY` are available from
+6. A Grafana admin password and a `GF_SECURITY_SECRET_KEY` are available from
    `~/.claude/.env`.
-6. Port 3002 is held by `recon-grafana` and nothing else.
+7. Port 3002 is held by `recon-grafana` and nothing else.
 
 ### Steps, in this order
 
-1. Snapshot `grafana.db` and the Prometheus and Loki volume metadata into
-   `/opt/observability/backup/<timestamp>/`. This is what makes the rollback
-   claim true. The earlier draft asserted reversibility without ever taking a
-   copy.
+1. Create the four `obs_*` volumes with `docker volume create`. Idempotent, and
+   a no-op on a second run.
 2. Render every config file into `/opt/observability`. Nothing running is
    touched yet, so an interrupt here costs nothing.
-3. Stop the three containers this repo replaces. Use `docker stop` on
-   `recon-grafana`, `recon-prometheus`, and `recon-loki` by name, never
-   `docker compose down`, which would also take `recon-promtail` with it.
-4. Bring up the new stack as `obs-grafana`, `obs-prometheus`, `obs-loki`, and
-   `obs-promtail`.
-5. Health check with a timeout. Grafana `/api/health`, Prometheus `/-/healthy`,
-   Loki `/ready`. A failure here restores from step 1 and stops.
-6. Write `/opt/observability/.migrated-from-recon` only after the health check
+3. Stop the four recon containers by name with `docker stop`, never with
+   `docker compose down`. Grafana must not be writing to `grafana.db` while it
+   is copied, and `compose down` would additionally remove the containers that
+   make rollback a single `up` away.
+4. Copy each volume's contents into its `obs_*` counterpart with a throwaway
+   container, `cp -a` from one mount to the other. The sources are opened read
+   only and are never modified. Around 92 MB in total.
+5. Bring up the new stack as `obs-grafana`, `obs-prometheus`, `obs-loki`, and
+   `obs-promtail`, on the `obs_*` volumes.
+6. Health check with a timeout. Grafana `/api/health`, Prometheus `/-/healthy`,
+   Loki `/ready`. On failure, stop the `obs-*` stack and start recon's again.
+   The original volumes are untouched, so that restores the previous state
+   exactly.
+7. Write `/opt/observability/.migrated-from-recon` only after the health check
    passes.
 
 The marker is written last on purpose. An interrupt at any earlier point leaves
@@ -349,21 +359,39 @@ bind-mounted read only. That is the same split already used for dashboards and
 scrape jobs, so there is one rule rather than three. Promtail is end of life
 upstream and replacing it with Grafana Alloy is deferred, tracked below.
 
-### What rollback actually restores
+### Separate volumes are what make this reversible
 
-Stop the `obs-*` stack, restore `grafana.db` from the step 1 snapshot, then
-bring recon's compose file back up. The image versions in the manifest are
-pinned to exactly what aorus7 runs today, specifically to avoid a Loki schema
-upgrade that no snapshot can reverse.
+The stack runs on `obs_grafana_data`, `obs_prometheus_data`, `obs_loki_data`,
+and `obs_promtail_data`. It does not reuse recon's.
+
+An earlier draft reused the `recon-monitoring_*` volumes and called the survival
+of their contents a feature. That was wrong in a way no wording could fix.
+Recon's compose declares its volumes bare, with no `external: true`, which makes
+them project-owned, so a `docker compose down -v` in that repo deletes them.
+Declaring the same volumes `external` on our side stops us from deleting them
+and does nothing about recon.
+
+Copying instead of sharing buys three things at once. Recon can run any compose
+command it likes without touching fleet data. Our own `down -v` cannot delete
+the volumes either, since they are external to us as well. And the untouched
+originals are the rollback, a byte-for-byte copy still wired to recon's compose
+file.
+
+Rollback is therefore: stop the `obs-*` stack, then `docker compose up -d` in
+recon's monitoring directory. No restore step, because nothing was moved. The
+manifest also pins every image to what aorus7 runs today, so no schema upgrade
+happens that a rollback could not undo.
+
+The two stacks diverge from the moment of cutover, which is expected. Recon's
+volumes hold the state as of migration and stop advancing.
 
 ### Residual risk this repo cannot close
 
-Recon's compose file still declares the same volumes and the same port. A
-routine `docker compose up` in that repo starts a second Grafana against the
-same data, and a `docker compose down -v` there destroys fleet metrics and
-dashboards. Nothing in this repository can prevent that, because writing into
-another repo's working tree is the practice this whole design refuses. Record it
-in the recon repo instead, and treat the step 1 snapshot as the mitigation.
+Recon's compose still binds port 3002 and joins `recon-network`. A routine
+`docker compose up` in that repo starts a second Grafana that collides on the
+port and shows stale data. That is now a confusing afternoon rather than data
+loss, which is the whole gain from copying. Record it in the recon repo, since
+writing into another repo's working tree is the practice this design refuses.
 
 The container rename from `recon-*` to `obs-*` also breaks any peer on
 `recon-network` that addresses those containers by name. Service names stay
@@ -434,8 +462,10 @@ Still open:
 
 - Retention, volume sizes, and container resource limits are unspecified.
   Prometheus and Loki share a host with 18 other containers.
-- Recon's compose file stays live and can start a duplicate Grafana or destroy
-  the shared volumes with `down -v`. This repo cannot close that.
+- Recon's compose file stays live and still binds port 3002, so a routine
+  `docker compose up` there starts a second Grafana that collides on the port
+  and shows stale data. It can no longer destroy fleet data, because the two
+  stacks no longer share volumes.
 - Extracting recon's scrape jobs into `extra/` is a precondition owned by
   another repo. The migration refuses to run until it is done.
 - Container images are pinned by mutable tag rather than by digest, which is the

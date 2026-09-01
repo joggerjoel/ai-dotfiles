@@ -41,6 +41,23 @@ dashboards:
 # Ports: 3000 belongs to an unrelated node process on aorus7, which is why
 # grafana has always been on 3002. Keeping 3002 preserves existing bookmarks.
 # Only grafana needs to leave the host.
+# Volumes are ours, not recon's, and that is the whole point.
+#
+# Recon's compose declares its volumes bare (`prometheus_data:` with no
+# `external: true`), which makes them project-owned. A `docker compose down -v`
+# in that repo deletes them, and no wording in OUR compose file can prevent it.
+# Reusing them would have left every fleet metric and dashboard one routine
+# command in another repository away from deletion.
+#
+# So the stack runs on obs_* volumes that belong to no compose project. They are
+# declared external here as well, so our own `down -v` cannot take them either;
+# the playbook creates them with `docker volume create`, which is idempotent.
+#
+# The migration copies data across rather than moving it, and the untouched
+# recon-monitoring_* volumes are then the rollback. That is a real byte-for-byte
+# copy still attached to recon's compose, which is stronger than the snapshot
+# step an earlier draft described. Total is about 92 MB, so the copy costs
+# seconds.
 stack:
   dir: /opt/observability
   network: recon-network
@@ -48,17 +65,24 @@ stack:
     image: "grafana/grafana:12.3.3"
     port: 3002
     bind: "0.0.0.0"
-    volume: recon-monitoring_grafana_data
+    volume: obs_grafana_data
+    migrate_from: recon-monitoring_grafana_data
   prometheus:
     image: "prom/prometheus:v3.9.1"
     port: 9090
     bind: "127.0.0.1"
-    volume: recon-monitoring_prometheus_data
+    volume: obs_prometheus_data
+    migrate_from: recon-monitoring_prometheus_data
   loki:
     image: "grafana/loki:3.6.0"
     port: 3100
     bind: "127.0.0.1"
-    volume: recon-monitoring_loki_data
+    volume: obs_loki_data
+    migrate_from: recon-monitoring_loki_data
+  promtail:
+    image: "grafana/promtail:3.6.0"
+    volume: obs_promtail_data
+    migrate_from: recon-monitoring_promtail_data
 
 # The stubhub-recon-gui repo owns these paths. ai-dotfiles reads them and never
 # writes them: the dashboards mount read-only, and the scrape jobs are pulled in
