@@ -165,6 +165,58 @@ sys.exit(0 if all('migrate_from' in s for s in svcs) else 1)
     ko "every service names the volume its data is copied from"
   fi
 
+  # A tag can be repointed on the registry without this file changing, which is
+  # the drift this design calls a bug everywhere else.
+  if python3 -c "
+import sys, re, yaml
+d = yaml.safe_load(open('$REAL_MANIFEST'))
+svcs = [v for v in d['stack'].values() if isinstance(v, dict)]
+ok = all(re.fullmatch(r'sha256:[0-9a-f]{64}', s.get('digest', '')) for s in svcs)
+sys.exit(0 if ok else 1)
+"; then
+    ok "every image is pinned by digest, not only by tag"
+  else
+    ko "every image is pinned by digest, not only by tag"
+  fi
+
+  # Unbounded is the failure mode, not a large number. Prometheus needs both a
+  # time and a size bound, because time alone does not stop a cardinality
+  # explosion filling the disk inside the window.
+  if python3 -c "
+import sys, yaml
+r = yaml.safe_load(open('$REAL_MANIFEST'))['retention']
+sys.exit(0 if r['prometheus'].get('time') and r['prometheus'].get('size')
+         and r['loki'].get('period') else 1)
+"; then
+    ok "prometheus is bounded by time and size, loki by period"
+  else
+    ko "prometheus is bounded by time and size, loki by period"
+  fi
+
+  # Loki ignores its retention period unless the compactor is told to enforce
+  # it, and the compactor is off by default. Setting the period alone is a
+  # config that reads correct and deletes nothing.
+  if python3 -c "
+import sys, yaml
+l = yaml.safe_load(open('$REAL_MANIFEST'))['retention']['loki']
+sys.exit(0 if l.get('compactor_retention_enabled') is True else 1)
+"; then
+    ok "loki retention is actually enforced by the compactor"
+  else
+    ko "loki retention is actually enforced by the compactor"
+  fi
+
+  if python3 -c "
+import sys, yaml
+d = yaml.safe_load(open('$REAL_MANIFEST'))
+svcs = [v for v in d['stack'].values() if isinstance(v, dict)]
+sys.exit(0 if all(s.get('mem_limit') for s in svcs) else 1)
+"; then
+    ok "every service has a memory limit"
+  else
+    ko "every service has a memory limit"
+  fi
+
   # A dashboard without a revision tracks whatever grafana.com publishes, which
   # makes the deploy non-reproducible.
   if python3 -c "

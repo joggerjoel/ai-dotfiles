@@ -269,6 +269,74 @@ is believed.
 
 Convergence itself is not a subcommand. Ansible owns it.
 
+## Capacity, retention, and pinning
+
+Every number here was measured on aorus7 on 2026-09-01.
+
+### A docker volume has no size to set
+
+Volumes on the local driver are directories under `/var/lib/docker`. They grow
+until the filesystem fills, and there is no quota. An earlier review asked for
+volume sizes, and there is no such setting to write. Retention is the sizing
+mechanism, so the bounds live on the applications instead.
+
+### Prometheus
+
+Prometheus carries 20,138 active series at 1,115 samples per second. At roughly
+two bytes per compressed sample that is about 193 MB a day, and the three hosts
+this design adds bring it to roughly 215 MB a day. It currently runs on the
+default 15 day retention with no size bound.
+
+Set both a time bound of 90 days and a size bound of 25 GB. Ninety days is about
+19 GB against 788 GB free, so the time bound is what normally applies. The size
+bound exists for the failure that time alone cannot catch: one bad label
+multiplies series and fills the disk well inside the window. Whichever bound is
+hit first wins.
+
+### Loki
+
+Loki has no retention configured, so logs grow forever. It holds 1.3 MB today
+only because aorus7 is the sole host shipping logs, and shipping fleet wide
+would multiply that.
+
+Set a 30 day period, shorter than the metrics window on purpose. Logs are bulky
+per unit of insight and are mostly read within days. Metrics are what you go
+back a quarter to compare against.
+
+Loki also ignores its retention period unless the compactor is told to enforce
+it, and the compactor is off by default. Setting the period alone produces a
+config that reads correct and deletes nothing, so `retention_enabled` and a
+`delete_request_store` are set with it.
+
+### Memory limits bound a runaway, they are not a capacity plan
+
+aorus7 has 187 GB of RAM with 98 GB available and 32 cores. All four
+observability containers together use 328 MB, which is grafana 133, prometheus
+81, loki 73, and promtail 40. A review called this a critical risk of the host
+running out of memory. On these numbers it is not.
+
+Limits are still worth setting, at roughly ten times observed usage, so they
+never bind in normal running and still cap a cardinality explosion. Prometheus
+gets 4 GB because it is the one whose memory scales with series count. Grafana
+gets 1 GB, Loki 2 GB, promtail 512 MB. The total ceiling is under 4 percent of
+host RAM.
+
+No CPU limits. The cores sit near idle for these services, and a CPU cap adds
+latency without preventing any failure observed here.
+
+### Images are pinned by digest
+
+A tag can be repointed on the registry without this repository changing, which
+is the drift this design treats as a bug everywhere else. Every service now
+carries both a tag, for humans, and a digest, which is what Docker resolves.
+
+One caveat found while resolving them. Recon runs Grafana and Prometheus from
+`:latest`, so the version numbers in the manifest were read from the running
+binaries rather than from image tags. Pinning those two pulls a different image
+object than the one running now, even though the versions match. Loki and
+promtail digests are byte-identical to what is live. Treat the Grafana and
+Prometheus cutover as a version change to verify, not a no-op.
+
 ## Idempotency
 
 Running twice must reach the same state as running once.
@@ -458,20 +526,21 @@ Resolved since that review, by moving convergence into the ansible path:
 - Package managers are ruled out with evidence, and the macOS path is stated as
   report-only.
 
-Still open:
+- Retention, memory limits, and digest pinning are all set, from measured
+  numbers rather than guesses. Volume size turned out to have no setting to
+  write, so retention does that job.
 
-- Retention, volume sizes, and container resource limits are unspecified.
-  Prometheus and Loki share a host with 18 other containers.
+Still open:
 - Recon's compose file stays live and still binds port 3002, so a routine
   `docker compose up` there starts a second Grafana that collides on the port
   and shows stale data. It can no longer destroy fleet data, because the two
   stacks no longer share volumes.
 - Extracting recon's scrape jobs into `extra/` is a precondition owned by
   another repo. The migration refuses to run until it is done.
-- Container images are pinned by mutable tag rather than by digest, which is the
-  drift class this design otherwise treats as a bug.
 - Dashboard downloads are not verified against a pinned checksum, only
   validated as well-formed.
+- Cutting Grafana and Prometheus over from `:latest` to a pinned digest is a
+  real version change on those two, not a no-op. Verify them after migration.
 - node_exporter listens on `:9100` on all interfaces, including a laptop that
   leaves the LAN.
 - Replacing Promtail with Grafana Alloy, and shipping logs from more than one

@@ -61,28 +61,84 @@ dashboards:
 stack:
   dir: /opt/observability
   network: recon-network
+  # Images carry both a tag and a digest. The tag is for humans, the digest is
+  # what docker resolves. A tag can be repointed on the registry without this
+  # file changing, which is the same silent drift this design treats as a bug
+  # everywhere else. Digests were read from the registry on 2026-09-01; the loki
+  # and promtail ones match the images aorus7 already runs.
+  #
+  # Note that recon runs grafana and prometheus from `:latest`, so pinning those
+  # two pulls a different image object than the one running now, even though the
+  # version numbers match. Loki and promtail are byte-identical to what is live.
+  #
+  # mem_limit bounds a runaway, it is not a capacity plan. Measured usage on
+  # aorus7 is grafana 133M, prometheus 81M, loki 73M, promtail 40M, about 328M
+  # combined on a host with 187G of RAM and 98G free. The limits below are
+  # roughly ten times observed, so they never bind in normal running and still
+  # cap a cardinality explosion. No cpu limits: 32 cores sit near idle for these
+  # services, and a cpu cap adds latency without preventing any failure seen
+  # here.
   grafana:
     image: "grafana/grafana:12.3.3"
+    digest: "sha256:9e1e77ade304069aee3196e9a4f210830e96e80ce9a2640891eccc324b152faf"
     port: 3002
     bind: "0.0.0.0"
     volume: obs_grafana_data
     migrate_from: recon-monitoring_grafana_data
+    mem_limit: 1g
   prometheus:
     image: "prom/prometheus:v3.9.1"
+    digest: "sha256:1f0f50f06acaceb0f5670d2c8a658a599affe7b0d8e78b898c1035653849a702"
     port: 9090
     bind: "127.0.0.1"
     volume: obs_prometheus_data
     migrate_from: recon-monitoring_prometheus_data
+    mem_limit: 4g
   loki:
     image: "grafana/loki:3.6.0"
+    digest: "sha256:6a705de65df88aa0d90a44779606b0042722c86637335a73858f65f9fe9f9557"
     port: 3100
     bind: "127.0.0.1"
     volume: obs_loki_data
     migrate_from: recon-monitoring_loki_data
+    mem_limit: 2g
   promtail:
     image: "grafana/promtail:3.6.0"
+    digest: "sha256:2aafa34b3d5fba888c51081d3a22c234906ffd3cafc5def11c581549b297d449"
     volume: obs_promtail_data
     migrate_from: recon-monitoring_promtail_data
+    mem_limit: 512m
+
+# A docker volume on the local driver has no size of its own. It is a directory
+# on /var/lib/docker, so it grows until the filesystem is full and there is no
+# quota to set. Retention IS the volume sizing mechanism, which is why these
+# numbers live here rather than a `size:` key that docker would ignore.
+#
+# Measured on aorus7 on 2026-09-01: prometheus carries 20138 active series at
+# 1115 samples/sec. At roughly 2 bytes per compressed sample that is ~193 MB a
+# day, and the three hosts this design adds take it to about 215 MB a day.
+# 90 days is therefore ~19 GB against 788 GB free.
+#
+# Both a time and a size bound are set on purpose. Time alone does not protect
+# against a cardinality explosion, where one bad label multiplies series and
+# fills the disk well inside the retention window. Whichever bound is hit first
+# wins.
+#
+# Loki currently has no retention configured at all, so logs grow forever. It
+# holds 1.3 MB today because only aorus7 ships logs. Shipping fleet wide would
+# multiply that, so its window is shorter than the metrics one: logs are bulky
+# per unit of insight and are mostly read within days, while metrics are what
+# you go back a quarter to compare against.
+retention:
+  prometheus:
+    time: 90d
+    size: 25GB
+  loki:
+    period: 30d
+    # Loki only enforces retention when the compactor is told to, and it is off
+    # by default. Setting the period without these two does nothing at all.
+    compactor_retention_enabled: true
+    delete_request_store: filesystem
 
 # The stubhub-recon-gui repo owns these paths. ai-dotfiles reads them and never
 # writes them: the dashboards mount read-only, and the scrape jobs are pulled in
