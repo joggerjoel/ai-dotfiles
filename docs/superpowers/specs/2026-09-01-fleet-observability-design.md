@@ -621,6 +621,20 @@ Resolved since that review, by moving convergence into the ansible path:
   numbers rather than guesses. Volume size turned out to have no setting to
   write, so retention does that job.
 
+Resolved on the fleet itself, not just in this repo:
+
+- node_exporter 1.12.1 on all seven Linux hosts and on macstudio, from the
+  verified release tarball, binaries root:root.
+- macOS converges by tarball and LaunchDaemon rather than homebrew. brew is not
+  on a non-login ssh PATH, macstudio already ran a LaunchDaemon that
+  `brew services` would have fought, and a formula cannot pin a version even
+  when it happens to ship the right one today.
+- `mysql_up` was 0 because the exporter authenticated as a MySQL user that did
+  not exist. Its config at /etc/mysql/mysqld_exporter.cnf named `exporter` and
+  `SELECT user FROM mysql.user` returned nothing. Created with PROCESS,
+  REPLICATION CLIENT, SLAVE MONITOR and SELECT on performance_schema only.
+  mysql_up now reads 1 with 1080 series, so dashboards 07 and 08 have data.
+
 Still open:
 - Recon's compose file stays live and still binds port 3002, so a routine
   `docker compose up` there starts a second Grafana that collides on the port
@@ -634,6 +648,12 @@ Still open:
   real version change on those two, not a no-op. Verify them after migration.
 - node_exporter listens on `:9100` on all interfaces, including a laptop that
   leaves the LAN.
+- macair and the control node have no exporter. Both need a sudo password;
+  passwordless sudo is configured on macstudio but not on those two.
+- postgres_exporter is not deployed. aorus4 runs three databases and the two
+  supabase ones publish no port, so an exporter has to join each container's
+  network. Their only known credential is `supabase_admin`, a superuser, and
+  monitoring should not use it.
 - Replacing Promtail with Grafana Alloy, and shipping logs from more than one
   host.
 
