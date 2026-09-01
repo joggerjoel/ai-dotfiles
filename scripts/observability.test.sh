@@ -154,6 +154,39 @@ else
   ko "the scrape template renders valid YAML with the right targets"
 fi
 
+# --- the migration cannot run by accident -----------------------------------
+# The gate is worthless if a later edit drops the tag. This is the one property
+# where a regression restarts a live monitoring stack on a host also running 18
+# production containers, so assert it against ansible's own task list rather
+# than by reading the file.
+
+PB="$ROOT/ansible-ai/deploy-observability.yml"
+INV_REAL="$ROOT/ansible-ai/inventory.local.yml"
+
+if command -v ansible-playbook >/dev/null 2>&1 && [ -r "$INV_REAL" ]; then
+  reachable=$(cd "$ROOT/ansible-ai" && ansible-playbook deploy-observability.yml \
+      -i inventory.local.yml --list-tasks 2>/dev/null \
+      | grep -cE "Copy each volume|Stop the recon containers|Record that the migration") || reachable=0
+  eq "no migration task runs without --tags migrate" "0" "$reachable"
+
+  gated=$(cd "$ROOT/ansible-ai" && ansible-playbook deploy-observability.yml \
+      -i inventory.local.yml --tags migrate --list-tasks 2>/dev/null \
+      | grep -cE "Copy each volume|Stop the recon containers") || gated=0
+  [ "$gated" -ge 2 ] \
+    && ok "the migration tasks do exist and are reachable with --tags migrate" \
+    || ko "the migration tasks do exist and are reachable with --tags migrate" "found $gated"
+
+  # A routine fleet-update must still converge exporters and the stack.
+  runs=$(cd "$ROOT/ansible-ai" && ansible-playbook update.yml \
+      -i inventory.local.yml --list-tasks 2>/dev/null \
+      | grep -cE "TAGS: \[(exporter|stack)") || runs=0
+  [ "$runs" -gt 10 ] \
+    && ok "update.yml still runs the exporter and stack plays" \
+    || ko "update.yml still runs the exporter and stack plays" "found $runs"
+else
+  printf '  SKIP  migration gate checks (no ansible-playbook or inventory here)\n'
+fi
+
 # --- the manifest boundary --------------------------------------------------
 # Every value is validated once, here. Nothing downstream re-checks it.
 
