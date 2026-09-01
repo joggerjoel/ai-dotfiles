@@ -6,7 +6,8 @@ set -uo pipefail
 #   codex (OpenAI), cursor-agent (Cursor), opencode, gemini (Google), pi (Earendil),
 #   grok (xAI), kimi (Moonshot Kimi Code),
 #   cortex (Snowflake Cortex Code), headroom (context-optimization proxy),
-#   skillspector (NVIDIA agent-skill security scanner).
+#   skillspector (NVIDIA agent-skill security scanner),
+#   claude-mem (the memory plugin's repair CLI).
 # Also reports (but never updates) the 9router gateway — a Docker
 # service on the fleet, not a local CLI; see the block at the bottom.
 #
@@ -265,6 +266,17 @@ register_cli "pi" "pi" "\"%BIN%\" update self || $PI_INSTALL" "$PI_INSTALL" "npm
 # many third-party grok-cli packages are NOT interchangeable.
 GROK_INSTALL="npm install -g @xai-official/grok@latest"
 register_cli "grok" "grok" "$GROK_INSTALL" "$GROK_INSTALL" "npm_latest @xai-official/grok"
+
+# claude-mem (Claude Code memory) — npm global. The PLUGIN ships the skills,
+# hooks and MCP server; the `claude-mem` CLI that repairs them is a SEPARATE
+# npm package, and nothing here declared it. Unregistered, it resolved only
+# through `npx`, which stops to ask "Ok to proceed?" before downloading 13 MB —
+# and the one moment you reach for `claude-mem restart` or `claude-mem doctor`
+# is mid-outage, on a box that may be unattended, over a link that may be the
+# thing that broke. Hit 2026-09-01: the observer had been failing for 9 hours
+# and the documented recovery command was itself not installed.
+CLAUDE_MEM_INSTALL="npm install -g claude-mem@latest"
+register_cli "claude-mem" "claude-mem" "$CLAUDE_MEM_INSTALL" "$CLAUDE_MEM_INSTALL" "npm_latest claude-mem"
 
 # kimi (Kimi Code CLI, Moonshot) — installs to ~/.kimi-code/bin, which is off
 # PATH in the non-login shells Ansible and cron use, so resolve it by absolute
