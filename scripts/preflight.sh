@@ -15,6 +15,14 @@ CLAUDE_JSON="${PREFLIGHT_CLAUDE_JSON:-$HOME/.claude.json}"
 SETTINGS_JSON="${PREFLIGHT_SETTINGS_JSON:-$HOME/.claude/settings.json}"
 ENV_FILE="${PREFLIGHT_ENV_FILE:-$HOME/.claude/.env}"
 SKILLS_DIR="${PREFLIGHT_SKILLS_DIR:-$DOTFILES_DIR/skills}"
+# Plugin health specs, newline-separated, same fields as PLUGIN_ASSETS.
+# Overridable for the same reason every path above is: a plugin's CLI resolves
+# on PATH and its ledger is an absolute path in the real $HOME, neither of
+# which can be redirected the way SKILLS_DIR can. Without this seam every
+# fixture run would probe this machine's actual plugins and a healthy fixture
+# would fail because something unrelated was broken. `-` not `:-`, so a
+# fixture can set it EMPTY to mean "no plugins" rather than "use the default".
+PLUGIN_SPECS="${PREFLIGHT_PLUGIN_ASSETS-$(printf '%s\n' ${PLUGIN_ASSETS+"${PLUGIN_ASSETS[@]}"})}"
 SMOKE_DIR="${PREFLIGHT_SMOKE_DIR:-$DOTFILES_DIR/tests/smoke}"
 MCP_TIMEOUT="${PREFLIGHT_MCP_TIMEOUT:-180}"
 
@@ -278,6 +286,71 @@ probe_hooks() {
              | awk '{print $1}' | grep -E '^/|^\$HOME|^~' | sed "s|^~|$HOME|; s|^\$HOME|$HOME|")
 }
 
+# Marketplace plugins: presence, liveness, and FUNCTION.
+#
+# This class exists because the other probes structurally cannot see a plugin
+# that is connected and still not working — see PLUGIN_ASSETS in
+# lib/integrations.sh for the case that produced it. probe_mcp asks whether a
+# server answers a handshake; it has no way to ask whether the thing behind
+# that handshake is still doing its job.
+#
+# Ordered presence -> liveness -> function, and each stage `continue`s on
+# failure: a missing CLI has no health to report, and a plugin whose doctor is
+# failing will produce a stale ledger as a CONSEQUENCE. Reporting both would
+# bury the cause under its own symptom.
+probe_plugins() {
+  local spec name cli health ledger stale out detail last fails age
+  [ -n "$PLUGIN_SPECS" ] || return
+  while IFS= read -r spec; do
+    [ -n "$spec" ] || continue
+    IFS='|' read -r name cli health ledger stale <<<"$spec"
+
+    # Presence. A real finding on its own: an absent CLI is what sends
+    # `claude-mem restart` through npx, which stops to prompt for a download
+    # at precisely the moment you are trying to recover something.
+    if [ -n "$cli" ] && ! command -v "$cli" >/dev/null 2>&1; then
+      add_finding plugin "$name" fail "$cli not on PATH — recovery commands fall through to npx" no
+      continue
+    fi
+
+    # Liveness. The plugin's own doctor knows its dependencies; a non-zero
+    # exit means a REQUIRED check failed, and its ✗ line names which one.
+    if [ -n "$health" ]; then
+      if ! out=$(with_timeout 60 bash -c "$health" 2>&1); then
+        detail=$(printf '%s' "$out" | grep -F '✗' | head -1 | sed 's/^[[:space:]]*//')
+        add_finding plugin "$name" fail "${detail:-health check failed: $health}" no
+        continue
+      fi
+    fi
+
+    [ -n "$ledger" ] || continue
+    if [ ! -f "$ledger" ]; then
+      add_finding plugin "$name" unknown "no ledger at $ledger — cannot tell whether it is working" no
+      continue
+    fi
+
+    # Function. `lastSuccessAt` is deliberately what decides, NOT
+    # consecutiveFailures: that counter resets on any single success, so a
+    # plugin that briefly recovered and broke again reports a reassuring 0
+    # while its real work is still being lost. Age since the last success is
+    # the one number a restart cannot launder.
+    last=$(jq -r '.lastSuccessAt // empty' "$ledger" 2>/dev/null)
+    fails=$(jq -r '.consecutiveFailures // 0' "$ledger" 2>/dev/null)
+    if [ -z "$last" ]; then
+      add_finding plugin "$name" unknown "no successful run ever recorded in $ledger" no
+      continue
+    fi
+    age=$(( $(date +%s) - last / 1000 ))
+    if [ "$age" -ge "${stale:-21600}" ]; then
+      add_finding plugin "$name" fail "not working: last success ${age}s ago, ${fails} consecutive failures" no
+    elif [ "${fails:-0}" -gt 0 ]; then
+      add_finding plugin "$name" unknown "failing now: ${fails} consecutive, last success ${age}s ago" no
+    else
+      add_finding plugin "$name" pass "working; last success ${age}s ago" no
+    fi
+  done <<<"$PLUGIN_SPECS"
+}
+
 # Repo-owned skills: frontmatter parses, name matches directory, referenced
 # relative paths exist.
 probe_skills() {
@@ -367,6 +440,9 @@ render_human() {
   render_class config "CONFIG FILES"
   render_class mcp   "MCP SERVERS"
   render_class cli   "MANDATED CLIS"
+  # Directly after MCP SERVERS on purpose: this is the section that says
+  # whether an asset listed as ✔ Connected up there is actually working.
+  render_class plugin "PLUGIN HEALTH"
   render_class env   "ENV-VAR SERVICES"
   render_class hook  "HOOKS & SCRIPTS"
   render_class skill "REPO SKILLS"
@@ -540,6 +616,7 @@ main() {
 
   probe_mcp
   probe_clis
+  probe_plugins
   probe_env
   probe_hooks
   probe_skills

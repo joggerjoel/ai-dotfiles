@@ -23,6 +23,14 @@ cleanup_dirs() {
 }
 trap cleanup_dirs EXIT INT
 
+# probe_plugins resolves a CLI on PATH and reads an absolute ledger in the real
+# $HOME — neither redirectable the way the fixture paths below are. Exported
+# EMPTY once here so every invocation in this file is hermetic: otherwise a
+# healthy fixture fails whenever a plugin on THIS machine happens to be broken,
+# which is the opposite of what these tests are for. The probe's own coverage
+# injects specs explicitly (see "plugin health" below).
+export PREFLIGHT_PLUGIN_ASSETS=""
+
 report() {
   if [ "$1" = "pass" ]; then
     PASS=$((PASS + 1)); echo "  ok   $2"
@@ -934,6 +942,71 @@ if [ -d "$SKILLS_HOME/.claude/skills/keep-me" ]; then
 else
   report fail "install_skills still installs a skill present in the repo" "keep-me missing"
 fi
+
+# --- plugin health: presence, liveness, and function ------------------------
+# The class exists because a plugin can pass every other probe and still not
+# work, so the case that matters most is the LAST one: health command green,
+# ledger stale. Specs are injected rather than taken from PLUGIN_ASSETS so the
+# probe is exercised without this machine's real plugins deciding the result.
+
+PLUGDIR=$(mktemp -d); CLEANUP_DIRS+=("$PLUGDIR")
+mkdir -p "$PLUGDIR/bin"
+printf '#!/bin/sh\nexit 0\n' >"$PLUGDIR/bin/goodplug"; chmod +x "$PLUGDIR/bin/goodplug"
+
+run_plugin_probe() {  # <specs> -> preflight stdout
+  PATH="$PLUGDIR/bin:$TESTS_DIR/stubs:$PATH" \
+  PREFLIGHT_PLUGIN_ASSETS="$1" \
+  PREFLIGHT_FIXTURE="$TESTS_DIR/fixtures/healthy" \
+  PREFLIGHT_CLAUDE_JSON="$TESTS_DIR/fixtures/healthy/claude.json" \
+  PREFLIGHT_SETTINGS_JSON="$TESTS_DIR/fixtures/healthy/settings.json" \
+  PREFLIGHT_ENV_FILE="$TESTS_DIR/fixtures/healthy/env" \
+  PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/healthy/skills" \
+  PREFLIGHT_SMOKE_DIR="$TESTS_DIR/fixtures/healthy/smoke" \
+    bash "$REPO_DIR/scripts/preflight.sh" 2>&1
+}
+
+out=$(run_plugin_probe "ghostplug|ghostplug-absent|||")
+case "$out" in
+  *"ghostplug"*"not on PATH"*) report pass "a plugin whose CLI is missing fails the probe" ;;
+  *) report fail "a plugin whose CLI is missing fails the probe" "got: $(printf '%s' "$out" | grep -i ghostplug)" ;;
+esac
+
+# The whole point of the class: green handshake, green doctor, dead ledger.
+STALE_LEDGER="$PLUGDIR/stale.json"
+printf '{"lastSuccessAt": 1, "consecutiveFailures": 12}\n' >"$STALE_LEDGER"
+out=$(run_plugin_probe "stuckplug|goodplug||$STALE_LEDGER|3600")
+case "$out" in
+  *"stuckplug"*"not working"*"12 consecutive failures"*)
+    report pass "a healthy CLI with a stale ledger is still reported as not working" ;;
+  *) report fail "a healthy CLI with a stale ledger is still reported as not working" \
+       "got: $(printf '%s' "$out" | grep -i stuckplug)" ;;
+esac
+
+# consecutiveFailures resets on any success, so a plugin that briefly recovered
+# must NOT read as healthy just because that counter is back to zero.
+FRESH_LEDGER="$PLUGDIR/fresh.json"
+printf '{"lastSuccessAt": %s000, "consecutiveFailures": 0}\n' "$(date +%s)" >"$FRESH_LEDGER"
+# Asserted on the ✔ marker, not the detail text: render_class prints details
+# only for non-pass verdicts and collapses passing findings to a list of names.
+out=$(run_plugin_probe "okplug|goodplug||$FRESH_LEDGER|3600")
+case "$out" in
+  *"✔ okplug"*) report pass "a fresh ledger reports the plugin as working" ;;
+  *) report fail "a fresh ledger reports the plugin as working" "got: $(printf '%s' "$out" | grep -i okplug)" ;;
+esac
+
+# A failing health command must win over the ledger — cause, not symptom.
+out=$(run_plugin_probe "sickplug|goodplug|false|$FRESH_LEDGER|3600")
+case "$out" in
+  *"sickplug"*"health check failed"*) report pass "a failing health command outranks a fresh ledger" ;;
+  *) report fail "a failing health command outranks a fresh ledger" "got: $(printf '%s' "$out" | grep -i sickplug)" ;;
+esac
+
+# The seam itself: empty means "no plugins", not "fall back to the real ones".
+out=$(run_plugin_probe "")
+case "$out" in
+  *"PLUGIN HEALTH"*) report fail "an empty spec list probes nothing" "PLUGIN HEALTH section rendered" ;;
+  *) report pass "an empty spec list probes nothing" ;;
+esac
 
 echo ""
 echo "  $PASS passed, $FAIL failed"

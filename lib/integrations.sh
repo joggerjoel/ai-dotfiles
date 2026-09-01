@@ -32,6 +32,38 @@ MANDATED_CLIS=(
   "jq"
 )
 
+# Marketplace PLUGINS that ship working parts of their own — a CLI, a daemon, a
+# database — and can therefore be broken in ways the other probes structurally
+# cannot see.
+#
+# The gap this closes, found 2026-09-01: claude-mem's MCP server answered
+# `claude mcp list` with "✔ Connected" for the nine hours its observer was
+# failing every write with FOREIGN KEY constraint failed. Connectivity was
+# never the question. A plugin has three separable states and the existing
+# probes only cover the first two:
+#
+#   presence  is the CLI installed          -> MANDATED_CLIS / probe_clis
+#   liveness  does it answer a handshake    -> probe_mcp
+#   FUNCTION  is it doing its actual job    -> this registry, probe_plugins
+#
+# Plugin assets are invisible to the other registries by construction: the CLI
+# is not in MANDATED_CLIS, the MCP server is not a ~/.claude.json key, and the
+# skills are not under $DOTFILES_DIR/skills. Nothing was misconfigured — there
+# was simply nothing pointed at them.
+#
+# Format: name|cli|health_cmd|ledger|stale_after
+#   cli          binary that must resolve; empty = skip the presence check
+#   health_cmd   exits non-zero when a REQUIRED check fails; empty = skip
+#   ledger       JSON file carrying the function signal. Contract is two keys:
+#                `lastSuccessAt` (epoch ms of the last real success) and
+#                `consecutiveFailures`. Empty = no function signal available.
+#   stale_after  seconds since lastSuccessAt before the asset is called stale.
+#                A plugin that has not succeeded in this long is failing
+#                silently even when every other light is green.
+PLUGIN_ASSETS=(
+  "claude-mem|claude-mem|claude-mem doctor|$HOME/.claude-mem/observer-health.json|21600"
+)
+
 # Map an integration name to its key in ~/.claude.json.
 mcp_key_for() {
   case "$1" in

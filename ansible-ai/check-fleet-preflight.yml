@@ -1,0 +1,68 @@
+---
+# Fleet asset health — run preflight.sh on every host and report.
+#
+# ONE play for every asset class, not one play per asset. scripts/preflight.sh
+# already probes MCP servers, mandated CLIs, plugin health, env-var services,
+# hooks and repo skills; all of that logic stopped at the control node until
+# this existed. Registering a new MCP server or plugin in lib/integrations.sh
+# now reaches the whole fleet for free — the alternative, a playbook per asset,
+# grows with the roster and drifts one asset at a time.
+#
+# Strictly READ-ONLY. No --quarantine: disabling an asset across the fleet on
+# the strength of one probe is exactly the blast radius you do not want from a
+# routine update, and preflight's own docs say a `!` (needs authentication)
+# asset is never auto-disabled. Contain by hand, per host, having read this.
+#
+# Never fails the run. A broken asset must not abort a fleet update that is
+# otherwise fine — but it must not scroll past unnoticed either, which is what
+# the explicit FAIL report at the end is for.
+#
+#   Check only:      cd ansible-ai && ansible-playbook check-fleet-preflight.yml
+#   Skip in update:  ansible-playbook update.yml --skip-tags preflight
+- name: Verify configured assets actually work (preflight)
+  hosts: ai_all
+  gather_facts: true
+  ignore_unreachable: true
+
+  tasks:
+    - name: Is ai-dotfiles present?
+      ansible.builtin.stat:
+        path: "{{ dotfiles_dir }}/scripts/preflight.sh"
+      register: preflight_stat
+
+    - name: End host without preflight
+      ansible.builtin.meta: end_host
+      when: not preflight_stat.stat.exists
+
+    # Runs AFTER the repo refresh and the CLI upgrades in update.yml, so it
+    # probes the state that pass actually produced rather than the one it
+    # inherited. `claude` and the plugin CLIs live in login-shell PATH
+    # entries Ansible's non-login shell does not get, hence bash -lc.
+    - name: Probe every configured asset
+      ansible.builtin.shell: bash -lc './scripts/preflight.sh'
+      args:
+        chdir: "{{ dotfiles_dir }}"
+      register: preflight_run
+      changed_when: false
+      # rc 1 = at least one asset failed its probe (the finding we want, not an
+      # error). rc 2 = preflight could not run at all, which is a different and
+      # louder problem — both are reported below rather than aborting the play.
+      failed_when: false
+
+    - name: Report asset health
+      ansible.builtin.debug:
+        msg: >-
+          {{ preflight_run.stdout_lines | default(
+               ['preflight produced no report — rc=' ~ (preflight_run.rc | default('n/a'))
+                ~ ' err: ' ~ (preflight_run.stderr | default('') | trim | truncate(160))]) }}
+
+    # Separate from the table on purpose. The table is long and scrolls; this
+    # is the one line a human scanning a fleet recap will actually catch.
+    - name: Flag hosts with failing assets
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          {{ 'PREFLIGHT COULD NOT RUN — ' ~ (preflight_run.stderr | default('') | trim | truncate(120))
+             if preflight_run.rc | default(0) == 2
+             else 'ASSETS FAILING — see the table above; contain by hand with `just preflight --quarantine`' }}
+      when: preflight_run.rc | default(0) != 0

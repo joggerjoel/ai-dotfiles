@@ -13,6 +13,10 @@
 #   5. Refresh the native headroom proxy   (imports deploy-headroom-proxy.yml
 #      — headroom_native_ai hosts only; restarts the systemd user unit when
 #      the running proxy lags the upgraded CLI. Skip with --skip-tags headroom)
+#   9. Verify every asset actually works   (imports check-fleet-preflight.yml —
+#      runs scripts/preflight.sh per host: MCP servers, mandated CLIs, plugin
+#      health, env vars, hooks, skills. Read-only, never quarantines, never
+#      fails the run. Skip with --skip-tags preflight)
 #
 # Workflow: push changes to github.com/joggerjoel/ai-dotfiles, then run this
 # to propagate them to the whole fleet.
@@ -176,3 +180,14 @@
 # Skip with:  ansible-playbook update.yml --skip-tags claude-token
 - import_playbook: deploy-claude-token.yml
   tags: [claude-token]
+
+# ── 9. Asset health (ai_all) ────────────────────────────────────────────────
+# LAST on purpose: it reports the state every play above just produced, so a
+# CLI installed in step 3 or a token asserted in step 8 is already in place
+# when it probes. Runs scripts/preflight.sh — MCP servers, mandated CLIs,
+# plugin health, env-var services, hooks and repo skills — which until now
+# only ever ran on the control node.
+# Read-only; never quarantines, and never fails the run.
+# Skip with:  ansible-playbook update.yml --skip-tags preflight
+- import_playbook: check-fleet-preflight.yml
+  tags: [preflight]
