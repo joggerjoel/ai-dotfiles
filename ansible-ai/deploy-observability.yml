@@ -218,29 +218,26 @@
           when: not ansible_check_mode
 
     # ── macOS ────────────────────────────────────────────────────
-    # Homebrew installs whatever the formula ships and cannot pin a version, so
-    # these hosts are report-only by design. Reporting the gap is honest;
-    # claiming convergence would not be.
+    # The same verified-tarball path as Linux, not homebrew. Three reasons, all
+    # found by looking rather than assuming:
+    #   - macstudio already ran node_exporter from a LaunchDaemon at
+    #     /Library/LaunchDaemons/io.prometheus.node_exporter.plist, so
+    #     `brew services` would have fought a working setup instead of
+    #     converging it.
+    #   - brew is not on a non-login ssh PATH here (it lives at
+    #     /opt/homebrew/bin/brew), so the homebrew module would not have run.
+    #   - a formula tracks whatever upstream ships. It happens to be 1.12.1
+    #     today, which is why "brew cannot pin a version" read as harmless, but
+    #     the manifest promises an exact version and only the tarball delivers
+    #     one.
     - name: Converge node_exporter on macOS
       when: ansible_system == 'Darwin'
+      become: true
       block:
-        - name: Install node_exporter with homebrew
-          community.general.homebrew:
-            name: node_exporter
-            state: present
-          become: false
-
-        - name: Start node_exporter with brew services
-          ansible.builtin.command: brew services start node_exporter
-          register: brew_svc
-          changed_when: "'Successfully started' in brew_svc.stdout"
-          failed_when: false
-          become: false
-
-        - name: Read what homebrew actually installed
+        - name: Read the installed node_exporter version
           ansible.builtin.shell: |
             set -o pipefail
-            for c in /opt/homebrew/bin/node_exporter /usr/local/bin/node_exporter; do
+            for c in /usr/local/bin/node_exporter /opt/homebrew/bin/node_exporter; do
               [ -x "$c" ] && { "$c" --version 2>&1 | head -1 | awk '{print $3}'; exit 0; }
             done
             echo absent
@@ -249,13 +246,124 @@
           changed_when: false
           check_mode: false
 
-        - name: Report the version gap homebrew cannot close
-          ansible.builtin.debug:
-            msg: >-
-              {{ inventory_hostname }} runs node_exporter {{ ne_mac.stdout | trim }},
-              manifest pins {{ obs.node_exporter.version }}. Homebrew cannot install
-              an arbitrary version, so this host is report-only.
-          when: ne_mac.stdout | trim != obs.node_exporter.version
+        - name: Install or upgrade node_exporter
+          when:
+            - ne_mac.stdout | trim != obs.node_exporter.version
+            - not ansible_check_mode
+          vars:
+            mac_arch: "{{ 'arm64' if ansible_architecture == 'arm64' else 'amd64' }}"
+            ne_base_url: "https://github.com/prometheus/node_exporter/releases/download/v{{ obs.node_exporter.version }}"
+          block:
+            - name: Download the darwin tarball and its checksums
+              ansible.builtin.get_url:
+                url: "{{ item }}"
+                dest: "/tmp/{{ item | basename }}"
+                mode: "0644"
+              loop:
+                - "{{ ne_base_url }}/node_exporter-{{ obs.node_exporter.version }}.darwin-{{ mac_arch }}.tar.gz"
+                - "{{ ne_base_url }}/sha256sums.txt"
+
+            - name: Verify the tarball against the published checksum
+              ansible.builtin.shell: |
+                set -o pipefail
+                cd /tmp
+                grep " node_exporter-{{ obs.node_exporter.version }}.darwin-{{ mac_arch }}.tar.gz$" sha256sums.txt \
+                  | shasum -a 256 -c -
+              args: { executable: /bin/bash }
+              changed_when: false
+
+            # tar, not the unarchive module. macOS ships BSD tar and the
+            # module refuses anything that is not GNU tar, even though BSD tar
+            # reads a .tar.gz perfectly well.
+            - name: Unpack the verified tarball
+              ansible.builtin.command:
+                cmd: "tar -xzf /tmp/node_exporter-{{ obs.node_exporter.version }}.darwin-{{ mac_arch }}.tar.gz -C /tmp"
+              changed_when: true
+
+            - name: Install the binary
+              ansible.builtin.copy:
+                src: "/tmp/node_exporter-{{ obs.node_exporter.version }}.darwin-{{ mac_arch }}/node_exporter"
+                dest: /usr/local/bin/node_exporter
+                remote_src: true
+                owner: root
+                group: wheel
+                mode: "0755"
+              notify: reload node_exporter launchd
+
+            - name: Remove the download artifacts
+              ansible.builtin.file:
+                path: "{{ item }}"
+                state: absent
+              loop:
+                - "/tmp/node_exporter-{{ obs.node_exporter.version }}.darwin-{{ mac_arch }}.tar.gz"
+                - "/tmp/node_exporter-{{ obs.node_exporter.version }}.darwin-{{ mac_arch }}"
+                - /tmp/sha256sums.txt
+
+        - name: Ensure the textfile collector directory exists
+          ansible.builtin.file:
+            path: "{{ obs.node_exporter.textfile_dir }}"
+            state: directory
+            owner: root
+            group: wheel
+            mode: "0755"
+
+        - name: Install the listening-port collector
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/../scripts/node-listening-ports.sh"
+            dest: /usr/local/bin/node-listening-ports.sh
+            owner: root
+            group: wheel
+            mode: "0755"
+
+        - name: Render the LaunchDaemon
+          ansible.builtin.template:
+            src: templates/node_exporter.plist.j2
+            dest: /Library/LaunchDaemons/io.prometheus.node_exporter.plist
+            owner: root
+            group: wheel
+            mode: "0644"
+          notify: reload node_exporter launchd
+
+        # rc 5 is what launchctl returns when the service is already
+        # bootstrapped, reported as "Input/output error" rather than anything
+        # resembling "already loaded". Treating that as failure would make every
+        # converge run red on a host that is working correctly.
+        # launchd caches the command line from whenever the daemon was last
+        # bootstrapped, so rendering a new plist changes nothing on its own and
+        # the handler only fires when the file itself changed. macstudio ran for
+        # a full converge cycle with the new plist on disk and the old argv in
+        # memory, publishing no textfile metric while reporting success.
+        - name: Is the running daemon using the rendered plist?
+          ansible.builtin.shell: |
+            set -o pipefail
+            ps -ax -o command= | grep '[n]ode_exporter --web.listen-address' || true
+          args: { executable: /bin/bash }
+          register: ne_argv
+          changed_when: false
+          check_mode: false
+
+        - name: Reload the daemon when its argv does not match the plist
+          ansible.builtin.shell: |
+            launchctl bootout system/io.prometheus.node_exporter 2>/dev/null || true
+            launchctl bootstrap system /Library/LaunchDaemons/io.prometheus.node_exporter.plist
+          args: { executable: /bin/bash }
+          when:
+            - "'collector.textfile.directory' not in ne_argv.stdout"
+            - not ansible_check_mode
+
+        - name: Load the LaunchDaemon
+          ansible.builtin.command: launchctl bootstrap system /Library/LaunchDaemons/io.prometheus.node_exporter.plist
+          register: boot
+          changed_when: boot.rc == 0
+          failed_when: boot.rc not in [0, 5]
+          when: not ansible_check_mode
+
+        # macOS has no systemd timer. launchd fires this on the same interval,
+        # via StartInterval on its own daemon.
+        - name: Produce the listening-port metric once now
+          ansible.builtin.command: /usr/local/bin/node-listening-ports.sh --dir {{ obs.node_exporter.textfile_dir }}
+          changed_when: false
+          when: not ansible_check_mode
 
   handlers:
     - name: reload systemd
@@ -268,6 +376,13 @@
         name: node_exporter
         state: restarted
         daemon_reload: true
+      become: true
+
+    - name: reload node_exporter launchd
+      ansible.builtin.shell: |
+        launchctl bootout system/io.prometheus.node_exporter 2>/dev/null || true
+        launchctl bootstrap system /Library/LaunchDaemons/io.prometheus.node_exporter.plist
+      args: { executable: /bin/bash }
       become: true
 
 # ── 2. The stack, Grafana host only ───────────────────────────────

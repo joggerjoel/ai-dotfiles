@@ -68,6 +68,39 @@ has "a socket with no process column is still reported" "$out" \
 # would grow a new series per process lifetime.
 hasnt "pid is not a label" "$out" "pid="
 
+# --- macOS: lsof, because ss does not exist there ---------------------------
+# The first version of this script ran `ss -ltnHp` unconditionally, so it failed
+# on every mac in the fleet and the metric was simply absent there.
+
+cat > "$TMP/lsof.txt" <<'EOF'
+COMMAND     PID       USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME
+rapportd    699 joggerjoel   10u  IPv4 0xe8a3281271831faf      0t0  TCP *:49152 (LISTEN)
+rapportd    699 joggerjoel   11u  IPv6 0xb04179ba50e5b55a      0t0  TCP *:49152 (LISTEN)
+nxnode.bi   724 joggerjoel   17u  IPv4 0x292d043e9fe59002      0t0  TCP 127.0.0.1:12001 (LISTEN)
+nxnode.bi   724 joggerjoel   18u  IPv6 0xb2f403892b707a97      0t0  TCP [::1]:7001 (LISTEN)
+node_expo   24 root          5u   IPv6 0xdeadbeefdeadbeef      0t0  TCP *:9100 (LISTEN)
+mysqld      88 mysql         3u   IPv4 0xcafecafecafecafe      0t0  TCP 127.0.0.1:3306 (ESTABLISHED)
+EOF
+
+mac="$(bash "$SUT" --from-lsof "$TMP/lsof.txt" --stdout)"
+
+has "lsof: a wildcard bind becomes a real address" "$mac" \
+  'node_listening_port{port="49152",addr="0.0.0.0",proc="rapportd"} 1'
+
+has "lsof: a loopback bind keeps its address" "$mac" \
+  'node_listening_port{port="12001",addr="127.0.0.1",proc="nxnode.bi"} 1'
+
+# [::1]:7001 splits wrong on the first colon, exactly as on linux.
+has "lsof: an IPv6 literal still resolves its port" "$mac" \
+  'node_listening_port{port="7001",addr="::1",proc="nxnode.bi"} 1'
+
+# rapportd binds 49152 on both v4 and v6, which normalise to one label set.
+eq "lsof: a port bound on v4 and v6 is emitted once" \
+   "1" "$(printf '%s\n' "$mac" | grep -c 'port="49152"')"
+
+# Only LISTEN sockets. An ESTABLISHED connection is not a bound port.
+hasnt "lsof: an ESTABLISHED socket is not reported" "$mac" 'port="3306"'
+
 # --- atomic write -----------------------------------------------------------
 
 bash "$SUT" --from-file "$TMP/ss.txt" --dir "$TMP/out" >/dev/null
@@ -87,6 +120,25 @@ before=$(wc -l < "$TMP/out/listening_ports.prom")
 bash "$SUT" --from-file "$TMP/ss.txt" --dir "$TMP/out" >/dev/null
 eq "a second run replaces the file rather than appending" \
    "$before" "$(wc -l < "$TMP/out/listening_ports.prom")"
+
+# --- a collector that cannot see every process still succeeds ---------------
+# lsof exits non-zero whenever it cannot inspect some process, which is normal
+# even as root. With pipefail and set -e that killed the script: rc 1, empty
+# stderr, no metric file written, while --stdout looked perfectly fine.
+cat > "$TMP/fail.sh" <<'EOF'
+#!/bin/bash
+echo "COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME"
+echo "sshd 1 root 3u IPv4 0x0 0t0 TCP *:22 (LISTEN)"
+exit 1
+EOF
+chmod +x "$TMP/fail.sh"
+rc=0
+"$TMP/fail.sh" > "$TMP/partial.txt" 2>/dev/null || true
+bash "$SUT" --from-lsof "$TMP/partial.txt" --dir "$TMP/out2" >/dev/null 2>&1 || rc=$?
+eq "a partial collector run still writes the metric file" "0" "$rc"
+[ -s "$TMP/out2/listening_ports.prom" ] \
+  && ok "the metric file written from partial output is not empty" \
+  || ko "the metric file written from partial output is not empty"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
