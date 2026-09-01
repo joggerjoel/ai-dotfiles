@@ -269,3 +269,297 @@
         state: restarted
         daemon_reload: true
       become: true
+
+# ── 2. The stack, Grafana host only ───────────────────────────────
+- name: Deploy the observability stack
+  hosts: observability_ai
+  gather_facts: true
+  become: true
+  tags: [stack]
+  vars:
+    obs: "{{ lookup('file', playbook_dir ~ '/observability.yml') | from_yaml }}"
+    dotenv: "{{ lookup('file', lookup('env', 'HOME') ~ '/.claude/.env', errors='ignore') | default('', true) }}"
+    grafana_admin_password: "{{ dotenv | regex_search('^GRAFANA_ADMIN_PASSWORD=(.*)$', '\\1', multiline=True) | first | default('', true) }}"
+    grafana_secret_key: "{{ dotenv | regex_search('^GRAFANA_SECRET_KEY=(.*)$', '\\1', multiline=True) | first | default('', true) }}"
+
+  tasks:
+    # Fail closed. Rendering the compose file with an empty password would stand
+    # grafana up with no admin credential at all, on an interface bound to
+    # 0.0.0.0, which is worse than the admin/admin it replaces.
+    - name: Require the grafana secrets before anything is rendered
+      ansible.builtin.assert:
+        that:
+          - grafana_admin_password | length >= 16
+          - grafana_secret_key | length >= 16
+        fail_msg: >-
+          GRAFANA_ADMIN_PASSWORD and GRAFANA_SECRET_KEY must be set in
+          ~/.claude/.env (16+ chars). Add them with
+          './setup.sh env GRAFANA_ADMIN_PASSWORD <value>'. Nothing was changed.
+        quiet: true
+
+    - name: Create the stack directories
+      ansible.builtin.file:
+        path: "{{ obs.stack.dir }}/{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        [
+          "",
+          prometheus,
+          loki,
+          grafana,
+          grafana/provisioning/datasources,
+          grafana/provisioning/dashboards,
+          grafana/dashboards,
+        ]
+
+    # external: true means compose will not create these, so they must exist
+    # first. Creating an existing volume is a no-op.
+    - name: Create the obs_* volumes
+      ansible.builtin.command: "docker volume create {{ item }}"
+      register: vol
+      changed_when: false
+      loop:
+        - obs_prometheus_data
+        - obs_loki_data
+        - obs_promtail_data
+        - obs_grafana_data
+
+    - name: Render the stack configuration
+      ansible.builtin.template:
+        src: "templates/{{ item.src }}"
+        dest: "{{ obs.stack.dir }}/{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "{{ item.mode | default('0644') }}"
+      loop:
+        - {
+            src: observability.compose.yml.j2,
+            dest: docker-compose.yml,
+            mode: "0600",
+          }
+        - {
+            src: grafana-datasources.yml.j2,
+            dest: grafana/provisioning/datasources/datasources.yml,
+          }
+        - {
+            src: grafana-providers.yml.j2,
+            dest: grafana/provisioning/dashboards/providers.yml,
+          }
+      no_log: false
+
+    # Rendered separately so its changed status can drive the reload below.
+    # A bind-mounted config change does not recreate the container, so without
+    # the reload a newly added fleet host is reported converged and never
+    # scraped.
+    - name: Render prometheus.yml from the inventory
+      ansible.builtin.template:
+        src: templates/prometheus.yml.j2
+        dest: "{{ obs.stack.dir }}/prometheus/prometheus.yml"
+        owner: root
+        group: root
+        mode: "0644"
+      register: prom_cfg
+
+    # check_mode: false because ansible issues a HEAD under --check and
+    # grafana.com answers 405 to HEAD on this endpoint while answering 200 to
+    # GET. Verified directly. This writes only to the control node's /tmp, which
+    # a preview can safely do, and it makes the install task below show a real
+    # diff instead of failing on a file that was never fetched.
+    - name: Fetch the pinned grafana.com dashboards onto the control node
+      ansible.builtin.get_url:
+        url: "https://grafana.com/api/dashboards/{{ item.gnet_id }}/revisions/{{ item.revision }}/download"
+        dest: "/tmp/obs-dash-{{ item.gnet_id }}-{{ item.revision }}.json"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      check_mode: false
+      loop: "{{ (obs.dashboards | selectattr('gnet_id', 'defined') | list) + (obs.exporters.values() | map(attribute='dashboard') | list) }}"
+      loop_control: { label: "{{ item.gnet_id }}" }
+
+    # The downloads carry a DS_* input placeholder rather than a datasource uid.
+    # Left as-is every panel renders empty with a "datasource not found" error,
+    # which looks exactly like a broken exporter.
+    - name: Install the dashboards with the datasource placeholder resolved
+      ansible.builtin.copy:
+        content: "{{ lookup('file', '/tmp/obs-dash-' ~ item.gnet_id ~ '-' ~ item.revision ~ '.json') | regex_replace('\\$\\{DS_[A-Z0-9_-]+\\}', 'prometheus') }}"
+        dest: "{{ obs.stack.dir }}/grafana/dashboards/{{ item.gnet_id }}.json"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ (obs.dashboards | selectattr('gnet_id', 'defined') | list) + (obs.exporters.values() | map(attribute='dashboard') | list) }}"
+      loop_control: { label: "{{ item.gnet_id }}" }
+
+    - name: Install the hand authored dashboards
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/{{ item.file }}"
+        dest: "{{ obs.stack.dir }}/grafana/dashboards/{{ item.name }}.json"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ obs.dashboards | selectattr('file', 'defined') | list }}"
+      loop_control: { label: "{{ item.name }}" }
+
+    # Before the takeover, recon-grafana still holds port 3002 and the obs_*
+    # volumes are empty. Bringing the stack up here would collide on the port
+    # and, if it won, serve an empty grafana over the real one. Config is
+    # rendered either way, since that is harmless and makes the migration a
+    # shorter step.
+    - name: Has the takeover happened?
+      ansible.builtin.stat:
+        path: "{{ obs.stack.dir }}/.migrated-from-recon"
+      register: migrated
+
+    - name: Is the recon stack still holding the ports?
+      ansible.builtin.command: "docker ps --filter name=recon-grafana --format {% raw %}'{{.Names}}'{% endraw %}"
+      register: recon_running
+      changed_when: false
+      check_mode: false
+
+    - name: Say why the stack was not started
+      ansible.builtin.debug:
+        msg: >-
+          Config rendered, stack NOT started. recon-grafana still holds port
+          {{ obs.stack.grafana.port }} and the obs_* volumes are empty. Run
+          'ansible-playbook deploy-observability.yml --tags migrate' to take
+          ownership; nothing here has changed the running stack.
+      when: not migrated.stat.exists and 'recon-grafana' in recon_running.stdout
+
+    - name: Start or update the stack
+      ansible.builtin.command:
+        cmd: "docker compose -f {{ obs.stack.dir }}/docker-compose.yml up -d"
+      register: compose_up
+      changed_when: "'Started' in compose_up.stderr or 'Recreated' in compose_up.stderr or 'Created' in compose_up.stderr"
+      when: migrated.stat.exists or 'recon-grafana' not in recon_running.stdout
+
+    - name: Reload prometheus when the generated target list changed
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ obs.stack.prometheus.port }}/-/reload"
+        method: POST
+        status_code: [200]
+      when:
+        - prom_cfg is changed
+        - compose_up is not changed
+        - compose_up is not skipped
+      retries: 3
+      delay: 5
+
+# ── 3. The one-time takeover, never runs by accident ──────────────
+# `never` means ansible skips these unless someone names the migrate tag on the
+# command line. A routine `just fleet-update` cannot reach them. This stops a
+# live monitoring stack on a host that also runs 18 stubhub-minter containers.
+#
+#   ansible-playbook deploy-observability.yml --tags migrate
+- name: Take ownership of the recon stack
+  hosts: observability_ai
+  gather_facts: true
+  become: true
+  tags: [migrate, never]
+  vars:
+    obs: "{{ lookup('file', playbook_dir ~ '/observability.yml') | from_yaml }}"
+
+  tasks:
+    - name: Has this migration already run?
+      ansible.builtin.stat:
+        path: "{{ obs.stack.dir }}/.migrated-from-recon"
+      register: marker
+
+    - name: Stop cleanly if it has
+      ansible.builtin.meta: end_host
+      when: marker.stat.exists
+
+    # Preconditions, all read only. If any fails, nothing has been stopped.
+    - name: Check every source volume exists exactly as spelled
+      ansible.builtin.command: "docker volume inspect {{ item.value.migrate_from }}"
+      loop: "{{ obs.stack | dict2items | selectattr('value.migrate_from', 'defined') | list }}"
+      loop_control: { label: "{{ item.value.migrate_from }}" }
+      changed_when: false
+
+    # Docker creates an empty volume for an unknown name instead of failing, so
+    # a typo here would copy nothing and bring the stack up blank while
+    # reporting success.
+    - name: Check recon's monitoring directory exists at an absolute path
+      ansible.builtin.stat:
+        path: "{{ obs.foreign.recon_monitoring_dir }}"
+      register: recon_dir
+
+    - name: Check recon has extracted its scrape jobs
+      ansible.builtin.stat:
+        path: "{{ obs.foreign.recon_monitoring_dir }}/prometheus/extra"
+      register: extra_dir
+
+    - name: Fail closed on any unmet precondition
+      ansible.builtin.assert:
+        that:
+          - recon_dir.stat.exists
+          - not obs.foreign.recon_monitoring_dir.startswith('~')
+          - extra_dir.stat.exists
+        fail_msg: >-
+          Preconditions unmet. recon_monitoring_dir must exist and be absolute
+          (compose does not expand ~), and recon must have moved its scrape jobs
+          into prometheus/extra/ first, which is work in that repo. Nothing was
+          stopped.
+        quiet: true
+
+    # By name, never `docker compose down`, which would also take
+    # recon-promtail with it and remove the containers that make rollback a
+    # single `up` away. Grafana must also not be writing grafana.db while it is
+    # copied.
+    - name: Stop the recon containers by name
+      ansible.builtin.command: "docker stop {{ item }}"
+      loop: [recon-grafana, recon-prometheus, recon-loki, recon-promtail]
+      register: stopped
+      changed_when: item in stopped.stdout
+      failed_when: false
+
+    # Copy, never move. The untouched originals are the rollback: a byte for
+    # byte copy still wired to recon's compose file. About 92 MB in total.
+    - name: Copy each volume into its obs_ counterpart
+      ansible.builtin.command: >-
+        docker run --rm
+        -v {{ item.value.migrate_from }}:/from:ro
+        -v {{ item.value.volume }}:/to
+        alpine sh -c "cp -a /from/. /to/"
+      loop: "{{ obs.stack | dict2items | selectattr('value.migrate_from', 'defined') | list }}"
+      loop_control:
+        { label: "{{ item.value.migrate_from }} -> {{ item.value.volume }}" }
+
+    - name: Bring the obs stack up on the copied data
+      ansible.builtin.command:
+        cmd: "docker compose -f {{ obs.stack.dir }}/docker-compose.yml up -d"
+
+    - name: Wait for grafana to answer
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ obs.stack.grafana.port }}/api/health"
+        status_code: [200]
+      register: gh
+      retries: 12
+      delay: 5
+      until: gh.status == 200
+
+    - name: Wait for prometheus to answer
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ obs.stack.prometheus.port }}/-/healthy"
+        status_code: [200]
+      register: ph
+      retries: 12
+      delay: 5
+      until: ph.status == 200
+
+    # Written last, and only after both health checks pass. An interrupt at any
+    # earlier point leaves no marker, so a re-run starts from the preconditions
+    # and converges. Every step before this is idempotent.
+    - name: Record that the migration completed
+      ansible.builtin.copy:
+        content: |
+          Migrated from the stubhub-recon-gui stack on {{ ansible_date_time.iso8601 }}.
+          Source volumes were copied, not moved, and are untouched. To roll back:
+            docker compose -f {{ obs.stack.dir }}/docker-compose.yml down
+            docker compose -f {{ obs.foreign.recon_monitoring_dir }}/docker-compose.yml up -d
+        dest: "{{ obs.stack.dir }}/.migrated-from-recon"
+        owner: root
+        group: root
+        mode: "0644"

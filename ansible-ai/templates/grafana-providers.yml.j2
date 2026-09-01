@@ -1,0 +1,34 @@
+{{ ansible_managed | comment }}
+# Rendered from ansible-ai/templates/grafana-providers.yml.j2.
+#
+# Two providers, two owners. ai-dotfiles owns Infrastructure and writes only
+# there. Recon's dashboards are mounted read only and provisioned so they keep
+# working, but this repo never writes those files.
+apiVersion: 1
+
+providers:
+  - name: Infrastructure
+    orgId: 1
+    folder: Infrastructure
+    type: file
+    # disableDeletion on every provider. If a mount ever resolves empty, and a
+    # `~` in a bind-mount source is enough to cause that, grafana's file
+    # provisioner deletes the dashboards it had provisioned out of the shared
+    # volume. Degrade to stale, never to destroyed.
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards/infra
+      foldersFromFilesStructure: false
+
+  - name: Recon
+    orgId: 1
+    folder: Recon
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards/recon
+      foldersFromFilesStructure: false

@@ -94,6 +94,66 @@ case "$probe_cmd" in
   *) ko "the probe falls back to the arm64 homebrew prefix" ;;
 esac
 
+# --- the scrape template renders valid YAML ---------------------------------
+# The first version of this template used jinja whitespace-control dashes and
+# emitted `- targets:` at column 0 under an indented static_configs. That is
+# invalid YAML, prometheus refuses to load it, and a converge run would have
+# reported success against a dead config. Render it here rather than trusting
+# that it looks right.
+
+TPL="$ROOT/ansible-ai/templates/prometheus.yml.j2"
+
+# trim_blocks and lstrip_blocks are what keep the indentation correct, and
+# ansible only applies them because the template declares them on line 1.
+if head -1 "$TPL" | grep -q 'trim_blocks: True' && head -1 "$TPL" | grep -q 'lstrip_blocks: True'; then
+  ok "the scrape template declares the jinja flags its indentation depends on"
+else
+  ko "the scrape template declares the jinja flags its indentation depends on"
+fi
+
+if python3 - "$TPL" <<'PY' 2>/dev/null
+import sys, yaml, jinja2
+
+src = open(sys.argv[1]).read().split("\n", 1)[1]          # drop the #jinja2 header
+src = src.replace("{{ ansible_managed | comment }}", "# managed")
+
+groups = {
+    "aorus_ai": ["aorus", "aorus2", "macair"],
+    "redis_ai": ["aorus", "aorus2"],
+}
+hostvars = {
+    "aorus":     {"ansible_host": "10.0.0.1"},
+    "aorus2":    {"ansible_host": "10.0.0.2", "scrape_address": "10.9.9.9"},
+    "macair":    {"ansible_host": "tail.name", "scrape_skip": True},
+    "localhost": {"scrape_address": "10.0.0.99"},
+}
+obs = {
+    "retention": {"scrape_interval": "15s"},
+    "exporters": {"redis": {"group": "redis_ai", "job": "redis", "port": 9121}},
+}
+
+env = jinja2.Environment(trim_blocks=True, lstrip_blocks=True)
+out = env.from_string(src).render(groups=groups, hostvars=hostvars, obs=obs)
+
+d = yaml.safe_load(out)                                    # invalid YAML raises
+jobs = {j["job_name"]: j for j in d["scrape_configs"]}
+
+node = [t for s in jobs["node"]["static_configs"] for t in s["targets"]]
+assert "10.0.0.1:9100" in node, node
+# scrape_address must win over ansible_host: the address ansible connects on is
+# not always the one prometheus can reach.
+assert "10.9.9.9:9100" in node, node
+assert "10.0.0.2:9100" not in node, node
+# scrape_skip must remove the host entirely, not render it unreachable.
+assert not any("tail.name" in t for t in node), node
+assert len(node) == 2, node
+PY
+then
+  ok "the scrape template renders valid YAML with the right targets"
+else
+  ko "the scrape template renders valid YAML with the right targets"
+fi
+
 # --- the manifest boundary --------------------------------------------------
 # Every value is validated once, here. Nothing downstream re-checks it.
 

@@ -1,0 +1,108 @@
+{{ ansible_managed | comment }}
+# Rendered from ansible-ai/templates/observability.compose.yml.j2.
+#
+# Volumes are obs_* and external. Recon declares its volumes bare, which makes
+# them project-owned, so a `docker compose down -v` in that repo deletes them
+# and no wording in THIS file could prevent it. Copying to our own volumes means
+# recon can run any compose command it likes, our own down -v cannot delete
+# these either, and the untouched originals stay as the rollback.
+#
+# Service names stay prometheus, loki and grafana because the provisioned
+# datasources address them by container DNS. Only the container names change.
+services:
+  prometheus:
+    image: "{{ obs.stack.prometheus.image }}@{{ obs.stack.prometheus.digest }}"
+    container_name: obs-prometheus
+    restart: unless-stopped
+    mem_limit: {{ obs.stack.prometheus.mem_limit }}
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Both bounds on purpose. Time alone does not stop a cardinality
+      # explosion filling the disk well inside the window; whichever is hit
+      # first wins.
+      - --storage.tsdb.retention.time={{ obs.retention.prometheus.time }}
+      - --storage.tsdb.retention.size={{ obs.retention.prometheus.size }}
+      # Required for the /-/reload the stack play calls after rendering
+      # prometheus.yml. Without it a new fleet host is reported converged and
+      # never scraped, because a bind-mounted config change does not recreate
+      # the container.
+      - --web.enable-lifecycle
+    volumes:
+      - obs_prometheus_data:/prometheus
+      - {{ obs.stack.dir }}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Owned by recon. Mounted read only so this stack can never write it.
+      - {{ obs.foreign.recon_monitoring_dir }}/prometheus/extra:/etc/prometheus/extra:ro
+    ports:
+      - "{{ obs.stack.prometheus.bind }}:{{ obs.stack.prometheus.port }}:9090"
+
+  loki:
+    image: "{{ obs.stack.loki.image }}@{{ obs.stack.loki.digest }}"
+    container_name: obs-loki
+    restart: unless-stopped
+    mem_limit: {{ obs.stack.loki.mem_limit }}
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - obs_loki_data:/loki
+      - {{ obs.stack.dir }}/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+    ports:
+      - "{{ obs.stack.loki.bind }}:{{ obs.stack.loki.port }}:3100"
+
+  # Adopted rather than dropped. An earlier draft stopped four containers and
+  # defined three, which left loki running with nothing feeding it. This repo
+  # owns the container; recon still owns the config, mounted read only.
+  promtail:
+    image: "{{ obs.stack.promtail.image }}@{{ obs.stack.promtail.digest }}"
+    container_name: obs-promtail
+    restart: unless-stopped
+    mem_limit: {{ obs.stack.promtail.mem_limit }}
+    command: -config.file=/etc/promtail/promtail-config.yml
+    depends_on: [loki]
+    volumes:
+      - obs_promtail_data:/promtail
+      - {{ obs.foreign.recon_monitoring_dir }}/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+
+  grafana:
+    image: "{{ obs.stack.grafana.image }}@{{ obs.stack.grafana.digest }}"
+    container_name: obs-grafana
+    restart: unless-stopped
+    mem_limit: {{ obs.stack.grafana.mem_limit }}
+    depends_on: [prometheus, loki]
+    environment:
+      # This host currently runs grafana with the password "admin" and
+      # [auth.anonymous] enabled, bound to 0.0.0.0. Taking ownership is the
+      # moment to fix that rather than inherit it and widen its blast radius
+      # from one project's app metrics to fleet-wide infrastructure.
+      GF_SECURITY_ADMIN_PASSWORD: "{{ grafana_admin_password }}"
+      # Without an explicit key the datasource secrets in grafana.db stay
+      # encrypted under grafana's well-known default, so anyone who can read
+      # the volume can decrypt them.
+      GF_SECURITY_SECRET_KEY: "{{ grafana_secret_key }}"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - obs_grafana_data:/var/lib/grafana
+      - {{ obs.stack.dir }}/grafana/provisioning:/etc/grafana/provisioning:ro
+      - {{ obs.stack.dir }}/grafana/dashboards:/var/lib/grafana/dashboards/infra:ro
+      # Recon's own dashboards, mounted read only. This repo provisions them
+      # but never writes them.
+      - {{ obs.foreign.recon_monitoring_dir }}/grafana/dashboards/json:/var/lib/grafana/dashboards/recon:ro
+    ports:
+      - "{{ obs.stack.grafana.bind }}:{{ obs.stack.grafana.port }}:3000"
+
+volumes:
+  obs_prometheus_data:
+    external: true
+  obs_loki_data:
+    external: true
+  obs_promtail_data:
+    external: true
+  obs_grafana_data:
+    external: true
+
+networks:
+  default:
+    name: {{ obs.stack.network }}
+    external: true

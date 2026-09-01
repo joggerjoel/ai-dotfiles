@@ -1,0 +1,161 @@
+{
+  "title": "Fleet listening ports",
+  "uid": "fleet-listening-ports",
+  "tags": ["fleet", "infrastructure"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-15m", "to": "now" },
+  "description": "What every fleet host is binding, and which host holds a given port. node_exporter ships no collector for listening sockets, so this reads node_listening_port, written by scripts/node-listening-ports.sh through the textfile collector. Ask before you bind: set the Port variable and the second panel lists every host already using it.",
+  "templating": {
+    "list": [
+      {
+        "name": "host",
+        "label": "Host",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(node_listening_port, host)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "port",
+        "label": "Port to check",
+        "type": "textbox",
+        "query": "3002",
+        "current": { "text": "3002", "value": "3002" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Who already holds port $port",
+      "description": "The question this dashboard exists for. Empty means the port is free across every host publishing the metric.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "node_listening_port{port=\"$port\"}",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true,
+              "__name__": true,
+              "job": true
+            },
+            "renameByName": {
+              "host": "Host",
+              "instance": "Instance",
+              "addr": "Bind address",
+              "port": "Port",
+              "proc": "Process"
+            }
+          }
+        }
+      ],
+      "options": { "showHeader": true }
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "All listening ports on $host",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 14, "w": 16, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "node_listening_port{host=~\"$host\"}",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true,
+              "__name__": true,
+              "job": true,
+              "instance": true
+            },
+            "renameByName": {
+              "host": "Host",
+              "addr": "Bind address",
+              "port": "Port",
+              "proc": "Process"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": { "fields": {}, "sort": [{ "field": "Port" }] }
+        }
+      ],
+      "options": { "showHeader": true }
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Ports bound on more than one host",
+      "description": "Not necessarily a conflict, since separate hosts can reuse a port freely. It is the list to read before moving a service between hosts.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 14, "w": 8, "x": 16, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count by (port) (node_listening_port) > 1",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true },
+            "renameByName": { "port": "Port", "Value": "Hosts" }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [{ "field": "Hosts", "desc": true }]
+          }
+        }
+      ],
+      "options": { "showHeader": true }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Hosts publishing the metric",
+      "description": "A host missing here has not had the exporter play run on it. Its ports are unknown, not absent.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 22 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(count by (host) (node_listening_port))",
+          "instant": true
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+    }
+  ]
+}
