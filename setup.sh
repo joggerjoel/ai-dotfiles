@@ -245,16 +245,25 @@ ensure_uv() {
     || fail "uv install failed — see https://astral.sh/uv"
 }
 
+# zsh is a nicety, not a prerequisite: the script's own hard requirements are
+# git/curl/jq (see check_prereq). So this warns and returns 0 on every failure
+# path — a host that cannot get a zsh must still receive its skills, settings
+# and CLI updates. install_zsh_modules re-checks and skips the modules.
 ensure_zsh() {
   command -v zsh &>/dev/null && { ok "zsh present"; return 0; }
-  if [ "$PKG_MANAGER" = "unknown" ]; then
-    fail "zsh missing and package manager unknown — install it manually"
+  # "" and "unknown" both mean "nothing here can install a package". Testing
+  # only for "unknown" missed the empty case that cmd_update used to produce.
+  if [ -z "$PKG_MANAGER" ] || [ "$PKG_MANAGER" = "unknown" ]; then
+    warn "zsh missing and no package manager — install it manually"
     return 0
   fi
   warn "zsh missing — installing..."
-  pkg_install zsh >/dev/null 2>&1
+  # The `||` must sit on THIS line. As a bare command it is a set -e abort, and
+  # the recovery below never runs — which is precisely how the fleet died.
+  pkg_install zsh >/dev/null 2>&1 || warn "zsh install command failed"
   command -v zsh &>/dev/null && ok "zsh installed" \
-    || fail "zsh install failed — install manually, then re-run"
+    || warn "zsh install failed — install manually, then re-run"
+  return 0
 }
 
 # Shared clone-or-pull for git-checkout dependencies (zinit, oh-my-zsh,
@@ -1186,6 +1195,15 @@ install_zsh_modules() {
   header "zsh modules"
   ensure_zsh
 
+  # Every module below is a zsh plugin: zinit, oh-my-zsh, powerlevel10k. Cloning
+  # them for a shell that is not installed writes ~40MB of checkouts nothing can
+  # load, and generate_zshrc would author a .zshrc for an absent interpreter.
+  # Skip the section, keep the update going — the caller is mid-convergence.
+  if ! command -v zsh &>/dev/null; then
+    skip "zsh unavailable — shell modules skipped (rest of the update continues)"
+    return 0
+  fi
+
   local order name guard os install_fn
   while IFS='|' read -r order name os install_fn guard; do
     [[ "$order" =~ ^[0-9]+$ ]] || continue
@@ -1767,6 +1785,14 @@ cmd_update() {
     ok "setup.sh changed in the pull — re-running with the updated version"
     exec env SETUP_REEXECED=1 bash "$self" update
   fi
+
+  # update skips the full dependency pass, and detect_pkg_manager lives inside
+  # ensure_dependencies — so every install below this line used to run against
+  # an empty PKG_MANAGER, which is neither "apt" nor "unknown" and so matched
+  # pkg_install's silent `*) return 1`. That killed `setup.sh update` on six
+  # Linux hosts at ensure_zsh with no apt output at all. Must run BEFORE any
+  # ensure_* call. Cheap and side-effect-free: two `command -v` probes.
+  detect_pkg_manager
 
   # uv joined ensure_dependencies after the early hosts were set up, and
   # update (unlike setup) skips the full dependency pass — so converge it
