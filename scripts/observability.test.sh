@@ -18,7 +18,7 @@ ko() { printf '  FAIL  %s%s\n' "$1" "${2:+ (${2})}"; fail=$((fail + 1)); }
 eq() { [ "$2" = "$3" ] && ok "$1" || ko "$1" "expected [$2] got [$3]"; }
 
 # --- the reconciler ---------------------------------------------------------
-# Five outcomes, not a boolean. The original requirement said "do not install if
+# Seven outcomes, not a boolean. The original requirement said "do not install if
 # it already exists", which collapses behind and current into one answer and
 # would have left the whole fleet on 1.10.2.
 
@@ -46,6 +46,37 @@ eq "1.9.0 is behind 1.12.1, not ahead of it" \
 
 eq "a two-digit minor is compared numerically" \
    "ahead" "$(reconcile_version 1.12.1 1.9.0)"
+
+# A rejected key and a changed host key both used to arrive as "unreachable",
+# which made a swapped host key look exactly like a laptop asleep.
+eq "an ssh auth rejection is its own state" \
+   "authfail" "$(reconcile_version authfail 1.12.1)"
+
+eq "a changed host key is its own state" \
+   "hostkey" "$(reconcile_version hostkey 1.12.1)"
+
+# --- check does not pass on absent evidence ---------------------------------
+# The regression this guards: check counted only drift, so a host it could not
+# reach printed dim, incremented nothing, and the run ended on "every reachable
+# host matches the manifest" with exit 0. A fleet that was entirely down
+# reported success, from the one command the design tells you to trust.
+
+rc=0
+out="$(ONLY_HOST=no-such-host.invalid cmd_check 2>&1)" || rc=$?
+[ "$rc" -ne 0 ] \
+  && ok "check exits non-zero when a host gives no answer" \
+  || ko "check exits non-zero when a host gives no answer" "exit was $rc"
+
+case "$out" in
+  *"not a pass"*) ok "check says plainly that silence is not a pass" ;;
+  *)              ko "check says plainly that silence is not a pass" "got: $out" ;;
+esac
+
+case "$out" in
+  *"every host answered and matches"*)
+    ko "check does not claim success while blind" ;;
+  *) ok "check does not claim success while blind" ;;
+esac
 
 # --- the manifest boundary --------------------------------------------------
 # Every value is validated once, here. Nothing downstream re-checks it.
@@ -90,6 +121,22 @@ import yaml
 d = yaml.safe_load(open('$REAL_MANIFEST'))
 print(next(x['gnet_id'] for x in d['dashboards'] if x['name'] == 'node-exporter-full'))
 ")"
+
+  # Docker Compose does not expand `~` in a bind-mount source. The mount then
+  # resolves to an empty directory, and because recon's providers all set
+  # disableDeletion: false, grafana deletes the dashboards it had provisioned
+  # from the shared volume. This shipped once; the test is here so it cannot
+  # ship again.
+  if python3 -c "
+import sys, yaml
+d = yaml.safe_load(open('$REAL_MANIFEST'))
+paths = [v for v in d.get('foreign', {}).values() if isinstance(v, str)]
+sys.exit(1 if any(p.startswith('~') for p in paths) else 0)
+"; then
+    ok "no foreign path uses an unexpandable ~"
+  else
+    ko "no foreign path uses an unexpandable ~"
+  fi
 
   # A dashboard without a revision tracks whatever grafana.com publishes, which
   # makes the deploy non-reproducible.

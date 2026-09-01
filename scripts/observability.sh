@@ -9,12 +9,17 @@ set -euo pipefail
 #             exit 1 when anything has drifted. Nothing writes. Run this to
 #             audit a converge run instead of trusting its summary.
 #
-# Host state resolves to exactly one of five outcomes, never to a yes/no:
-#   unreachable   ssh failed; the host is not evidence of anything
+# Host state resolves to exactly one of seven outcomes, never to a yes/no:
 #   absent        no binary; install
 #   behind        older than the manifest; upgrade
 #   ahead         newer than the manifest; the manifest is stale, not the host
 #   current       no action
+#   unreachable   ssh could not connect; no evidence either way
+#   authfail      ssh rejected the key; no evidence, and a config problem
+#   hostkey       the host key changed; no evidence, and a security signal
+#
+# The last three are not a pass. An audit that counts silence as success is
+# worse than no audit, because it is trusted.
 #
 # "Already installed" was the original requirement and it is not sufficient.
 # All seven ubuntu hosts reported node_exporter as active while sitting three
@@ -83,9 +88,13 @@ manifest_validate() {
 
 reconcile_version() {
   local actual="$1" desired="$2"
+  # Non-version probe results pass straight through. authfail and hostkey are
+  # kept distinct from unreachable because they mean different things: a
+  # sleeping laptop is routine, a changed host key is a security signal, and
+  # collapsing both into one token hides the second behind the first.
   case "$actual" in
-    unreachable) echo unreachable; return ;;
-    absent)      echo absent;      return ;;
+    unreachable|authfail|hostkey) echo "$actual"; return ;;
+    absent)                       echo absent;    return ;;
   esac
   if [ "$actual" = "$desired" ]; then
     echo current
@@ -107,12 +116,30 @@ else
 fi'
 
 probe_host() {
-  local host="$1" out
+  local host="$1" out err rc
   if [ "$host" = "localhost" ]; then
     out="$(bash -c "$probe_cmd" 2>/dev/null)" || out="absent"
-  else
-    out="$(ssh "${SSH_OPTS[@]}" "$host" "$probe_cmd" 2>/dev/null)" || { echo unreachable; return; }
+    [ -n "$out" ] || out="absent"
+    echo "$out"
+    return
   fi
+
+  err="$(mktemp)"
+  out="$(ssh "${SSH_OPTS[@]}" "$host" "$probe_cmd" 2>"$err")" && rc=0 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    # ssh returns 255 for every connection-layer failure, so the reason is only
+    # in stderr. A rejected key and a changed host key both used to read as
+    # "unreachable", which made a swapped host key indistinguishable from a
+    # laptop asleep.
+    if grep -qiE 'REMOTE HOST IDENTIFICATION|host key verification' "$err"; then
+      rm -f "$err"; echo hostkey; return
+    fi
+    if grep -qi 'permission denied' "$err"; then
+      rm -f "$err"; echo authfail; return
+    fi
+    rm -f "$err"; echo unreachable; return
+  fi
+  rm -f "$err"
   [ -n "$out" ] || out="absent"
   echo "$out"
 }
@@ -136,24 +163,36 @@ cmd_check() {
   printf "  %-12s %-12s %s\n" HOST INSTALLED STATE
   printf "  %-12s %-12s %s\n" "────────────" "────────────" "─────"
 
-  local drift=0 host actual state
+  # blind counts hosts that produced no evidence either way. It is tracked
+  # separately from drift because it is not the same claim: drift says a host
+  # is wrong, blind says we do not know. Folding blind into a pass is how an
+  # audit tool reports success for a fleet that is entirely down.
+  local drift=0 blind=0 host actual state
   for host in $hosts; do
     actual="$(probe_host "$host")"
     state="$(reconcile_version "$actual" "$desired")"
     case "$state" in
-      current)     printf "  %-12s %-12s ${GREEN}%s${RESET}\n" "$host" "$actual" "$state" ;;
-      unreachable) printf "  %-12s %-12s ${DIM}%s${RESET}\n" "$host" "-" "$state" ;;
-      *)           printf "  %-12s %-12s ${YELLOW}%s${RESET}\n" "$host" "$actual" "$state"
-                   drift=$((drift + 1)) ;;
+      current)
+        printf "  %-12s %-12s ${GREEN}%s${RESET}\n" "$host" "$actual" "$state" ;;
+      hostkey|authfail)
+        printf "  %-12s %-12s ${RED}%s${RESET}\n" "$host" "-" "$state"
+        blind=$((blind + 1)) ;;
+      unreachable)
+        printf "  %-12s %-12s ${YELLOW}%s${RESET}\n" "$host" "-" "$state"
+        blind=$((blind + 1)) ;;
+      *)
+        printf "  %-12s %-12s ${YELLOW}%s${RESET}\n" "$host" "$actual" "$state"
+        drift=$((drift + 1)) ;;
     esac
   done
 
   echo
-  if [ "$drift" -eq 0 ]; then
-    ok "every reachable host matches the manifest"
+  [ "$drift" -eq 0 ] || warn "$drift hosts differ from the manifest. Run 'converge' to fix them."
+  [ "$blind" -eq 0 ] || fail "$blind hosts gave no answer. This is not a pass."
+  if [ "$drift" -eq 0 ] && [ "$blind" -eq 0 ]; then
+    ok "every host answered and matches the manifest"
     return 0
   fi
-  warn "$drift hosts differ from the manifest. Run 'converge' to fix them."
   return 1
 }
 

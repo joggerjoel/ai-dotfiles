@@ -65,7 +65,16 @@ stack:
 # through prometheus `scrape_config_files`. Writing into another repo's working
 # tree would let a git checkout there silently revert the fleet config.
 foreign:
-  recon_monitoring_dir: "~/Developer/stubhub-recon-gui/monitoring"
+  # Absolute on purpose. Docker Compose does not expand `~` in a bind-mount
+  # source, and a compose run as root would resolve a real `~` to /root. Either
+  # way the mount silently resolves to an empty directory, and because every
+  # recon provider sets `disableDeletion: false`, grafana's file provisioner
+  # then deletes the 20 dashboards it had provisioned from the shared volume
+  # this design promises will survive. Never write a `~` here.
+  recon_monitoring_dir: "/home/joggerjoel/Developer/stubhub-recon-gui/monitoring"
+  # Set on every foreign provider we render, so a mount that goes missing
+  # degrades to stale dashboards instead of destroying them.
+  disable_deletion: true
   dashboard_providers:
     - { name: Recon, folder: Recon, path: grafana/dashboards/json }
     - {

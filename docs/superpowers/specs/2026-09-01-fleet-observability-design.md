@@ -19,7 +19,7 @@ Every fact below came from probing the live fleet on 2026-09-01. None of it is
 assumed.
 
 Seven Ubuntu hosts run `node_exporter` 1.10.2 as a systemd unit on `*:9100`.
-Upstream is 1.12.1, so all seven are three minor versions behind. The two Macs
+Upstream is 1.12.1, so all seven are two minor versions behind. The two Macs
 and the control node have no exporter at all.
 
 `aorus7` runs a full observability stack in Docker, but the
@@ -133,8 +133,11 @@ health panel read as broken by default.
 
 ### Converge versions, do not merely check presence
 
-Every host resolves to one of three outcomes. Absent means install. Present
-and behind means upgrade. Present and current means do nothing.
+Every host resolves to one of seven outcomes. Absent means install. Behind
+means upgrade. Current means do nothing. Ahead means the manifest is stale
+rather than the host, so converge reports it and changes nothing. Unreachable,
+authfail, and hostkey all mean the host produced no evidence, which is not a
+pass and must not be counted as one.
 
 "Do not install if it already exists" and "ensure it has the latest update"
 are different rules, and the second contains the first. All seven Ubuntu hosts
@@ -243,4 +246,25 @@ recorded version strings, and a second `converge` run reporting no change.
 
 ## Open questions
 
-None. Eight design decisions were settled before this document was written.
+This section previously read "None. Eight design decisions were settled." Both
+halves were wrong. The Decisions section holds seven subsections, and an
+adversarial review found roughly fifteen critical defects in a document that
+claimed to have none. Treat a self-certified completeness claim as the least
+trustworthy sentence in any spec, including this one.
+
+Open questions now tracked, none of them resolved:
+
+- The `--migrate` gate has no producer. No subcommand or entry point accepts it.
+- `./setup.sh grafana` has no check that the machine belongs to
+  `observability_ai`, which reintroduces the unconstrained-targeting mistake
+  this document cites against itself.
+- Recon's scrape jobs live inline in its own `prometheus.yml`. Nothing extracts
+  them into `extra/*.yml`, and this repo is not allowed to write them.
+- Promtail is stopped by the migration and nothing restarts it.
+- The reused volumes stay declared by recon's compose project, so a `down -v`
+  there destroys fleet data.
+- Retention, volume sizes, and container resource limits are all unspecified.
+- Rewriting `prometheus.yml` does not restart the container, so a new host is
+  reported converged and never scraped until someone reloads Prometheus.
+- Grafana on aorus7 currently runs with a default admin password and anonymous
+  access enabled. Taking ownership must fix that rather than inherit it.
