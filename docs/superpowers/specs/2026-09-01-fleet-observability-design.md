@@ -592,8 +592,9 @@ the peers before renaming, or keep the old container names, which cost nothing.
 
 ### Fix the credentials during the migration, not after
 
-aorus7's Grafana currently runs with `GF_SECURITY_ADMIN_PASSWORD=admin` and
-`[auth.anonymous] enabled = true`, bound to `0.0.0.0:3002`. The reused volume
+The stack this replaces was deployed with a weak default admin credential and
+anonymous access left enabled, on an interface bound to all addresses. The
+reused volume
 also carries every user, service account, and API key the recon project created,
 and its stored datasource secrets are encrypted under Grafana's default key
 because no `GF_SECURITY_SECRET_KEY` is set.
@@ -690,6 +691,7 @@ Still open:
 - Replacing Promtail with Grafana Alloy, and shipping logs from more than one
   host.
 
-Separate from this design, and worth doing whether or not any of it ships:
-aorus7's Grafana is reachable on the LAN today with anonymous access enabled and
-`admin` as the admin password.
+Separate from this design, and worth doing whether or not any of it ships: the
+existing Grafana deployment needs its admin credential rotated and anonymous
+access disabled. The migration play does both, which is the fastest route to
+closing it.
