@@ -109,11 +109,23 @@ reconcile_version() {
 
 # Prints the installed node_exporter version, or the token `absent`. Callers
 # distinguish an unreachable host before calling this.
-probe_cmd='if command -v node_exporter >/dev/null 2>&1; then
-  node_exporter --version 2>&1 | head -1 | awk "{print \$3}"
-else
-  echo absent
-fi'
+# Resolved by absolute path as well as by PATH. ssh runs a non-login shell whose
+# PATH often omits /usr/local/bin, so `command -v` alone reported macstudio as
+# absent while node_exporter was running there as root out of /usr/local/bin.
+# That is the same failure agents-update.sh already carries resolve_tool for.
+# "Not on PATH" is not "not installed", and reporting it as absent would have
+# reinstalled over a working host.
+probe_cmd='
+for c in node_exporter /usr/local/bin/node_exporter /opt/homebrew/bin/node_exporter "$HOME/.local/bin/node_exporter"; do
+  p="$(command -v "$c" 2>/dev/null)" || p=""
+  [ -n "$p" ] || { [ -x "$c" ] && p="$c"; }
+  if [ -n "$p" ]; then
+    v="$("$p" --version 2>&1 | head -1 | awk "{print \$3}")"
+    [ -n "$v" ] && { printf "%s" "$v"; exit 0; }
+  fi
+done
+printf absent
+'
 
 probe_host() {
   local host="$1" out err rc

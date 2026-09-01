@@ -78,6 +78,22 @@ case "$out" in
   *) ok "check does not claim success while blind" ;;
 esac
 
+# --- the probe resolves binaries off PATH -----------------------------------
+# ssh runs a non-login shell whose PATH often omits /usr/local/bin. macstudio
+# was reported absent while node_exporter ran there as root out of that exact
+# directory, and converge would have reinstalled over a working host. This is a
+# shape assertion on purpose: the failure is someone simplifying the probe back
+# to a bare `command -v`, and there is no hermetic way to fake a non-login PATH
+# for a remote shell.
+case "$probe_cmd" in
+  *"/usr/local/bin/node_exporter"*) ok "the probe falls back to /usr/local/bin" ;;
+  *) ko "the probe falls back to /usr/local/bin" ;;
+esac
+case "$probe_cmd" in
+  *"/opt/homebrew/bin/node_exporter"*) ok "the probe falls back to the arm64 homebrew prefix" ;;
+  *) ko "the probe falls back to the arm64 homebrew prefix" ;;
+esac
+
 # --- the manifest boundary --------------------------------------------------
 # Every value is validated once, here. Nothing downstream re-checks it.
 
