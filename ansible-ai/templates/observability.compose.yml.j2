@@ -1,14 +1,14 @@
 {{ ansible_managed | comment }}
 # Rendered from ansible-ai/templates/observability.compose.yml.j2.
 #
-# Volumes are obs_* and external. Recon declares its volumes bare, which makes
-# them project-owned, so a `docker compose down -v` in that repo deletes them
-# and no wording in THIS file could prevent it. Copying to our own volumes means
-# recon can run any compose command it likes, our own down -v cannot delete
-# these either, and the untouched originals stay as the rollback.
+# Volumes are obs_* and declared external, so this stack's own `down -v` cannot
+# delete them. They belong to no compose project.
 #
-# Service names stay prometheus, loki and grafana because the provisioned
-# datasources address them by container DNS. Only the container names change.
+# The stubhub-recon-gui project is defunct, so there is no ownership split here
+# and no mount into another repo's working tree. Only prometheus carries data
+# forward, because its volume holds fleet node_exporter history. Grafana starts
+# fresh on purpose: the inherited volume carried admin/admin, anonymous access,
+# dashboards for a dead project, and API keys nobody can enumerate.
 services:
   prometheus:
     image: "{{ obs.stack.prometheus.image }}@{{ obs.stack.prometheus.digest }}"
@@ -31,8 +31,10 @@ services:
     volumes:
       - obs_prometheus_data:/prometheus
       - {{ obs.stack.dir }}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      # Owned by recon. Mounted read only so this stack can never write it.
-      - {{ obs.foreign.recon_monitoring_dir }}/prometheus/extra:/etc/prometheus/extra:ro
+      # Extension point for scrape jobs this repo does not generate. Empty is
+      # fine: prometheus starts normally with a glob matching zero files,
+      # verified against v3.9.1.
+      - {{ obs.stack.dir }}/prometheus/extra:/etc/prometheus/extra:ro
     ports:
       - "{{ obs.stack.prometheus.bind }}:{{ obs.stack.prometheus.port }}:9090"
 
@@ -48,9 +50,8 @@ services:
     ports:
       - "{{ obs.stack.loki.bind }}:{{ obs.stack.loki.port }}:3100"
 
-  # Adopted rather than dropped. An earlier draft stopped four containers and
-  # defined three, which left loki running with nothing feeding it. This repo
-  # owns the container; recon still owns the config, mounted read only.
+  # Ships this host's /var/log into loki. Config is rendered by the stack play
+  # rather than mounted from another project, which is all the defunct one did.
   promtail:
     image: "{{ obs.stack.promtail.image }}@{{ obs.stack.promtail.digest }}"
     container_name: obs-promtail
@@ -60,7 +61,7 @@ services:
     depends_on: [loki]
     volumes:
       - obs_promtail_data:/promtail
-      - {{ obs.foreign.recon_monitoring_dir }}/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - {{ obs.stack.dir }}/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
       - /var/log:/var/log:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
 
@@ -71,10 +72,10 @@ services:
     mem_limit: {{ obs.stack.grafana.mem_limit }}
     depends_on: [prometheus, loki]
     environment:
-      # This host currently runs grafana with the password "admin" and
-      # [auth.anonymous] enabled, bound to 0.0.0.0. Taking ownership is the
-      # moment to fix that rather than inherit it and widen its blast radius
-      # from one project's app metrics to fleet-wide infrastructure.
+      # The stack this replaces ran with the password "admin" and
+      # [auth.anonymous] enabled, bound to 0.0.0.0. Starting on a fresh volume
+      # with these set is what actually fixes that, rather than inheriting a
+      # user table nobody can audit.
       GF_SECURITY_ADMIN_PASSWORD: "{{ grafana_admin_password }}"
       # Without an explicit key the datasource secrets in grafana.db stay
       # encrypted under grafana's well-known default, so anyone who can read
@@ -86,9 +87,6 @@ services:
       - obs_grafana_data:/var/lib/grafana
       - {{ obs.stack.dir }}/grafana/provisioning:/etc/grafana/provisioning:ro
       - {{ obs.stack.dir }}/grafana/dashboards:/var/lib/grafana/dashboards/infra:ro
-      # Recon's own dashboards, mounted read only. This repo provisions them
-      # but never writes them.
-      - {{ obs.foreign.recon_monitoring_dir }}/grafana/dashboards/json:/var/lib/grafana/dashboards/recon:ro
     ports:
       - "{{ obs.stack.grafana.bind }}:{{ obs.stack.grafana.port }}:3000"
 
@@ -102,7 +100,9 @@ volumes:
   obs_grafana_data:
     external: true
 
+# Created by compose, not external. The network this replaced was external
+# because two projects shared it; verified that only the four monitoring
+# containers were ever attached, so there is nobody left to share it with.
 networks:
   default:
     name: {{ obs.stack.network }}
-    external: true

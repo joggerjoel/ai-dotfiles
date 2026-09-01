@@ -1,9 +1,8 @@
 {{ ansible_managed | comment }}
 # Rendered from ansible-ai/templates/grafana-providers.yml.j2.
 #
-# Two providers, two owners. ai-dotfiles owns Infrastructure and writes only
-# there. Recon's dashboards are mounted read only and provisioned so they keep
-# working, but this repo never writes those files.
+# One provider. An earlier version carried a second for the stubhub-recon-gui
+# dashboards, which is a defunct project, so those are not provisioned.
 apiVersion: 1
 
 providers:
@@ -22,13 +21,3 @@ providers:
       path: /var/lib/grafana/dashboards/infra
       foldersFromFilesStructure: false
 
-  - name: Recon
-    orgId: 1
-    folder: Recon
-    type: file
-    disableDeletion: true
-    updateIntervalSeconds: 30
-    allowUiUpdates: true
-    options:
-      path: /var/lib/grafana/dashboards/recon
-      foldersFromFilesStructure: false

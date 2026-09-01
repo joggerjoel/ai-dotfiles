@@ -1,0 +1,59 @@
+{{ ansible_managed | comment }}
+# Rendered from ansible-ai/templates/loki-config.yml.j2.
+#
+# Single binary, filesystem storage. This fleet ships logs from one host, so
+# there is nothing here to justify object storage or a read/write split.
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  # Without this, retention below is silently ignored for anything already
+  # ingested. Both are needed for the window to mean anything.
+  retention_period: {{ obs.retention.loki.period }}
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  volume_enabled: true
+
+# Retention is enforced by the compactor and NOTHING ELSE. It is off by
+# default, so a retention_period on its own produces a config that reads
+# correct and deletes nothing, which is how the stack this replaces grew logs
+# forever.
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: {{ obs.retention.loki.compactor_retention_enabled | lower }}
+  delete_request_store: {{ obs.retention.loki.delete_request_store }}
+
+ruler:
+  storage:
+    type: local
+    local:
+      directory: /loki/rules
+
+analytics:
+  reporting_enabled: false

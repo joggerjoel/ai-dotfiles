@@ -166,9 +166,21 @@ dashboards:
 # copy still attached to recon's compose, which is stronger than the snapshot
 # step an earlier draft described. Total is about 92 MB, so the copy costs
 # seconds.
+# The stubhub-recon-gui project is defunct, which removes most of what made an
+# earlier version of this file complicated. There is no ownership split to
+# maintain, no read-only mounts into another repo's working tree, and no shared
+# network: recon-network was verified to hold only the four monitoring
+# containers this stack replaces, so it is replaced by our own.
+#
+# Only prometheus carries data worth keeping. Its volume holds fleet
+# node_exporter history, so it is copied. Grafana deliberately starts FRESH:
+# the inherited volume carries admin/admin, anonymous access, dead dashboards
+# for a dead project, and API keys nobody can enumerate. Starting clean is the
+# fix for that, not a cost of it. Loki and promtail held 1.3 MB of a defunct
+# project's logs.
 stack:
   dir: /opt/observability
-  network: recon-network
+  network: obs-network
   # Images carry both a tag and a digest. The tag is for humans, the digest is
   # what docker resolves. A tag can be repointed on the registry without this
   # file changing, which is the same silent drift this design treats as a bug
@@ -192,7 +204,6 @@ stack:
     port: 3002
     bind: "0.0.0.0"
     volume: obs_grafana_data
-    migrate_from: recon-monitoring_grafana_data
     mem_limit: 1g
   prometheus:
     image: "prom/prometheus:v3.9.1"
@@ -208,13 +219,11 @@ stack:
     port: 3100
     bind: "127.0.0.1"
     volume: obs_loki_data
-    migrate_from: recon-monitoring_loki_data
     mem_limit: 2g
   promtail:
     image: "grafana/promtail:3.6.0"
     digest: "sha256:2aafa34b3d5fba888c51081d3a22c234906ffd3cafc5def11c581549b297d449"
     volume: obs_promtail_data
-    migrate_from: recon-monitoring_promtail_data
     mem_limit: 512m
 
 # A docker volume on the local driver has no size of its own. It is a directory
@@ -248,25 +257,3 @@ retention:
     compactor_retention_enabled: true
     delete_request_store: filesystem
 
-# The stubhub-recon-gui repo owns these paths. ai-dotfiles reads them and never
-# writes them: the dashboards mount read-only, and the scrape jobs are pulled in
-# through prometheus `scrape_config_files`. Writing into another repo's working
-# tree would let a git checkout there silently revert the fleet config.
-foreign:
-  # Absolute on purpose. Docker Compose does not expand `~` in a bind-mount
-  # source, and a compose run as root would resolve a real `~` to /root. Either
-  # way the mount silently resolves to an empty directory, and because every
-  # recon provider sets `disableDeletion: false`, grafana's file provisioner
-  # then deletes the 20 dashboards it had provisioned from the shared volume
-  # this design promises will survive. Never write a `~` here.
-  recon_monitoring_dir: "/home/joggerjoel/Developer/stubhub-recon-gui/monitoring"
-  # Set on every foreign provider we render, so a mount that goes missing
-  # degrades to stale dashboards instead of destroying them.
-  disable_deletion: true
-  dashboard_providers:
-    - { name: Recon, folder: Recon, path: grafana/dashboards/json }
-    - {
-        name: Ticket Exchange,
-        folder: Ticket Exchange,
-        path: grafana/dashboards/json,
-      }

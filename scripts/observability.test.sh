@@ -262,16 +262,39 @@ sys.exit(1 if bad else 0)
     ko "no service runs on a recon-owned volume"
   fi
 
-  # Copy, never move. The untouched originals are the rollback.
+  # Only prometheus carries data forward, because its volume holds fleet
+  # node_exporter history. Grafana deliberately starts fresh: the inherited
+  # volume carried admin/admin, anonymous access and API keys nobody can
+  # enumerate, and starting clean is the fix for that rather than a cost of it.
   if python3 -c "
 import sys, yaml
 d = yaml.safe_load(open('$REAL_MANIFEST'))
-svcs = [v for k, v in d['stack'].items() if isinstance(v, dict)]
-sys.exit(0 if all('migrate_from' in s for s in svcs) else 1)
+carried = {k for k, v in d['stack'].items() if isinstance(v, dict) and v.get('migrate_from')}
+sys.exit(0 if carried == {'prometheus'} else 1)
 "; then
-    ok "every service names the volume its data is copied from"
+    ok "only prometheus carries data forward; grafana starts fresh"
   else
-    ko "every service names the volume its data is copied from"
+    ko "only prometheus carries data forward; grafana starts fresh"
+  fi
+
+  # Every config the compose file mounts must actually be rendered, or the
+  # container starts against a path docker created as an empty directory. The
+  # loki config was mounted and never rendered until this test caught it.
+  if python3 - "$ROOT/ansible-ai/templates/observability.compose.yml.j2" \
+               "$ROOT/ansible-ai/deploy-observability.yml" <<'EOF'
+import re, sys
+tpl = open(sys.argv[1]).read()
+pb  = open(sys.argv[2]).read()
+mounts = set(re.findall(r"obs\.stack\.dir\s*\}\}/([\w./-]+\.yml)", tpl))
+missing = sorted(m for m in mounts if m.split("/")[-1] not in pb)
+if missing:
+    print("mounted but never rendered:", missing, file=sys.stderr)
+sys.exit(1 if missing else 0)
+EOF
+  then
+    ok "every config the compose file mounts is rendered by the play"
+  else
+    ko "every config the compose file mounts is rendered by the play"
   fi
 
   # A tag can be repointed on the registry without this file changing, which is

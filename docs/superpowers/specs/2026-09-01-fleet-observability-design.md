@@ -462,9 +462,20 @@ Fail closed. If any check fails, change nothing and report which one.
    Compose does not expand `~` in a bind-mount source, and an empty mount
    combined with `disableDeletion: false` makes Grafana delete the 20 dashboards
    it had provisioned.
-5. Recon's scrape jobs have already been extracted into the `extra/` directory.
-   This is work in the recon repo, not here, and the migration will not proceed
-   without it. Skipping it silently drops recon's redis and mysql jobs.
+5. Nothing about recon's scrape jobs. An earlier version of this design required
+   recon to extract them into an `extra/` directory first, and that requirement
+   was wrong. Recon's `prometheus.yml` carries four active jobs (`prometheus`,
+   `node`, `redis`, `mysql`, plus a commented-out `ticket-exchange`), and the
+   generated config is a strict superset of all four with more targets in each.
+   Nothing is dropped, so the precondition stalled the migration on work that
+   never needed doing.
+
+   The `extra/` extension point still exists for scrape jobs this repo does not
+   generate, but it lives at `/opt/observability/prometheus/extra` rather than
+   inside recon's git working tree. Creating a directory in that tree would be
+   the cross-repo write this design refuses, and a checkout there could revert
+   it. An empty directory is fine: Prometheus starts normally with a
+   `scrape_config_files` glob matching zero files, verified against v3.9.1.
 6. A Grafana admin password and a `GF_SECURITY_SECRET_KEY` are available from
    `~/.claude/.env`.
 7. Port 3002 is held by `recon-grafana` and nothing else.

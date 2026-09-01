@@ -308,6 +308,8 @@
         [
           "",
           prometheus,
+          prometheus/extra,
+          promtail,
           loki,
           grafana,
           grafana/provisioning/datasources,
@@ -348,6 +350,8 @@
             src: grafana-providers.yml.j2,
             dest: grafana/provisioning/dashboards/providers.yml,
           }
+        - { src: loki-config.yml.j2, dest: loki/loki-config.yml }
+        - { src: promtail-config.yml.j2, dest: promtail/promtail-config.yml }
       no_log: false
 
     # Rendered separately so its changed status can drive the reload below.
@@ -453,7 +457,7 @@
 # live monitoring stack on a host that also runs 18 stubhub-minter containers.
 #
 #   ansible-playbook deploy-observability.yml --tags migrate
-- name: Take ownership of the recon stack
+- name: Replace the defunct recon monitoring stack
   hosts: observability_ai
   gather_facts: true
   become: true
@@ -481,28 +485,14 @@
     # Docker creates an empty volume for an unknown name instead of failing, so
     # a typo here would copy nothing and bring the stack up blank while
     # reporting success.
-    - name: Check recon's monitoring directory exists at an absolute path
-      ansible.builtin.stat:
-        path: "{{ obs.foreign.recon_monitoring_dir }}"
-      register: recon_dir
 
-    - name: Check recon has extracted its scrape jobs
-      ansible.builtin.stat:
-        path: "{{ obs.foreign.recon_monitoring_dir }}/prometheus/extra"
-      register: extra_dir
+    # There is deliberately no precondition on recon extracting its scrape jobs.
+    # An earlier version of this play required that and it was simply wrong:
+    # recon's prometheus.yml carries four active jobs (prometheus, node, redis,
+    # mysql) and the generated config is a strict superset of all four, with
+    # more targets in each. Nothing is dropped by the takeover, so blocking on
+    # work in another repo bought nothing and stalled the migration.
 
-    - name: Fail closed on any unmet precondition
-      ansible.builtin.assert:
-        that:
-          - recon_dir.stat.exists
-          - not obs.foreign.recon_monitoring_dir.startswith('~')
-          - extra_dir.stat.exists
-        fail_msg: >-
-          Preconditions unmet. recon_monitoring_dir must exist and be absolute
-          (compose does not expand ~), and recon must have moved its scrape jobs
-          into prometheus/extra/ first, which is work in that repo. Nothing was
-          stopped.
-        quiet: true
 
     # By name, never `docker compose down`, which would also take
     # recon-promtail with it and remove the containers that make rollback a
@@ -555,10 +545,14 @@
     - name: Record that the migration completed
       ansible.builtin.copy:
         content: |
-          Migrated from the stubhub-recon-gui stack on {{ ansible_date_time.iso8601 }}.
-          Source volumes were copied, not moved, and are untouched. To roll back:
+          Replaced the stubhub-recon-gui monitoring stack on {{ ansible_date_time.iso8601 }}.
+          That project is defunct. Only recon-monitoring_prometheus_data was
+          copied, because it holds fleet node_exporter history; grafana, loki
+          and promtail started fresh. The source volumes were copied, never
+          moved, and are untouched, so the old stack can still be started from
+          its own compose file if it is ever needed.
+          To roll back this stack:
             docker compose -f {{ obs.stack.dir }}/docker-compose.yml down
-            docker compose -f {{ obs.foreign.recon_monitoring_dir }}/docker-compose.yml up -d
         dest: "{{ obs.stack.dir }}/.migrated-from-recon"
         owner: root
         group: root
