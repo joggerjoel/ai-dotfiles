@@ -19,6 +19,29 @@
 node_exporter:
   version: "1.12.1"
   listen_address: ":9100"
+  # node_exporter ships no collector for listening sockets. node_netstat_* and
+  # node_sockstat_* are aggregate counters, so a stock install cannot answer
+  # "what is bound to 3002 on this host". Nothing on grafana.com fixes that
+  # either, because the metric does not exist to build a dashboard on: a search
+  # for listening-port dashboards returns zero results.
+  #
+  # The textfile collector is compiled in and on by default, but its directory
+  # defaults to empty, which is why the fleet's current units read simply
+  # `ExecStart=/usr/local/bin/node_exporter` and publish nothing. Setting the
+  # directory is the whole change.
+  textfile_dir: /var/lib/node_exporter/textfile_collector
+  textfile_collectors:
+    # Reads from inside the host, so it gets the process name and costs no port
+    # scan on the LAN. The alternative, prometheus-net-discovery, scans from
+    # outside: no process names, and a recurring nmap sweep of your own network.
+    #
+    # Runs as root. `ss -p` only names processes the caller owns, so an
+    # unprivileged run reports proc="unknown" for everything else, which looks
+    # like data rather than like a permissions problem.
+    - name: listening_ports
+      script: scripts/node-listening-ports.sh
+      interval: 5m
+      user: root
   # Linux installs the release tarball under a systemd unit. macOS uses
   # homebrew, whose formula can lag upstream; the reconciler reports the gap
   # rather than failing, since brew will not install an arbitrary version.
@@ -31,6 +54,19 @@ dashboards:
   - name: node-exporter-full
     gnet_id: 1860
     revision: 45
+    folder: Fleet
+    datasource: prometheus
+  # Hand authored, because no published dashboard covers this. A grafana.com
+  # search for "listening ports" returns nothing, and the closest hit, 23614
+  # "Prometheus Net Discovery", needs a network scanner rather than this metric.
+  # Dashboard 14788 "Port General" is a different meaning of the word entirely:
+  # SNMP switch-interface bandwidth, read out of InfluxDB.
+  #
+  # The panel that pays for this is a table of node_listening_port grouped by
+  # port and host. Before binding anything, node_listening_port{port="3002"}
+  # lists every host already using it.
+  - name: fleet-listening-ports
+    file: dashboards/fleet-listening-ports.json
     folder: Fleet
     datasource: prometheus
 

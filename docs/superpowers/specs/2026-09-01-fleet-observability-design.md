@@ -176,9 +176,15 @@ ansible-ai/
     grafana-datasources.yml.j2
     grafana-providers.yml.j2
     node_exporter.service.j2
+  templates/
+    node-listening-ports.timer.j2
+  dashboards/
+    fleet-listening-ports.json          hand authored, no published equivalent
 scripts/
   observability.sh                      the audit lever
   observability.test.sh
+  node-listening-ports.sh               textfile collector, runs on every host
+  node-listening-ports.test.sh
 ```
 
 ## Where each entry point stops
@@ -221,7 +227,8 @@ draft claimed the playbook "targets `observability_ai` and never `aorus_ai`",
 which contradicted its own requirement to install exporters fleet wide.
 
 **Play 1, `hosts: aorus_ai:local_ai`, tags `[exporter]`.** Converges
-node_exporter everywhere.
+node_exporter everywhere, sets its textfile directory, installs the listening
+port collector, and renders its timer.
 
 **Play 2, `hosts: observability_ai`, tags `[stack]`.** Renders the compose file,
 the datasources, the providers, and the generated `prometheus.yml`, then brings
@@ -254,6 +261,79 @@ and cannot pin an arbitrary version. Those three hosts are therefore
 report-only. The reconciler prints the gap and does not fail the run. Say this
 plainly rather than letting the gap table imply an exact-version guarantee the
 mechanism cannot deliver.
+
+## Seeing which ports are taken
+
+Twice now this project has been surprised by a port. Grafana sits on 3002
+because an unidentified Node process holds 3000 on aorus7, and recon's compose
+still binds 3002 so a stray `up` there collides with the fleet stack.
+
+Nothing off the shelf answers "what is bound to 3002". node_exporter ships no
+collector for listening sockets, and `node_netstat_*` and `node_sockstat_*` are
+aggregate counters. A grafana.com search for listening-port dashboards returns
+zero results, because the metric does not exist to build one on. The nearest
+published dashboards solve different problems. 14788 "Port General" reads SNMP
+switch-interface bandwidth out of InfluxDB, where "port" means a physical
+interface. 23614 "Prometheus Net Discovery" does find open ports, but by
+scanning the network from outside, so it returns no process names and puts a
+recurring sweep on the LAN.
+
+Producing the metric is cheaper than working around its absence. The textfile
+collector is compiled into node_exporter and enabled by default; its directory
+just defaults to empty, which is why every unit on the fleet currently reads
+`ExecStart=/usr/local/bin/node_exporter` and publishes nothing.
+
+The exporter play therefore does three things beyond installing the binary. It
+sets `--collector.textfile.directory`. It installs
+`scripts/node-listening-ports.sh`. It renders a systemd timer that runs the
+script as root every five minutes.
+
+```
+node_listening_port{port="3000",addr="0.0.0.0",proc="node"} 1
+```
+
+Reading from inside the host is what gets the process name, and it costs no port
+scan. Root matters: `ss -p` only names processes the caller owns, so an
+unprivileged run reports `proc="unknown"` for everything else, which looks like
+data rather than like a permissions problem.
+
+Three details in the script exist because each one silently destroys the metric.
+The file is written to a temp name and renamed, because node_exporter reads the
+directory on every scrape and a half-written file parses as a truncated metric
+set. Addresses are split on the last colon, because `[::]:22` split on the first
+yields an empty port and a dropped socket. Identical label sets are deduplicated,
+because sshd binding 22 on both IPv4 and IPv6 normalises to one series, and
+Prometheus rejects an entire textfile containing a duplicate, so the whole file
+would vanish rather than double count.
+
+The dashboard is hand authored and lives in this repo, since no published one
+exists. The panel that pays for it is a table of `node_listening_port` grouped
+by port and host. Before binding anything, `node_listening_port{port="3002"}`
+lists every host already using it.
+
+Running the parser against 44 real sockets from aorus7 produced 44 metric lines,
+no duplicates, and no malformed output.
+
+### What the fleet binds today
+
+Captured on 2026-09-01, externally reachable ports only. This is the survey the
+metric makes continuous.
+
+| Host | Ports |
+| --- | --- |
+| aorus | 22 80 3306 4000 4369 5672 6379 9100 9104 9121 15672 15692 25672 |
+| aorus2 | 22 4000 6379 7070 9100 9121 |
+| aorus4 | 22 80 3000 3101 5005 5056 5432 5435 6379 6543 8000 8010 8080 8082 8083 8084 8096 8401 8402 8443 9100 9121 9876 |
+| aorus5 | 22 4000 9100 |
+| aorus6 | 22 2379 2380 4000 5000 9000 9100 |
+| aorus7 | 22 80 3000 3002 4000 4369 5000 5672 8080 8081 8082 8083 8724 8790 9100 15672 25672 |
+| aorus8 | 22 1777 4000 4317 4318 4369 5000 5672 9100 9411 12340 14250 14268 15672 25672 |
+
+Two things worth acting on separately. Port 9121 is redis_exporter, and it runs
+on aorus, aorus2, and aorus4, while recon's Prometheus scrapes only the one on
+aorus. Two exporters have been running unscraped, which is the roster drift the
+inventory-generated config exists to end. And aorus8 is running a tracing stack
+on 4317, 4318, 9411, 14250, and 14268, which nothing in this design accounts for.
 
 ## The lever
 

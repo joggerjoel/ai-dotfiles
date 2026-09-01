@@ -217,16 +217,49 @@ sys.exit(0 if all(s.get('mem_limit') for s in svcs) else 1)
     ko "every service has a memory limit"
   fi
 
-  # A dashboard without a revision tracks whatever grafana.com publishes, which
-  # makes the deploy non-reproducible.
+  # A grafana.com dashboard without a revision tracks whatever upstream
+  # publishes, which makes the deploy non-reproducible. A local dashboard is
+  # pinned by living in the repo, so it needs a file instead.
   if python3 -c "
 import sys, yaml
 d = yaml.safe_load(open('$REAL_MANIFEST'))
-sys.exit(0 if all('revision' in x for x in d['dashboards']) else 1)
+def pinned(x):
+    if 'gnet_id' in x: return 'revision' in x
+    return bool(x.get('file'))
+sys.exit(0 if all(pinned(x) for x in d['dashboards']) else 1)
 "; then
-    ok "every dashboard is pinned to a revision"
+    ok "every dashboard is pinned, by revision or by a repo file"
   else
-    ko "every dashboard is pinned to a revision"
+    ko "every dashboard is pinned, by revision or by a repo file"
+  fi
+
+  # A collector naming a script that does not exist renders a timer that fails
+  # on every fire, and a missing metric reads identically to a host with no
+  # listening sockets.
+  if python3 -c "
+import sys, os, yaml
+d = yaml.safe_load(open('$REAL_MANIFEST'))
+root = '$ROOT'
+cs = d['node_exporter'].get('textfile_collectors', [])
+missing = [c['script'] for c in cs if not os.path.exists(os.path.join(root, c['script']))]
+if missing: print('missing:', missing, file=sys.stderr)
+sys.exit(1 if missing or not cs else 0)
+"; then
+    ok "every textfile collector names a script that exists"
+  else
+    ko "every textfile collector names a script that exists"
+  fi
+
+  # The whole point of the collector is defeated if the unit never reads the
+  # directory. The fleet's current units carry no flags at all.
+  if python3 -c "
+import sys, yaml
+d = yaml.safe_load(open('$REAL_MANIFEST'))
+sys.exit(0 if d['node_exporter'].get('textfile_dir') else 1)
+"; then
+    ok "a textfile directory is configured for node_exporter to read"
+  else
+    ko "a textfile directory is configured for node_exporter to read"
   fi
 else
   printf '  SKIP  the committed manifest (not present here)\n'
