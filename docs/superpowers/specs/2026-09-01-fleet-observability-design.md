@@ -169,7 +169,7 @@ doing later. It is not worth blocking metrics on now.
 ```
 ansible-ai/
   observability.yml                     manifest, the source of truth
-  deploy-observability.yml              the playbook
+  deploy-observability.yml              three plays, described below
   templates/
     observability.compose.yml.j2
     prometheus.yml.j2
@@ -177,61 +177,212 @@ ansible-ai/
     grafana-providers.yml.j2
     node_exporter.service.j2
 scripts/
-  observability.sh                      the lever
+  observability.sh                      the audit lever
   observability.test.sh
 ```
 
+## Where each entry point stops
+
+`setup.sh` configures the machine it runs on and nothing else. It gains no
+observability subcommand. An earlier draft proposed `./setup.sh grafana` to
+provision whichever machine you happened to be sitting on, with no check that
+the machine belonged to `observability_ai`. That is the same unconstrained
+targeting that once installed the 9router gateway on every fleet host, which
+`deploy-9router.yml` records in its header. Deleting the entry point is a
+better fix than guarding it, because the inventory group then becomes the only
+way a host acquires the stack.
+
+Convergence belongs to the ansible path, where group membership decides
+placement and every step is written to be re-runnable.
+
+| Command | Runs | Reaches |
+| --- | --- | --- |
+| `just fleet-update` | `update.yml`, no limit | `ai_all`, so every fleet host and the control node |
+| `update.sh --all` | `update.yml --limit aorus_ai` | the nine fleet hosts, never the control node |
+| `ansible-playbook deploy-observability.yml` | this playbook alone | whatever its plays target |
+
+`just fleet-update` is the canonical command. It is the only one that converges
+the control node, because `update.sh --all` limits itself to `aorus_ai` on
+purpose, and the control node lives in `local_ai`.
+
+`update.yml` imports this playbook the way it already imports `deploy-9router.yml`.
+
+```yaml
+- import_playbook: deploy-observability.yml
+  tags: [observability]
+```
+
+`--skip-tags observability` turns the whole thing off.
+
+## The playbook
+
+Three plays, because one host pattern cannot serve all three jobs. An earlier
+draft claimed the playbook "targets `observability_ai` and never `aorus_ai`",
+which contradicted its own requirement to install exporters fleet wide.
+
+**Play 1, `hosts: aorus_ai:local_ai`, tags `[exporter]`.** Converges
+node_exporter everywhere.
+
+**Play 2, `hosts: observability_ai`, tags `[stack]`.** Renders the compose file,
+the datasources, the providers, and the generated `prometheus.yml`, then brings
+the stack up and reloads Prometheus.
+
+**Play 3, `hosts: observability_ai`, tags `[migrate, never]`.** The one-time
+takeover. Ansible's built-in `never` tag means these tasks are skipped unless
+someone names the `migrate` tag on the command line. A normal
+`just fleet-update` cannot reach them. This replaces an earlier plan to gate the
+migration behind a `--migrate` flag on a shell script, a flag no described
+subcommand ever accepted.
+
+## Acquiring node_exporter
+
+The distribution packages cannot satisfy the version requirement. The apt
+candidate is 1.3.1 on Ubuntu 22.04 and 1.7.0 on 24.04, against a manifest that
+pins 1.12.1, so a package install would reintroduce the "present but stale"
+state this design exists to end.
+
+Linux hosts therefore get the upstream release tarball. Download
+`node_exporter-<version>.linux-<arch>.tar.gz` from the GitHub release, verify it
+against the `sha256sums.txt` published with that release, install the binary to
+`/usr/local/bin/node_exporter`, and render the systemd unit. That matches how
+the running 1.10.2 was installed, so this is an upgrade in place rather than a
+new layout: the unit already lives at `/etc/systemd/system/node_exporter.service`
+and already runs as a dedicated `node_exporter` user.
+
+macOS hosts get Homebrew, which installs whatever the formula currently ships
+and cannot pin an arbitrary version. Those three hosts are therefore
+report-only. The reconciler prints the gap and does not fail the run. Say this
+plainly rather than letting the gap table imply an exact-version guarantee the
+mechanism cannot deliver.
+
 ## The lever
 
-`scripts/observability.sh` carries three subcommands.
+`scripts/observability.sh check` reads the fleet from the control node and
+prints desired against actual for every host. It writes nothing.
 
-`check` reads the fleet and prints desired against actual for every host. It
-writes nothing. Run it to audit the work rather than trusting a summary.
+`check` counts hosts that gave no answer separately from hosts that drifted,
+and exits non-zero for either. An earlier version counted only drift, so a host
+it could not reach incremented nothing and the run ended green. A fleet that was
+entirely down reported success, from the one command this document tells you to
+trust. An audit that treats silence as a pass is worse than no audit, because it
+is believed.
 
-`sync-dashboards` fetches each pinned revision from
-`https://grafana.com/api/dashboards/<gnet_id>/revisions/<revision>/download`,
-rewrites the `DS_*` input to the `prometheus` datasource uid, and compares
-content hashes before writing. An unchanged dashboard causes no write and no
-Grafana reload.
-
-`converge` applies the manifest.
-
-## Entry points
-
-To deploy across the fleet, run `ansible-playbook deploy-observability.yml`.
-
-To provision the machine you are sitting on, run `./setup.sh grafana`. It
-mirrors `provision-firstmate`, which the dispatch block documents as opt-in and
-never part of `setup.sh` or `setup.sh update`. The command also accepts
-`--setup=grafana`, because that is the form the request used, though the house
-style in this repo is a positional subcommand.
-
-`update.sh` gains a step that refreshes dashboards from the manifest. The step
-runs only on the observability host. Under `--all`, `update.yml` imports the
-playbook behind an `observability` tag, so `--skip-tags observability` turns it
-off.
+Convergence itself is not a subcommand. Ansible owns it.
 
 ## Idempotency
 
 Running twice must reach the same state as running once.
 
-The exporter reconciler compares versions before acting. `docker compose up -d`
-recreates a container only when its config or image changes. The compose file
-declares the existing volumes `external: true`, so Grafana dashboards, users,
-and Prometheus history survive the rename. Dashboard sync compares content
-hashes. The one-time migration writes a marker file at
-`/opt/observability/.migrated-from-recon` and checks it before running.
+The exporter reconciler compares versions before acting. Dashboard sync
+validates that a download is JSON carrying the expected `uid` before it hashes
+or writes anything, so a 404 body or a rate-limit page cannot overwrite a
+working dashboard, and a fetch failure leaves the existing file untouched.
+
+Rendering `prometheus.yml` does not restart Prometheus, because the file is
+bind-mounted and neither the compose config nor the image changed. Adding a
+fleet host would otherwise report converged and never be scraped. The play
+therefore reloads Prometheus over `/-/reload` whenever the rendered content hash
+changes, which requires `--web.enable-lifecycle` on the container.
 
 ## Migration
 
-Taking ownership stops four running containers and starts them under new
-names. `docker compose down` runs without `-v`, so the volumes and their data
-survive. Restarting the recon compose file reverses it.
+This section is rewritten. The previous version was three sentences and an
+adversarial review found six defects in it, including a path that would have
+deleted another project's dashboards.
 
-`aorus7` also runs 18 `stubhub-minter` containers. The migration does not touch
-them, but it does restart a live monitoring stack on a busy host. Gate it
-behind an explicit `--migrate` flag and a confirmation prompt. It must never
-run as a side effect of a normal update.
+The migration transfers ownership of the stack on aorus7 from
+`stubhub-recon-gui` to this repo. It stops running containers on a host that
+also runs 18 `stubhub-minter` containers, so it runs only when someone asks for
+it by name.
+
+### Preconditions, all verified before anything stops
+
+Fail closed. If any check fails, change nothing and report which one.
+
+1. The three named volumes exist exactly as spelled in the manifest. A
+   mismatched name makes Docker create a new empty volume instead of failing,
+   which is a silent path to the data loss this migration promises cannot
+   happen.
+2. `recon-network` exists.
+3. The recon monitoring directory exists at the absolute path in the manifest.
+   Compose does not expand `~` in a bind-mount source, and an empty mount
+   combined with `disableDeletion: false` makes Grafana delete the 20 dashboards
+   it had provisioned.
+4. Recon's scrape jobs have already been extracted into the `extra/` directory.
+   This is work in the recon repo, not here, and the migration will not proceed
+   without it. Skipping it silently drops recon's redis and mysql jobs.
+5. A Grafana admin password and a `GF_SECURITY_SECRET_KEY` are available from
+   `~/.claude/.env`.
+6. Port 3002 is held by `recon-grafana` and nothing else.
+
+### Steps, in this order
+
+1. Snapshot `grafana.db` and the Prometheus and Loki volume metadata into
+   `/opt/observability/backup/<timestamp>/`. This is what makes the rollback
+   claim true. The earlier draft asserted reversibility without ever taking a
+   copy.
+2. Render every config file into `/opt/observability`. Nothing running is
+   touched yet, so an interrupt here costs nothing.
+3. Stop the three containers this repo replaces. Use `docker stop` on
+   `recon-grafana`, `recon-prometheus`, and `recon-loki` by name, never
+   `docker compose down`, which would also take `recon-promtail` with it.
+4. Bring up the new stack as `obs-grafana`, `obs-prometheus`, `obs-loki`, and
+   `obs-promtail`.
+5. Health check with a timeout. Grafana `/api/health`, Prometheus `/-/healthy`,
+   Loki `/ready`. A failure here restores from step 1 and stops.
+6. Write `/opt/observability/.migrated-from-recon` only after the health check
+   passes.
+
+The marker is written last on purpose. An interrupt at any earlier point leaves
+no marker, so a re-run starts from the preconditions and converges. Steps 3 and
+4 are both no-ops when already applied.
+
+### Promtail is adopted, not dropped
+
+The running stack has four containers and an earlier draft defined three, so
+`recon-promtail` was stopped and nothing restarted it. Loki would have kept
+running with nothing feeding it while this document claimed "Loki and its log
+agent stay on the Grafana host".
+
+This repo now owns the promtail container and recon keeps owning its config,
+bind-mounted read only. That is the same split already used for dashboards and
+scrape jobs, so there is one rule rather than three. Promtail is end of life
+upstream and replacing it with Grafana Alloy is deferred, tracked below.
+
+### What rollback actually restores
+
+Stop the `obs-*` stack, restore `grafana.db` from the step 1 snapshot, then
+bring recon's compose file back up. The image versions in the manifest are
+pinned to exactly what aorus7 runs today, specifically to avoid a Loki schema
+upgrade that no snapshot can reverse.
+
+### Residual risk this repo cannot close
+
+Recon's compose file still declares the same volumes and the same port. A
+routine `docker compose up` in that repo starts a second Grafana against the
+same data, and a `docker compose down -v` there destroys fleet metrics and
+dashboards. Nothing in this repository can prevent that, because writing into
+another repo's working tree is the practice this whole design refuses. Record it
+in the recon repo instead, and treat the step 1 snapshot as the mitigation.
+
+The container rename from `recon-*` to `obs-*` also breaks any peer on
+`recon-network` that addresses those containers by name. Service names stay
+`prometheus`, `loki`, and `grafana`, so DNS by service name keeps working. Audit
+the peers before renaming, or keep the old container names, which cost nothing.
+
+### Fix the credentials during the migration, not after
+
+aorus7's Grafana currently runs with `GF_SECURITY_ADMIN_PASSWORD=admin` and
+`[auth.anonymous] enabled = true`, bound to `0.0.0.0:3002`. The reused volume
+also carries every user, service account, and API key the recon project created,
+and its stored datasource secrets are encrypted under Grafana's default key
+because no `GF_SECURITY_SECRET_KEY` is set.
+
+Inheriting that while widening the instance from one project's app metrics to
+fleet-wide infrastructure data is how a dormant problem becomes a larger one.
+The migration sets a real admin password, sets `GF_SECURITY_SECRET_KEY`,
+disables anonymous access, and enumerates the inherited accounts and API keys so
+you can decide what to keep.
 
 ## Tests
 
@@ -241,8 +392,20 @@ The important test asserts that the generated scrape targets equal the output
 of `fleet_hosts()`. Drift then fails the suite instead of going unnoticed for
 months, which is what happened to the recon target list.
 
-Further tests cover manifest parsing, the three reconciler outcomes against
-recorded version strings, and a second `converge` run reporting no change.
+Further tests cover manifest parsing, all seven reconciler outcomes against
+recorded version strings, and a second converge run reporting no change.
+
+Two tests exist because the defect they guard already shipped once.
+
+- `check` exits non-zero when a host gives no answer. It did not, and a fleet
+  that was entirely down reported success.
+- No path in the manifest starts with `~`. One did, and Compose would have
+  resolved the mount to an empty directory and let Grafana delete recon's
+  dashboards.
+
+A third is required when the playbook lands. Assert that the `migrate` play
+carries the `never` tag, so a routine `just fleet-update` cannot restart a live
+stack on a busy host. The gate is worthless if a later edit drops the tag.
 
 ## Open questions
 
@@ -252,19 +415,38 @@ adversarial review found roughly fifteen critical defects in a document that
 claimed to have none. Treat a self-certified completeness claim as the least
 trustworthy sentence in any spec, including this one.
 
-Open questions now tracked, none of them resolved:
+Resolved since that review, by moving convergence into the ansible path:
 
-- The `--migrate` gate has no producer. No subcommand or entry point accepts it.
-- `./setup.sh grafana` has no check that the machine belongs to
-  `observability_ai`, which reintroduces the unconstrained-targeting mistake
-  this document cites against itself.
-- Recon's scrape jobs live inline in its own `prometheus.yml`. Nothing extracts
-  them into `extra/*.yml`, and this repo is not allowed to write them.
-- Promtail is stopped by the migration and nothing restarts it.
-- The reused volumes stay declared by recon's compose project, so a `down -v`
-  there destroys fleet data.
-- Retention, volume sizes, and container resource limits are all unspecified.
-- Rewriting `prometheus.yml` does not restart the container, so a new host is
-  reported converged and never scraped until someone reloads Prometheus.
-- Grafana on aorus7 currently runs with a default admin password and anonymous
-  access enabled. Taking ownership must fix that rather than inherit it.
+- The migration gate now uses ansible's `never` tag, so a normal run cannot
+  reach it. The earlier `--migrate` flag had no producer.
+- `./setup.sh grafana` is deleted rather than guarded. Inventory membership is
+  the only way a host gets the stack.
+- The playbook is three plays with three host patterns, so installing exporters
+  fleet wide no longer contradicts targeting the Grafana host.
+- Promtail is adopted instead of orphaned.
+- Prometheus is reloaded when the rendered target list changes.
+- Dashboard downloads are validated before they overwrite anything.
+- The rollback claim is backed by an actual snapshot step.
+- Package managers are ruled out with evidence, and the macOS path is stated as
+  report-only.
+
+Still open:
+
+- Retention, volume sizes, and container resource limits are unspecified.
+  Prometheus and Loki share a host with 18 other containers.
+- Recon's compose file stays live and can start a duplicate Grafana or destroy
+  the shared volumes with `down -v`. This repo cannot close that.
+- Extracting recon's scrape jobs into `extra/` is a precondition owned by
+  another repo. The migration refuses to run until it is done.
+- Container images are pinned by mutable tag rather than by digest, which is the
+  drift class this design otherwise treats as a bug.
+- Dashboard downloads are not verified against a pinned checksum, only
+  validated as well-formed.
+- node_exporter listens on `:9100` on all interfaces, including a laptop that
+  leaves the LAN.
+- Replacing Promtail with Grafana Alloy, and shipping logs from more than one
+  host.
+
+Separate from this design, and worth doing whether or not any of it ships:
+aorus7's Grafana is reachable on the LAN today with anonymous access enabled and
+`admin` as the admin password.
