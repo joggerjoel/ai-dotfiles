@@ -1,7 +1,12 @@
 # Fleet observability design
 
 Date: 2026-09-01
-Status: approved design, not yet implemented
+Status: implemented and deployed, except the takeover of the old stack
+
+The exporter layer is live on 8 of 10 hosts. The Grafana stack is rendered on
+aorus7 but not started, because the takeover is gated. Sections below marked as
+future tense were written before implementation; the "Open questions" section at
+the end is the current state of record.
 
 ## What this is for
 
@@ -38,12 +43,17 @@ unrelated Node process. Grafana sits on 3002 for that reason.
 
 ## The gap this closes
 
-| Host | Exporter now | Target | Action |
+This was the gap as measured on 2026-09-01, with what actually happened.
+
+| Host | Was | Target | Outcome |
 | --- | --- | --- | --- |
-| aorus, aorus2, aorus4, aorus5, aorus6, aorus7, aorus8 | 1.10.2 | 1.12.1 | Upgrade |
-| macstudio, macair | absent | 1.12.1 | Install with Homebrew |
-| control node (this Mac) | absent | 1.12.1 | Install with Homebrew |
-| Dashboard 1860 | vendored, revision unknown | revision 45 | Reprovision |
+| aorus, aorus2, aorus4, aorus5, aorus6, aorus7, aorus8 | 1.10.2 | 1.12.1 | Done, verified `current` |
+| macstudio | 1.10.2, reported `absent` | 1.12.1 | Done, by tarball and LaunchDaemon |
+| macair, control node | absent | 1.12.1 | Blocked: no passwordless sudo |
+| Dashboard 1860 | vendored, revision unknown | revision 45 | Rendered, pending takeover |
+
+macstudio read as `absent` only because `command -v` cannot see /usr/local/bin
+in a non-login ssh shell. It had been running 1.10.2 as root the whole time.
 
 ## Decisions
 
@@ -144,8 +154,15 @@ are different rules, and the second contains the first. All seven Ubuntu hosts
 report the exporter as `active`, which reads as done and is not. They are on
 1.10.2 against an upstream 1.12.1. Presence was never the right question.
 
-Linux hosts get a systemd unit. macOS hosts get Homebrew and `brew services`.
-All three Macs are arm64.
+Linux hosts get a systemd unit; macOS gets a LaunchDaemon. Both install the
+same verified release tarball, so both pin an exact version. All three Macs are
+arm64.
+
+Homebrew was the first choice and it was wrong on three counts. brew is not on
+a non-login ssh PATH. macstudio already ran a LaunchDaemon that `brew services`
+would have fought. And a formula tracks upstream rather than the manifest: it
+ships 1.12.1 today, which made the gap look harmless, but an exact version is
+the thing this design promises.
 
 ### Bind Grafana to the LAN
 
