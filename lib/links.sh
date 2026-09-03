@@ -82,29 +82,40 @@ link_file() {
   return 0
 }
 
+# Remove dangling symlinks in <dir> whose target is inside this checkout. A
+# source retired from the repo (scripts/herdr-*.sh and bin/herdr-new-project
+# left with the herdr extraction) otherwise stays behind as a dangling link on
+# every host, forever — the linkers only ever add. Only links that point INTO
+# this repo are ours to remove; a dangling link the user made elsewhere is not
+# our business. Same rule install_skills applies through its manifest.
+# Dry-run aware, and counted as a change so the relink_all summary reflects
+# it. Always returns 0, like link_file.
+prune_dangling_links() {
+  local dir="$1" f
+  [ -d "$dir" ] || return 0
+  for f in "$dir"/*; do
+    [ -L "$f" ] || continue
+    case "$(readlink "$f")" in
+      "$DOTFILES_DIR"/*) ;;
+      *) continue ;;
+    esac
+    [ -e "$f" ] && continue
+    if [ -n "$LINKS_DRY_RUN" ]; then
+      ok "$(basename "$f") — would prune dangling link (dry run)"
+    else
+      rm -f "$f" && ok "$(basename "$f") — pruned dangling link"
+    fi
+    LINK_CHANGED=$(( LINK_CHANGED + 1 ))
+  done
+  return 0
+}
+
 # Repo CLI helpers (bin/* -> ~/.local/bin/<name>). Symlinked so a repo pull
-# updates the live tools.
+# updates the live tools. Pruning of retired tools happens in relink_all,
+# through prune_dangling_links, not here.
 link_bin_tools() {
   [ -d "$DOTFILES_DIR/bin" ] || { skip "no bin/ in this checkout"; return 0; }
   local f
-  # Prune first. A tool retired from bin/ (herdr-new-project left with the
-  # herdr extraction) otherwise stays behind as a dangling link on every host,
-  # forever — nothing below ever removes one. Only links that point INTO this
-  # repo are ours to remove; a dangling link the user made elsewhere is not our
-  # business. Same rule install_skills applies through its manifest.
-  for f in "$HOME"/.local/bin/*; do
-    [ -L "$f" ] || continue
-    case "$(readlink "$f")" in
-      "$DOTFILES_DIR"/*)
-        [ -e "$f" ] && continue
-        if [ -n "$LINKS_DRY_RUN" ]; then
-          ok "$(basename "$f") — would prune dangling link (dry run)"
-        else
-          rm -f "$f" && ok "$(basename "$f") — pruned dangling link"
-        fi
-        LINK_CHANGED=$(( LINK_CHANGED + 1 )) ;;
-    esac
-  done
   for f in "$DOTFILES_DIR"/bin/*; do
     [ -f "$f" ] || continue
     # Below the dry-run check, not above it: this chmod writes to the repo's
@@ -217,6 +228,13 @@ relink_all() {
   : "${CLAUDE_DIR:?relink_all requires CLAUDE_DIR}"
 
   links_reset_counters
+
+  # Prune before linking, so a retired source's stale link never survives a
+  # run — and so the prune lands in the same summary as the links.
+  prune_dangling_links "$CLAUDE_DIR/scripts"
+  prune_dangling_links "$CLAUDE_DIR/hooks"
+  prune_dangling_links "$HOME/.local/bin"
+  prune_dangling_links "$HOME/.codex/prompts"
 
   link_statusline
   link_repo_scripts

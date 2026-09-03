@@ -1613,6 +1613,50 @@ else
   report fail "link_file is defined only in lib/links.sh" "still in setup.sh"
 fi
 
+# 16. relink_all prunes dangling links that point into this checkout — and
+#     only those. A source retired from the repo (the herdr extraction left
+#     eight of them in ~/.claude/scripts on every host) must not survive a
+#     run; a dangling link the user made elsewhere is not ours to touch.
+_t_prune_repo_link() {
+  mkdir -p "$CLAUDE_DIR/scripts"
+  ln -sfn "$DOTFILES_DIR/scripts/retired.sh" "$CLAUDE_DIR/scripts/retired.sh"
+  relink_all
+  if [ ! -L "$CLAUDE_DIR/scripts/retired.sh" ] && [ ! -e "$CLAUDE_DIR/scripts/retired.sh" ] \
+     && grep -q 'retired.sh — pruned dangling link' <<<"$LINKS_OUT"; then
+    report pass "relink_all prunes a dangling link that points into the checkout"
+  else
+    report fail "relink_all prunes a dangling link that points into the checkout" "$(ls -l "$CLAUDE_DIR/scripts" 2>&1) $LINKS_OUT"
+  fi
+}
+links_case prune_repo_link _t_prune_repo_link
+
+_t_prune_foreign_link() {
+  mkdir -p "$CLAUDE_DIR/scripts"
+  ln -sfn "/nonexistent/elsewhere/tool.sh" "$CLAUDE_DIR/scripts/foreign.sh"
+  relink_all
+  if [ -L "$CLAUDE_DIR/scripts/foreign.sh" ] && ! grep -q 'foreign.sh' <<<"$LINKS_OUT"; then
+    report pass "relink_all leaves a dangling link that points outside the checkout alone"
+  else
+    report fail "relink_all leaves a dangling link that points outside the checkout alone" "$LINKS_OUT"
+  fi
+}
+links_case prune_foreign_link _t_prune_foreign_link
+
+_t_prune_dry_run() {
+  mkdir -p "$CLAUDE_DIR/scripts"
+  ln -sfn "$DOTFILES_DIR/scripts/retired.sh" "$CLAUDE_DIR/scripts/retired.sh"
+  LINKS_DRY_RUN=1
+  relink_all
+  if [ -L "$CLAUDE_DIR/scripts/retired.sh" ] \
+     && grep -q 'retired.sh — would prune dangling link (dry run)' <<<"$LINKS_OUT" \
+     && [ "$LINK_CHANGED" -ge 1 ]; then
+    report pass "relink_all dry run reports a prunable link without removing it"
+  else
+    report fail "relink_all dry run reports a prunable link without removing it" "changed=$LINK_CHANGED $LINKS_OUT"
+  fi
+}
+links_case prune_dry_run _t_prune_dry_run
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
