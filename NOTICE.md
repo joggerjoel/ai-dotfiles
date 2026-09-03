@@ -19,12 +19,12 @@ registry, and these 18 skills —
 
 ## 2. Vendored from named upstreams (their licenses apply)
 
-| Source | What | Re-vendor with |
-|---|---|---|
-| [decolua/9router](https://github.com/decolua/9router) | 9 skills: `9router`, `-chat`, `-embeddings`, `-image`, `-stt`, `-tts`, `-video`, `-web-fetch`, `-web-search` | `scripts/vendor-9router-skills.sh` |
-| [smarzban/herdr-file-viewer](https://github.com/smarzban/herdr-file-viewer) @ v1.15.0 | `skills/herdr-file-viewer` | see header comment in that SKILL.md |
-| Siqi Chen | `skills/humanizer` — MIT, `skills/humanizer/LICENSE` | — |
-| poteto | pstack skill pack | `scripts/vendor-pstack-skills.sh` |
+| Source                                                                                                                                                                                | What                                                                                                                                                   | Re-vendor with                      |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- |
+| [decolua/9router](https://github.com/decolua/9router)                                                                                                                                 | 9 skills: `9router`, `-chat`, `-embeddings`, `-image`, `-stt`, `-tts`, `-video`, `-web-fetch`, `-web-search`                                           | `scripts/vendor-9router-skills.sh`  |
+| [smarzban/herdr-file-viewer](https://github.com/smarzban/herdr-file-viewer) @ v1.15.0                                                                                                 | `skills/herdr-file-viewer`                                                                                                                             | see header comment in that SKILL.md |
+| Siqi Chen                                                                                                                                                                             | `skills/humanizer` — MIT, `skills/humanizer/LICENSE`                                                                                                   | —                                   |
+| [michael-denyer/pstack-claude](https://github.com/michael-denyer/pstack-claude) — port of poteto's pstack (MIT; also bundles cursor-team-kit + superpowers pieces, see its NOTICE.md) | not in `skills/` — installed at runtime: Claude Code plugin (`bootstrap-plugins.sh`, opt-in) + symlinks into `~/.agents/skills` and `~/.codex/prompts` | `scripts/sync-pstack.sh`            |
 
 Vendored files carry a header comment naming their source. Do not hand-edit them;
 re-vendor instead.
@@ -33,13 +33,13 @@ re-vendor instead.
 
 This repository provisions but does not contain:
 
-| Software | Role here | Source |
-|---|---|---|
-| `firstmate` | optional crew manager | [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate) |
-| `herdr` | terminal workspace manager | https://herdr.dev |
-| `9router` | model gateway | https://9router.com |
-| `mel` | agentic terminal harness | https://openmel.dev |
-| agent CLIs | `claude`, `codex`, `cursor-agent`, `cortex`, `opencode`, `gemini`, `agy`, `pi`, `grok`, `kimi` | respective vendors |
+| Software    | Role here                                                                                      | Source                                                            |
+| ----------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `firstmate` | optional crew manager                                                                          | [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate) |
+| `herdr`     | terminal workspace manager                                                                     | https://herdr.dev                                                 |
+| `9router`   | model gateway                                                                                  | https://9router.com                                               |
+| `mel`       | agentic terminal harness                                                                       | https://openmel.dev                                               |
+| agent CLIs  | `claude`, `codex`, `cursor-agent`, `cortex`, `opencode`, `gemini`, `agy`, `pi`, `grok`, `kimi` | respective vendors                                                |
 
 Each carries its own license. Installing them is the user's action, performed by
 scripts in this repository.

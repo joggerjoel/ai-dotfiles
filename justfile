@@ -361,7 +361,10 @@ vendor-skills:
     #!/usr/bin/env bash
     set -euo pipefail
     cd {{dotfiles}}
-    for s in vendor-pstack-skills.sh vendor-9router-skills.sh vendor-unlazy-skill.sh; do
+    # pstack is not in this list: it is no longer vendored into skills/. It is
+    # installed at runtime (Claude Code plugin + ~/.agents/skills links) by
+    # scripts/sync-pstack.sh, which update.sh and setup.sh already call.
+    for s in vendor-9router-skills.sh vendor-unlazy-skill.sh; do
       echo "── $s"
       bash "scripts/$s"
     done

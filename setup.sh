@@ -1090,8 +1090,21 @@ link_agent_instructions() {
   link_file "$canonical" "$HOME/.gemini/GEMINI.md"
   link_file "$canonical" "$HOME/AGENTS.md"
   link_codex_prompts
+  sync_pstack
   link_claude_hooks
   link_bin_tools
+}
+
+# pstack for the shared-skills runtimes (Codex, Prime Agent, opencode, Gemini
+# CLI): clones michael-denyer/pstack-claude and links its 52 skills into
+# ~/.agents/skills plus its 31 Codex slash-command stubs into ~/.codex/prompts,
+# and enables codex multi_agent. Lives here rather than in install_skills
+# because nothing lands in ~/.claude/skills — Claude Code gets pstack as a
+# plugin via bootstrap-plugins.sh (OPT_AUTOMATION). Non-fatal offline: an
+# existing clone is relinked as-is, a missing one is skipped.
+sync_pstack() {
+  [ -x "$DOTFILES_DIR/scripts/sync-pstack.sh" ] || return 0
+  "$DOTFILES_DIR/scripts/sync-pstack.sh" || warn "pstack sync had issues (non-fatal — check network)"
 }
 
 # Repo CLI helpers (bin/* -> ~/.local/bin/<name>). Symlinked so a repo pull

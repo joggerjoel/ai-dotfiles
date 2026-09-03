@@ -49,6 +49,7 @@ MARKETPLACES=(
   "autoresearch|uditgoenka/autoresearch"
   "aiguide|timescale/pg-aiguide"
   "n8n-mcp-skills|czlonkowski/n8n-skills"
+  "pstack-claude|michael-denyer/pstack-claude"
 )
 
 # ── CORE: the shipping engine (always installed) ─────────────────
@@ -82,6 +83,7 @@ OPT_AUTOMATION=(
   "autoresearch@autoresearch|Autonomous iteration / research loops (token-heavy)"
   "n8n-mcp-skills@n8n-mcp-skills|n8n workflow automation expertise"
   "ralph-loop@claude-plugins-official|Long-running autonomous task loop"
+  "pstack@pstack-claude|poteto's rigorous parallel workflows: poteto-mode, arena, interrogate, swarm (auto-fires at SessionStart like superpowers)"
 )
 OPT_INTEL=(
   "serena@claude-plugins-official|Semantic code navigation (LSP-backed)"

@@ -21,8 +21,10 @@ set -euo pipefail
 #      <name>`, and every run lists what is pinned.
 #   5. Re-vendor the 9router skills from upstream and deploy them to
 #      ~/.claude/skills (scripts/vendor-9router-skills.sh --deploy).
-#   6. Re-vendor poteto's pstack skill pack from upstream and deploy it to
-#      ~/.claude/skills (scripts/vendor-pstack-skills.sh --deploy).
+#   6. Refresh pstack (michael-denyer/pstack-claude) for Codex / Prime /
+#      opencode / Gemini: fast-forward the clone and relink ~/.agents/skills
+#      + ~/.codex/prompts (scripts/sync-pstack.sh). Claude Code's copy is a
+#      plugin and updates via the marketplace refresh in step 1.
 #   7. Re-vendor the unlazy skill from upstream and deploy it to both
 #      ~/.claude/skills and ~/.codex/skills (scripts/vendor-unlazy-skill.sh
 #      --deploy) — it is agent-agnostic, so Codex gets it too.
@@ -468,35 +470,18 @@ if [ "$RUN_AGENTS" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/vendor-9router-skill
   fi
 fi
 
-# ── 5. pstack skills (vendored from cursor/plugins, by poteto) ───
-# Re-vendors poteto's pstack skill pack from upstream and deploys it to
-# ~/.claude/skills. Writes into the repo's skills/ dir, so changes still
-# need a commit + push before the fleet sees them.
-if [ "$RUN_AGENTS" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/vendor-pstack-skills.sh" ]; then
-  header "pstack skills"
-  if ! command -v git &>/dev/null; then
-    skip "git not available — skills not re-vendored"
-  else
-    pstack_out="$("$DOTFILES_DIR/scripts/vendor-pstack-skills.sh" --deploy 2>/dev/null)"
-    if [ -n "$pstack_out" ]; then
-      # Scope the dirty-check to just the dirs this run vendored, not all of
-      # skills/, so an unrelated skill edit elsewhere doesn't get misattributed.
-      # while-read, not mapfile: stock macOS is bash 3.2 and has no mapfile.
-      pstack_dirs=()
-      while IFS= read -r pstack_dir; do
-        [ -n "$pstack_dir" ] && pstack_dirs+=("$pstack_dir")
-      done < <(echo "$pstack_out" | sed -n 's/^vendored \([^ ]*\)$/skills\/\1/p')
-      if [ "${#pstack_dirs[@]}" -gt 0 ] \
-        && git -C "$DOTFILES_DIR" status --porcelain -- "${pstack_dirs[@]}" 2>/dev/null | grep -q .; then
-        ok "Re-vendored from cursor/plugins (pstack) → ~/.claude/skills"
-        warn "skills/ has uncommitted changes — commit + push so the fleet picks them up"
-      else
-        ok "Already current (deployed to ~/.claude/skills)"
-      fi
-    else
-      warn "pstack skills re-vendor failed (non-fatal — check network)"
-    fi
-  fi
+# ── 5. pstack (michael-denyer/pstack-claude) ─────────────────────
+# Refreshes the maintained Claude-Code/Codex port of poteto's pstack for the
+# shared-skills runtimes (Codex, Prime Agent, opencode, Gemini CLI): fast-
+# forwards the clone and relinks ~/.agents/skills + ~/.codex/prompts. Claude
+# Code gets pstack as a plugin (bootstrap-plugins.sh, OPT_AUTOMATION) and
+# picks up updates via the marketplace refresh in step 1, not here.
+#
+# Replaces the old vendor-pstack-skills.sh, which pulled the Cursor original
+# from cursor/plugins into skills/ and left Cursor primitives in every body.
+# Nothing is written into the repo any more — no commit needed after a sync.
+if [ "$RUN_AGENTS" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/sync-pstack.sh" ]; then
+  "$DOTFILES_DIR/scripts/sync-pstack.sh" || warn "pstack sync had issues (non-fatal — check network)"
 fi
 
 # ── 6. unlazy skill (vendored from Leonxlnx/unlazy) ──────────────

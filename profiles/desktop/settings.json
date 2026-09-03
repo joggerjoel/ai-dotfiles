@@ -527,7 +527,8 @@
     "claude-code-setup@claude-plugins-official": true,
     "codex@openai-codex": true,
     "andrej-karpathy-skills@karpathy-skills": true,
-    "superpowers@superpowers-marketplace": true
+    "superpowers@superpowers-marketplace": true,
+    "pstack@pstack-claude": true
   },
   "extraKnownMarketplaces": {
     "autoresearch": {
@@ -582,6 +583,12 @@
       "source": {
         "source": "github",
         "repo": "czlonkowski/n8n-skills"
+      }
+    },
+    "pstack-claude": {
+      "source": {
+        "source": "github",
+        "repo": "michael-denyer/pstack-claude"
       }
     }
   },
