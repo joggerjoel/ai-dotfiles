@@ -7,6 +7,7 @@
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
+# shellcheck source=observability.sh
 . "$ROOT/scripts/observability.sh"
 pass=0 fail=0
 

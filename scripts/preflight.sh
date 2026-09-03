@@ -467,8 +467,8 @@ _probe_one_link() {
   # an unexpected path or matching a directory outside the intended tree when
   # the caller's environment has CDPATH set.
   case "$target" in
-    /*) abs="$(CDPATH= cd "$(dirname "$target")" && pwd -P)/$(basename "$target")" ;;
-    *)  abs="$(CDPATH= cd "$(dirname "$path")" && CDPATH= cd "$(dirname "$target")" && pwd -P)/$(basename "$target")" ;;
+    /*) abs="$(CDPATH='' cd "$(dirname "$target")" && pwd -P)/$(basename "$target")" ;;
+    *)  abs="$(CDPATH='' cd "$(dirname "$path")" && CDPATH='' cd "$(dirname "$target")" && pwd -P)/$(basename "$target")" ;;
   esac
   case "$abs" in
     "$PREFLIGHT_DOTFILES_DIR"|"$PREFLIGHT_DOTFILES_DIR"/*)
