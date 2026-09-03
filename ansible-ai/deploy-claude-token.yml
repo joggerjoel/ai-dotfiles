@@ -52,7 +52,12 @@
   vars:
     claude_token_dir: "{{ ansible_facts.env.HOME }}/.config/claude-fleet"
     claude_token_file: "{{ ansible_facts.env.HOME }}/.config/claude-fleet/env"
-    claude_rc: "{{ ansible_facts.env.HOME }}/.bashrc"
+    # bash -lc (the herdr pane shape) reaches ~/.bashrc on Linux through
+    # ~/.profile, but a bash LOGIN shell on macOS reads ~/.bash_profile — and a
+    # Mac has no ~/.bashrc at all, which this play used to require outright
+    # (macstudio: "Path .bashrc does not exist"). No interactive guard there,
+    # so blockinfile appends at the end, which a login shell still reaches.
+    claude_rc: "{{ ansible_facts.env.HOME }}/{{ '.bash_profile' if ansible_facts.os_family == 'Darwin' else '.bashrc' }}"
     # Read from the control node's ~/.claude/.env by name. An explicitly
     # exported CLAUDE_CODE_OAUTH_TOKEN wins, so a one-off run can override the
     # file without editing it.
@@ -154,7 +159,7 @@
     # nothing. Verified on aorus8: TEAM_DIR (defined below the guard) reads
     # empty under `bash -lc` and `bulls` under `bash -ic`. insertbefore puts the
     # stanza above the guard, where nvm already sits for exactly this reason.
-    - name: Source the token from above the interactive guard in .bashrc
+    - name: Source the token from the login rc, above any interactive guard
       ansible.builtin.blockinfile:
         path: "{{ claude_rc }}"
         marker: "# {mark} ANSIBLE MANAGED — claude fleet token"
@@ -188,7 +193,7 @@
         fail_msg: >-
           {{ inventory_hostname }}: `bash -lc` did not resolve the expected
           CLAUDE_CODE_OAUTH_TOKEN. Check that the source stanza landed ABOVE the
-          `case $- in *i*)` guard in ~/.bashrc — below it, a login
+          `case $- in *i*)` guard in {{ claude_rc }} — below it, a login
           non-interactive shell never reaches it.
         success_msg: "{{ inventory_hostname }}: pane-shaped shell resolves the token"
       when: not ansible_check_mode
