@@ -6,7 +6,7 @@
 # running it and never prints its URL to a pipe, so a browser on the Mac cannot
 # reach a listener on aorus4 and the URL cannot even be scraped to tunnel it.
 # Per-host login is not inconvenient, it is impossible. Measured 2026-08-11 —
-# see references/herdr-auth.md.
+# see ~/Developer/herdr (references/herdr-auth.md moved there).
 #
 # And why it belongs in the UPDATE path, not only in provisioning: the refresh
 # token runs ~30 days from the original interactive login and is NOT extended by

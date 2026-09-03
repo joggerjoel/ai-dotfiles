@@ -65,7 +65,7 @@ Known, tracked, not news:
 - `just auth-login` only implements `cursor`. `codex` and `claude` exit 2 on
   purpose — automating a login prompt from assumption is worse than not
   automating it.
-- The non-SSH mesh bridge in `scripts/herdr-node.sh` is experimental and
+- The non-SSH mesh bridge in `~/Developer/herdr/scripts/herdr-node.sh` is experimental and
   control-plane only. Interactive attach needs SSH, because the TUI passes file
   descriptors and those cannot cross a TCP bridge.
 - macOS Local Network permission can silently break SSH from launchd-started

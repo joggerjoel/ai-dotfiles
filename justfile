@@ -23,91 +23,6 @@ dotfiles := justfile_directory()
 default:
     @just --list --unsorted
 
-# ── herdr (the node session backend) ────────────────────────────────
-# [herdr] attach the node's herdr session (TUI; on the node itself attaches directly)
-attach:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ "{{role}}" = "node" ]; then exec herdr; else exec herdr-remote; fi
-
-# [herdr] node herdr server + session + bridge health
-node-status:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-node.sh" status
-    else exec ssh {{node}} '~/Developer/ai-dotfiles/scripts/herdr-node.sh status'; fi
-
-# [herdr] (re)start herdr server + mesh bridge on the node
-node-up:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-node.sh" up
-    else exec ssh {{node}} '~/Developer/ai-dotfiles/scripts/herdr-node.sh up'; fi
-
-# [herdr] install the node's launchd agents (server + bridge, always-on)
-node-services:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-node.sh" service install all
-    else exec ssh {{node}} '~/Developer/ai-dotfiles/scripts/herdr-node.sh service install all'; fi
-
-# [herdr] diff ~/.config/herdr/layout.conf against the node's live spaces
-spaces:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-layout.sh" status
-    else exec ssh {{node}} '~/Developer/ai-dotfiles/scripts/herdr-layout.sh status'; fi
-
-# Creates only what is missing and never closes anything, so it is safe to
-# re-run. Pass through the script's own flags, e.g. `just spaces-apply --dry-run`
-# or `just spaces-apply --wire --policy reconnect` to also launch each tab's
-# program.
-# [herdr] apply the declared space/tab layout to the node's session
-spaces-apply *ARGS:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-layout.sh" apply {{ARGS}}
-    else exec ssh {{node}} "~/Developer/ai-dotfiles/scripts/herdr-layout.sh apply {{ARGS}}"; fi
-
-# [herdr] report live tmux sessions on each fleet host (read-only)
-tmux-spaces:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-tmux.sh" status
-    else exec ssh {{node}} '~/Developer/ai-dotfiles/scripts/herdr-tmux.sh status'; fi
-
-# Discovers sessions fresh on every run, so re-run it after a herdr restart or
-# whenever a long-running session is added. Never kills anything.
-# [herdr] build a <host>-tmux space per host from its live tmux sessions
-tmux-spaces-apply *ARGS:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ "{{role}}" = "node" ]; then exec "{{dotfiles}}/scripts/herdr-tmux.sh" apply {{ARGS}}
-    else exec ssh {{node}} "~/Developer/ai-dotfiles/scripts/herdr-tmux.sh apply {{ARGS}}"; fi
-
-# ── captain (firstmate) ─────────────────────────────────────────────
-# Ensures a persistent captain tab (claude in ~/firstmate) inside the node's
-# herdr session, then attaches. Survives laptop lids, dropped connections, and
-# reboots — detach with Ctrl-b q, the crew keeps cooking.
-# [captain] PERSISTENT captain: ensure the captain tab on the node, then attach
-captain: node-up
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ "{{role}}" = "node" ]; then
-      "{{dotfiles}}/scripts/herdr-node.sh" captain-tab
-      exec herdr
-    else
-      ssh {{node}} '~/Developer/ai-dotfiles/scripts/herdr-node.sh captain-tab'
-      exec herdr --remote {{node}}
-    fi
-
-# Ephemeral: claude in your ssh tty — dies with your connection (crewmates it
-# spawned survive in herdr). PATH prefix because `ssh -t 'cmd'` is a non-login
-# shell where ~/.zshrc never sources.
-# [captain] quick EPHEMERAL captain in your ssh tty — one-offs only
-captain-quick: node-up
-    ssh -t {{node}} 'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$PATH"; cd ~/firstmate && claude'
-
 # ── lifecycle (install/maintain: scripts + Setup hook + agentic prompts) ──
 # [lifecycle] deterministic tool-floor census only (no agent)
 init:
@@ -214,48 +129,6 @@ guard-report:
 cache-test:
     @bash {{dotfiles}}/hooks/cache-guard.test.sh
 
-# [herdr] fleet agent-CLI login state (read-only)
-auth-status:
-    @bash {{dotfiles}}/scripts/herdr-auth.sh status
-
-# `cursor` runs the fleet in one parallel pass. `codex` runs one host at a time
-# and prints a device code per host for you to enter at auth.openai.com — serial
-# because each code expires in 15 minutes. `claude` exits 2 and stays that way:
-# its flow cannot be driven per-host at all, so it is a token-distribution
-# problem instead. See references/herdr-auth.md.
-# Naming hosts narrows the run, which is how you shake out a flow on one box
-# before committing to five rounds of typing device codes.
-#   just auth-login codex              # every host that needs it
-#   just auth-login codex aorus8       # just this one
-# [herdr] log a CLI in across the fleet: `just auth-login cursor|codex [host...]`
-auth-login CLI *HOSTS:
-    #!/usr/bin/env bash
-    if [ -n "{{HOSTS}}" ]; then
-      bash {{dotfiles}}/scripts/herdr-auth.sh login --cli {{CLI}} --host "{{HOSTS}}"
-    else
-      bash {{dotfiles}}/scripts/herdr-auth.sh login --cli {{CLI}}
-    fi
-
-# [herdr] list panes you can paste a credential into (read-only)
-paste-list:
-    @bash {{dotfiles}}/scripts/herdr-paste-remote.sh list
-
-# Interactive: pick a pane, paste, confirm, deliver. The value is read without
-# echo and never reaches argv, the environment, disk, or a log.
-# [herdr] paste a credential into a pane
-paste:
-    @bash {{dotfiles}}/scripts/herdr-paste-remote.sh send
-
-# Serves a phone-friendly page on the tailnet address only, behind a one-shot
-# capability URL, for ten minutes. Prints a QR code if `qrencode` is installed.
-# [herdr] serve the paste page for a phone (tailnet only, 10 min)
-paste-serve:
-    @bash {{dotfiles}}/scripts/herdr-paste-remote.sh serve
-
-# [local] herdr-paste: unit tests (scripts/herdr-paste.test.sh)
-paste-test:
-    @bash {{dotfiles}}/scripts/herdr-paste.test.sh
-
 # [local] herdr-tabwatch: unit tests (scripts/herdr-tabwatch.test.sh)
 tabwatch-test:
     @bash {{dotfiles}}/scripts/herdr-tabwatch.test.sh
@@ -274,10 +147,6 @@ claude-token *HOSTS:
 # [herdr] same, but write nothing — proves the token works and shows the diff
 claude-token-check *HOSTS:
     @bash {{dotfiles}}/scripts/claude-token.sh --check {{HOSTS}}
-
-# [local] herdr-auth: unit tests (scripts/herdr-auth.test.sh)
-auth-test:
-    @bash {{dotfiles}}/scripts/herdr-auth.test.sh
 
 # [local] claude-token: unit tests (scripts/claude-token.test.sh)
 claude-token-test:
@@ -436,3 +305,8 @@ fix-skills:
     else
       echo "  $problems problem(s) — each needs a real edit; this recipe reports, it does not guess"
     fi
+
+# ── herdr (moved out) ────────────────────────────────────────────────
+# [herdr] herdr node recipes moved to ~/Developer/herdr (2026-08-22)
+herdr:
+    @echo "herdr recipes live in ~/Developer/herdr — run: cd ~/Developer/herdr && just"

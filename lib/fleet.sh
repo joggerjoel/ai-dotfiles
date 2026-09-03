@@ -1,5 +1,5 @@
 #!/bin/bash
-# Fleet host registry shared by herdr-auth.sh and claude-token.sh.
+# Fleet host registry shared by claude-token.sh and the herdr tooling in ~/Developer/herdr.
 # Sourced, never executed. Defines data and one pure function; no side effects.
 
 # The ansible group that IS the fleet. Everything in it is a managed host.
