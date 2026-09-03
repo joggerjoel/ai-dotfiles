@@ -17,7 +17,13 @@ set dotenv-load := true                    # auto-load ./.env if present
 
 node := env_var_or_default("FLEET_NODE", "macstudio")   # the always-on node
 role := env_var_or_default("FLEET_ROLE", "hud")         # hud | node | worker (this machine)
-dotfiles := justfile_directory()
+# canonicalize, not justfile_directory(): setup.sh links this file to ~/.justfile
+# so recipes work from any directory, and justfile_directory() returns the
+# directory of the SYMLINK — every {{dotfiles}} path then pointed at $HOME
+# (`just lint` from ~/Documents looked for /Users/<you>/scripts/*.sh). Resolving
+# the link first gives the checkout wherever just was invoked. Needs just ≥ 1.24;
+# ensure_just installs current releases from brew / just.systems.
+dotfiles := parent_directory(canonicalize(justfile()))
 
 # Default: show the menu.
 default:

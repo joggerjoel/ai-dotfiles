@@ -160,7 +160,6 @@ fi
 # production containers, so assert it against ansible's own task list rather
 # than by reading the file.
 
-PB="$ROOT/ansible-ai/deploy-observability.yml"
 INV_REAL="$ROOT/ansible-ai/inventory.local.yml"
 
 if command -v ansible-playbook >/dev/null 2>&1 && [ -r "$INV_REAL" ]; then

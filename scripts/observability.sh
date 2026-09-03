@@ -256,7 +256,7 @@ PY
   printf "  %-10s %-11s %-9s %s\n" "──────────" "───────────" "─────────" "────────"
 
   local tmp; tmp="$(mktemp)"
-  local host ports role group svc exp line silent=0
+  local host ports role group svc exp silent=0
 
   for host in $hosts; do
     # `|| ports=""` is load-bearing. curl exits 7 against a host with no
