@@ -35,7 +35,7 @@ and only stop for genuinely blocking decisions.
      Their fleet inventory is their own: `ansible-ai/inventory.local.yml`,
      generated from their `~/.ssh/config` via `ssh-ansible-sync.sh`.
      Then act on the answers. For role=node, also run
-     `scripts/herdr-node.sh service install all` and verify with `status`.
+     `~/Developer/herdr/scripts/herdr-node.sh service install all` and verify with `status`.
 5. **Verify.** Re-run `scripts/setup-init.sh`; confirm the summary line reports
    0 required tools missing. `just --list` must render the recipe menu.
 6. **Report.** Short table: tool → status → action taken. End with exactly what
