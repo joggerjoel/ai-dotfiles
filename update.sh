@@ -10,7 +10,7 @@ set -euo pipefail
 #   3. Upgrade Claude Code to latest (native `claude update`, or npm
 #      if that's how it was installed).
 #   4. Upgrade the sibling agent CLIs when present — codex,
-#      cursor-agent, cortex, opencode, gemini, pi, grok, headroom,
+#      cursor-agent, cortex, opencode, gemini, agy, pi, grok, headroom,
 #      skillspector
 #      (scripts/agents-update.sh, the same script ansible-ai/update.yml
 #      runs on the fleet; also reports 9router gateway status).
@@ -74,7 +74,7 @@ for arg in "$@"; do
     -h|--help)
       echo "Usage: ./update.sh [--all] [--dry-run] [--claude-only] [--no-prune]"
       echo "  Backs up config to backup/<timestamp>/ then upgrades Claude Code"
-      echo "  and the sibling agent CLIs (codex, cursor-agent, cortex, opencode, gemini, pi, grok, headroom, skillspector)."
+      echo "  and the sibling agent CLIs (codex, cursor-agent, cortex, opencode, gemini, agy, pi, grok, headroom, skillspector)."
       echo "  --all also runs ansible-ai/update.yml against the fleet servers afterward."
       exit 0 ;;
     *) warn "Unknown flag: $arg (ignored)" ;;

@@ -318,6 +318,21 @@
         executable: /bin/bash
       when: gemini_check.rc != 0
 
+    # agy (Google Antigravity) — a flat native binary, not a package, so there
+    # is no nvm/npm dance: the bootstrapper resolves a per-platform manifest,
+    # verifies the payload's published sha512 and writes ~/.local/bin/agy.
+    # A plain `creates:` guard is enough (same as codex/cursor-agent above) —
+    # no probe task, because the binary path is fixed rather than varying by
+    # installer version the way opencode's does. Upgrades belong to
+    # scripts/agents-update.sh (`agy update`), which update.yml runs.
+    - name: Install Antigravity CLI (Google bootstrapper -> ~/.local/bin/agy)
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl {{ curl_retry }} -fsSL https://antigravity.google/cli/install.sh | bash
+      args:
+        executable: /bin/bash
+        creates: "{{ ansible_facts.env.HOME }}/.local/bin/agy"
+
     # pi (Earendil Pi coding agent) — npm global; a firstmate co-primary harness.
     - name: Is the Pi CLI present? (npm global lives under nvm)
       ansible.builtin.shell: |

@@ -39,7 +39,7 @@ This repository provisions but does not contain:
 | `herdr` | terminal workspace manager | https://herdr.dev |
 | `9router` | model gateway | https://9router.com |
 | `mel` | agentic terminal harness | https://openmel.dev |
-| agent CLIs | `claude`, `codex`, `cursor-agent`, `cortex`, `opencode`, `gemini`, `pi`, `grok`, `kimi` | respective vendors |
+| agent CLIs | `claude`, `codex`, `cursor-agent`, `cortex`, `opencode`, `gemini`, `agy`, `pi`, `grok`, `kimi` | respective vendors |
 
 Each carries its own license. Installing them is the user's action, performed by
 scripts in this repository.

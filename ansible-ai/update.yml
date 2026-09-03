@@ -6,7 +6,7 @@
 #      --autostash, then re-apply the SAVED vps profile — fully unattended)
 #   3. Upgrade the sibling agent CLIs   (scripts/agents-update.sh from the
 #      freshly-pulled repo: codex, cursor-agent, cortex, opencode, gemini,
-#      pi, grok, kimi, headroom — plus a 9router gateway status line)
+#      agy, pi, grok, kimi, headroom — plus a 9router gateway status line)
 #   4. Update the 9router gateway   (imports deploy-9router.yml — aorus
 #      hosts only; recreates containers only when the image changed.
 #      Skip with --skip-tags 9router)

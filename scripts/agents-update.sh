@@ -3,7 +3,8 @@ set -uo pipefail
 
 # ─────────────────────────────────────────────────────────────────
 # agents-update.sh — upgrade the sibling agent CLIs, when installed:
-#   codex (OpenAI), cursor-agent (Cursor), opencode, gemini (Google), pi (Earendil),
+#   codex (OpenAI), cursor-agent (Cursor), opencode, gemini (Google),
+#   agy (Google Antigravity), pi (Earendil),
 #   grok (xAI), kimi (Moonshot Kimi Code),
 #   cortex (Snowflake Cortex Code), headroom (context-optimization proxy),
 #   skillspector (NVIDIA agent-skill security scanner),
@@ -252,6 +253,26 @@ if command -v brew >/dev/null 2>&1; then
   fi
 fi
 register_cli "gemini" "gemini" "$GEMINI_UPGRADE" "$GEMINI_INSTALL" "$GEMINI_LATEST"
+
+# agy (Google Antigravity) — a flat native binary, not a package. The
+# bootstrapper resolves a per-platform manifest, verifies the payload's
+# published sha512 and drops the binary in ~/.local/bin/agy.
+#
+# Install and upgrade are DIFFERENT commands here, unlike codex where the
+# installer doubles as the updater. Re-running the bootstrapper over an
+# existing binary is a deliberate no-op: it prints "'agy' is already
+# installed" and exits 0, so wiring it as the upgrade path would report a
+# successful upgrade on every run while the version never moved.
+# `agy update` is the real updater — it exits 0 and says "already on the
+# latest version" when there is nothing to do, which is what wave 2 wants.
+# %BIN% so a binary installed outside ~/.local/bin updates itself.
+#
+# No latest-version lookup: the manifest is keyed by platform and the CLI
+# also self-updates in the background during normal runs, so "latest" is
+# not cheaply resolvable from here. Like the other installer-only CLIs it
+# therefore never prompts — it just upgrades. Pin it with pin.sh to hold.
+AGY_INSTALL="curl $CURL_RETRY -fsSL https://antigravity.google/cli/install.sh | bash"
+register_cli "agy" "$HOME/.local/bin/agy" "\"%BIN%\" update" "$AGY_INSTALL"
 
 # pi (Earendil Pi coding agent) — npm global, MIT. Vendor documents
 # --ignore-scripts on install; pi has its own updater (`pi update self`),

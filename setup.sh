@@ -344,6 +344,31 @@ ensure_claude() {
   fi
 }
 
+# agy (Google Antigravity) — a sibling agent CLI, installed here so a fresh
+# `./setup.sh` lands it rather than waiting for the first update run. Upgrades
+# are NOT handled here: scripts/agents-update.sh owns those for every agent CLI
+# (`agy update`), and ansible-ai/provision-ai.yml installs it on the fleet.
+#
+# Not a package — a flat native binary. The bootstrapper picks the platform
+# manifest, verifies the payload's published sha512, writes ~/.local/bin/agy,
+# then runs `agy install` to put ~/.local/bin on PATH in the shell profile.
+#
+# Resolved with an explicit ~/.local/bin fallback, not just `command -v`:
+# provision-ai.yml runs setup.sh through ansible, whose non-login shell leaves
+# ~/.local/bin off PATH — the same reason ensure_skillspector does this.
+# Fail-soft: a missing agy never blocks setup.
+ensure_agy() {
+  if command -v agy &>/dev/null || [ -x "$HOME/.local/bin/agy" ]; then
+    ok "agy present"
+    return 0
+  fi
+  warn "agy missing — installing (Antigravity bootstrapper → ~/.local/bin)..."
+  mkdir -p "$HOME/.local/bin"
+  curl -fsSL https://antigravity.google/cli/install.sh | bash >/dev/null 2>&1 \
+    && ok "agy installed (~/.local/bin)" \
+    || warn "agy install failed — see https://antigravity.google (non-fatal)"
+}
+
 # Shared npm-global installer for the agent-workflow CLIs below. Deliberately
 # NOT used by ensure_claude above: that one is on the critical path for every
 # fresh machine and stays untouched. Fail-soft — a missing npm or a failed
@@ -750,6 +775,7 @@ ensure_dependencies() {
   ensure_bun     # JS/TS package manager
   ensure_uv      # Python package manager (serena runs via uvx)
   ensure_claude  # Claude Code itself
+  ensure_agy     # Google Antigravity CLI (native binary → ~/.local/bin)
   ensure_openspec # spec-driven change proposals (npm; needs node >= 20.19)
   ensure_beads   # agent issue tracking + dependency memory (npm, all hosts)
   ensure_cass    # search this host's coding-agent session history (brew or installer)
