@@ -129,10 +129,6 @@ guard-report:
 cache-test:
     @bash {{dotfiles}}/hooks/cache-guard.test.sh
 
-# [local] herdr-tabwatch: unit tests (scripts/herdr-tabwatch.test.sh)
-tabwatch-test:
-    @bash {{dotfiles}}/scripts/herdr-tabwatch.test.sh
-
 # One command: prompt for the token if it is missing, prove it authenticates
 # BEFORE writing anything, store it 0600, then deploy to the fleet. Prompting
 # and writing happen in the same process — a `read` in one shell and a `printf`
