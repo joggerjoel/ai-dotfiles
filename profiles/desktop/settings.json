@@ -457,6 +457,15 @@
             "command": "$HOME/.claude/hooks/cache-guard.sh"
           }
         ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -x \"$HOME/.local/bin/global-todo\" ] && \"$HOME/.local/bin/global-todo\" inject || true"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

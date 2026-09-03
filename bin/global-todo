@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""global-todo entry point.
+
+Installed by link_bin_tools() (setup.sh), which links bin/* into ~/.local/bin.
+Resolves its own symlink so the package next to it is importable regardless of
+where the link lives.
+"""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from global_todo.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())
