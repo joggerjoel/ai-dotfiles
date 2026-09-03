@@ -106,14 +106,38 @@ OPT_WRITING=(
 # the `marketplace update` / `plugin install` calls that follow can hit a
 # half-populated catalog and fail spuriously. Retry before believing a failure,
 # and always keep the output so we can show WHY something failed.
+#
+# Two rules keep this from wedging an unattended fleet run, both learned the
+# hard way (2026-09-03: a `marketplace update` sat for 5+ minutes and took the
+# whole `setup.sh update` down with it):
+#   1. Every attempt runs under a hard time cap. git inside the CLI has no
+#      timeout of its own and macOS ships no `timeout`, so the cap is a
+#      portable perl alarm. On expiry the attempt counts as failed, the loop
+#      retries, and control falls through to the caller's "stale" warning —
+#      the degradation path setup.sh already expects.
+#   2. Output goes to a temp file, not `$(...)`. A command substitution waits
+#      for every holder of the stdout pipe to close it, so anything the CLI
+#      leaves running in the background would block us long after the CLI
+#      itself exited. A file has no reader to wait on.
 ATTEMPTS=3
 RETRY_DELAY=3
+CMD_TIMEOUT="${BOOTSTRAP_CMD_TIMEOUT:-120}"
 RUN_OUT=""
 
 run_retry() {
-  local attempt
+  local attempt out rc
   for attempt in $(seq 1 "$ATTEMPTS"); do
-    RUN_OUT=$("$@" 2>&1) && return 0
+    out=$(mktemp)
+    # Backgrounded, reaped with `wait`, inside a brace group whose stderr is
+    # /dev/null: bash reports a signal death at the moment it reaps the job,
+    # so this is the one place "Alarm clock" would otherwise land in the fleet
+    # log. The command's own output is already routed to $out before the
+    # fork, so nothing useful is lost. rc survives (no subshell); 142 = alarm.
+    { perl -e 'alarm shift; exec @ARGV' "$CMD_TIMEOUT" "$@" >"$out" 2>&1 </dev/null & wait $!; rc=$?; } 2>/dev/null
+    RUN_OUT=$(<"$out"); rm -f "$out"
+    [ "$rc" -eq 0 ] && return 0
+    # 142 = killed by the alarm; the CLI printed nothing useful, so say why.
+    [ "$rc" -eq 142 ] && RUN_OUT="timed out after ${CMD_TIMEOUT}s: $*"
     [ "$attempt" -lt "$ATTEMPTS" ] && sleep "$RETRY_DELAY"
   done
   return 1
@@ -148,7 +172,11 @@ refresh_marketplaces() {
   # plugins pick up updates on the next Claude Code start. Mirrors the daily
   # cron (marketplace-auto-update.sh); harmless right after a fresh add.
   header "Refreshing marketplaces"
-  if run_retry claude plugin marketplace update; then
+  # One attempt, not three. The retry loop exists for the add/install clone
+  # race; a refresh that hits the cap is a slow upstream, and retrying only
+  # multiplies the wait. A stale catalog is benign — installed plugins keep
+  # working, and marketplace-auto-update.sh refreshes daily.
+  if ATTEMPTS=1 run_retry claude plugin marketplace update; then
     ok "Marketplaces up to date"
   else
     warn "Marketplace refresh failed: $(last_line "$RUN_OUT")"

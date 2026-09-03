@@ -45,10 +45,14 @@ header() { echo -e "\n${BOLD}$1${RESET}"; }
 command -v git >/dev/null || { warn "git not available — pstack not synced"; exit 0; }
 
 # ── 1. clone or fast-forward ─────────────────────────────────────
+# Both network calls carry a stall cap: abort if under 1 KB/s for 30 s. git
+# has no --timeout, and macOS ships no `timeout`, so this is the portable way
+# to keep a slow GitHub from wedging an unattended fleet update.
+STALL=(-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30)
 header "pstack-claude (Codex / Prime / opencode / Gemini)"
 if [ -d "$CLONE/.git" ]; then
   before="$(git -C "$CLONE" rev-parse --short HEAD 2>/dev/null)"
-  if git -C "$CLONE" pull --ff-only --quiet 2>/dev/null; then
+  if git -C "$CLONE" "${STALL[@]}" pull --ff-only --quiet 2>/dev/null; then
     after="$(git -C "$CLONE" rev-parse --short HEAD 2>/dev/null)"
     if [ "$before" = "$after" ]; then
       skip "already at $after"
@@ -60,7 +64,7 @@ if [ -d "$CLONE/.git" ]; then
     # so keep going with what's on disk rather than leaving runtimes half-wired.
     warn "pull failed (network?) — relinking from existing clone at $(git -C "$CLONE" rev-parse --short HEAD)"
   fi
-elif git clone --quiet --depth 1 "$REPO" "$CLONE" 2>/dev/null; then
+elif git "${STALL[@]}" clone --quiet --depth 1 "$REPO" "$CLONE" 2>/dev/null; then
   ok "cloned → $CLONE ($(git -C "$CLONE" rev-parse --short HEAD))"
 else
   warn "clone failed (network?) — pstack not installed for Codex/Prime/opencode/Gemini"

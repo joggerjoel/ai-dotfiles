@@ -599,6 +599,12 @@
         "source": "github",
         "repo": "michael-denyer/pstack-claude"
       }
+    },
+    "claude-plugins-official": {
+      "source": {
+        "source": "github",
+        "repo": "anthropics/claude-plugins-official"
+      }
     }
   },
   "alwaysThinkingEnabled": true,

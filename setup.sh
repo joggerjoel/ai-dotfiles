@@ -1113,6 +1113,17 @@ sync_pstack() {
 link_bin_tools() {
   [ -d "$DOTFILES_DIR/bin" ] || return 0
   local f
+  # Prune first. A tool retired from bin/ (herdr-new-project left with the
+  # herdr extraction) otherwise stays behind as a dangling link on every host,
+  # forever — nothing below ever removes one. Only links that point INTO this
+  # repo are ours to remove; a dangling link the user made elsewhere is not
+  # our business. Same rule install_skills applies via its manifest.
+  for f in "$HOME"/.local/bin/*; do
+    [ -L "$f" ] || continue
+    case "$(readlink "$f")" in
+      "$DOTFILES_DIR"/*) [ -e "$f" ] || rm -f "$f" ;;
+    esac
+  done
   for f in "$DOTFILES_DIR"/bin/*; do
     [ -f "$f" ] || continue
     chmod +x "$f"
