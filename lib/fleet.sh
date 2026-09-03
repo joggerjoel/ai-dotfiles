@@ -8,7 +8,7 @@ FLEET_GROUP="aorus_ai"
 # Consulted only where inventory.local.yml is absent. That file is gitignored
 # because this repo is public, so a worker checkout has no fleet list of its
 # own and still needs one to answer --help or run a single named host.
-FLEET_HOSTS_FALLBACK="aorus aorus2 aorus4 aorus5 aorus6 aorus7 aorus8 macstudio macair"
+FLEET_HOSTS_FALLBACK="aorus aorus2 aorus3 aorus4 aorus5 aorus6 aorus7 aorus8 macstudio macair"
 
 # The fleet, space separated, read from the inventory group when that file is
 # readable. The inventory is what ansible actually deploys against, so a second
@@ -20,6 +20,15 @@ FLEET_HOSTS_FALLBACK="aorus aorus2 aorus4 aorus5 aorus6 aorus7 aorus8 macstudio 
 # inventory — reachable the whole time, just never checked in the sync menu, so
 # no playbook had ever touched it. This list mirrors the inventory and nothing
 # else; fleet.test.sh diffs the two and fails until they agree.
+#
+# It drifted a third time, and that one is worth understanding, because the test
+# below cannot catch it. aorus3 was named in provision-ai.yml's comments and
+# absent from BOTH this list and the inventory, so the two agreed with each
+# other while both were incomplete and the suite stayed green. Diffing two
+# lists proves they match, never that either is right. A host nobody wrote down
+# is invisible to every tool here, including `observability.sh discover`, which
+# only probes what the inventory already names. The only non-circular check is
+# looking at the network itself.
 fleet_hosts() {
   local inv="${1:-}"
   if [ ! -r "$inv" ]; then

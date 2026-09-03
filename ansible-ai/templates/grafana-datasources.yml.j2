@@ -1,0 +1,23 @@
+{{ ansible_managed | comment }}
+# Rendered from ansible-ai/templates/grafana-datasources.yml.j2.
+#
+# Addressed by container DNS on the shared network, which is why the compose
+# service names stay prometheus and loki even though the containers were
+# renamed obs-*.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false

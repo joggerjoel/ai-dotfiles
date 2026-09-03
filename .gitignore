@@ -50,3 +50,7 @@ hooks/injection-guard.baseline.json
 # not. skills/unlazy/.upstream pins the commit it came from, and setup.sh
 # refetches it via scripts/vendor-unlazy-skill.sh when it is absent.
 skills/unlazy/scripts/
+
+# Handoff notes carrying real LAN addresses, hostnames and topology. The file's
+# own header says it must not live in this repo, which is public. Keep it local.
+general-monitoring-handoff.md

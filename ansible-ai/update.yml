@@ -181,7 +181,25 @@
 - import_playbook: deploy-claude-token.yml
   tags: [claude-token]
 
-# ── 9. Asset health (ai_all) ────────────────────────────────────────────────
+# ── 9. Fleet observability (ai_all + observability_ai) ──────────────────────
+# Converges node_exporter and the listening-port collector on every host, then
+# renders the grafana/prometheus/loki stack on the observability_ai host. All
+# versions, ports, images and retention windows come from observability.yml.
+#
+# Placement is inventory membership, deliberately: there is no local
+# `setup.sh grafana`, because unconstrained targeting is what once installed the
+# 9router gateway on every fleet host.
+#
+# The takeover of the existing recon stack is a third play carrying ansible's
+# `never` tag, so nothing here can reach it. It restarts a live stack on a host
+# that also runs 18 stubhub-minter containers, so it must be asked for by name:
+#   ansible-playbook deploy-observability.yml --tags migrate
+#
+# Skip with:  ansible-playbook update.yml --skip-tags observability
+- import_playbook: deploy-observability.yml
+  tags: [observability]
+
+# ── 10. Asset health (ai_all) ───────────────────────────────────────────────
 # LAST on purpose: it reports the state every play above just produced, so a
 # CLI installed in step 3 or a token asserted in step 8 is already in place
 # when it probes. Runs scripts/preflight.sh — MCP servers, mandated CLIs,

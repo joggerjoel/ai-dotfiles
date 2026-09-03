@@ -1,0 +1,687 @@
+---
+# Fleet observability. Three plays, because one host pattern cannot serve three
+# jobs.
+#
+#   1. exporter  aorus_ai:local_ai   node_exporter + the listening-port collector
+#   2. stack     observability_ai    grafana, prometheus, loki, promtail
+#   3. migrate   observability_ai    the one-time takeover, tagged `never`
+#
+# Every version, port, image and retention window is read from observability.yml.
+# Nothing is written down twice.
+#
+#   Normal run   just fleet-update            (imports this behind tag `observability`)
+#   This alone   ansible-playbook deploy-observability.yml
+#   Exporters    ansible-playbook deploy-observability.yml --tags exporter
+#   Preview      ansible-playbook deploy-observability.yml --check --diff
+#   Takeover     ansible-playbook deploy-observability.yml --tags migrate
+#
+# The migrate play carries ansible's `never` tag, so no routine run can reach it.
+# It restarts a live stack on a host that also runs 18 stubhub-minter
+# containers, so it has to be asked for by name.
+
+# ── 1. Exporters, every host ──────────────────────────────────────
+- name: Converge node_exporter and the listening-port collector
+  hosts: aorus_ai:local_ai
+  gather_facts: true
+  ignore_unreachable: true
+  tags: [exporter]
+  vars:
+    obs: "{{ lookup('file', playbook_dir ~ '/observability.yml') | from_yaml }}"
+
+  tasks:
+    # ignore_unreachable marches absent hosts into the tasks below, where any
+    # fact lookup fails with a message that reads like a broken task rather than
+    # a dead host. update.yml already learned this; the recap books an absent
+    # host as ignored=1, never as unreachable=1, so say it out loud.
+    - name: Say plainly that a host was unreachable
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} UNREACHABLE, nothing was converged here"
+      when: ansible_facts == {}
+
+    - name: Stop cleanly on hosts we could not reach
+      ansible.builtin.meta: end_host
+      when: ansible_facts == {}
+
+    # ── Linux ────────────────────────────────────────────────────
+    - name: Converge node_exporter on Linux
+      when: ansible_system == 'Linux'
+      become: true
+      block:
+        - name: Ensure the node_exporter system user exists
+          ansible.builtin.user:
+            name: node_exporter
+            system: true
+            shell: /usr/sbin/nologin
+            create_home: false
+
+        # Resolved by absolute path, not by `command -v`. A non-login shell's
+        # PATH omits /usr/local/bin, which is how macstudio was reported as
+        # having no exporter while one ran there as root.
+        - name: Read the installed node_exporter version
+          ansible.builtin.shell: |
+            set -o pipefail
+            if [ -x /usr/local/bin/node_exporter ]; then
+              /usr/local/bin/node_exporter --version 2>&1 | head -1 | awk '{print $3}'
+            else
+              echo absent
+            fi
+          args: { executable: /bin/bash }
+          register: ne_installed
+          changed_when: false
+          check_mode: false
+
+        - name: Report the version change a real run would make
+          ansible.builtin.debug:
+            msg: >-
+              {{ inventory_hostname }}: node_exporter
+              {{ ne_installed.stdout | trim }} would become
+              {{ obs.node_exporter.version }} (download, verify checksum, install).
+          when:
+            - ne_installed.stdout | trim != obs.node_exporter.version
+            - ansible_check_mode
+
+        # Skipped under --check on purpose. get_url does not fetch in check
+        # mode, so unarchive would then fail on a file that was never written,
+        # and the preview this playbook documents would always end in a red
+        # failure that means nothing.
+        - name: Install or upgrade node_exporter
+          when:
+            - ne_installed.stdout | trim != obs.node_exporter.version
+            - not ansible_check_mode
+          block:
+            - name: Download the release tarball and its checksums
+              ansible.builtin.get_url:
+                url: "{{ item }}"
+                dest: "/tmp/{{ item | basename }}"
+                mode: "0644"
+              loop:
+                - "{{ ne_base_url }}/node_exporter-{{ obs.node_exporter.version }}.linux-{{ ne_arch }}.tar.gz"
+                - "{{ ne_base_url }}/sha256sums.txt"
+              vars:
+                ne_base_url: "https://github.com/prometheus/node_exporter/releases/download/v{{ obs.node_exporter.version }}"
+                ne_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+            # An unverified binary installed as a root-run service is how a
+            # compromised mirror becomes a compromised fleet. Fail rather than
+            # install on a mismatch.
+            - name: Verify the tarball against the published checksum
+              ansible.builtin.shell: |
+                set -o pipefail
+                cd /tmp
+                grep " node_exporter-{{ obs.node_exporter.version }}.linux-{{ ne_arch }}.tar.gz$" sha256sums.txt \
+                  | sha256sum -c -
+              args: { executable: /bin/bash }
+              vars:
+                ne_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+              changed_when: false
+
+            - name: Unpack the verified tarball
+              ansible.builtin.unarchive:
+                src: "/tmp/node_exporter-{{ obs.node_exporter.version }}.linux-{{ ne_arch }}.tar.gz"
+                dest: /tmp
+                remote_src: true
+              vars:
+                ne_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+            # root:root on purpose. The fleet's binaries were owned by the
+            # login user while the service runs as node_exporter, so anyone who
+            # could write that file could replace a root-installed service.
+            - name: Install the binary
+              ansible.builtin.copy:
+                src: "/tmp/node_exporter-{{ obs.node_exporter.version }}.linux-{{ ne_arch }}/node_exporter"
+                dest: /usr/local/bin/node_exporter
+                remote_src: true
+                owner: root
+                group: root
+                mode: "0755"
+              vars:
+                ne_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+              notify: restart node_exporter
+
+            - name: Remove the download artifacts
+              ansible.builtin.file:
+                path: "{{ item }}"
+                state: absent
+              loop:
+                - "/tmp/node_exporter-{{ obs.node_exporter.version }}.linux-{{ ne_arch }}.tar.gz"
+                - "/tmp/node_exporter-{{ obs.node_exporter.version }}.linux-{{ ne_arch }}"
+                - /tmp/sha256sums.txt
+              vars:
+                ne_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+        # The textfile collector is compiled in and enabled by default; only its
+        # directory is unset, which is why every unit on this fleet publishes
+        # nothing from it.
+        - name: Ensure the textfile collector directory exists
+          ansible.builtin.file:
+            path: "{{ obs.node_exporter.textfile_dir }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Install the listening-port collector
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/../scripts/node-listening-ports.sh"
+            dest: /usr/local/bin/node-listening-ports.sh
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Render the node_exporter unit
+          ansible.builtin.template:
+            src: templates/node_exporter.service.j2
+            dest: /etc/systemd/system/node_exporter.service
+            owner: root
+            group: root
+            mode: "0644"
+          notify: restart node_exporter
+
+        - name: Render the listening-port collector unit and timer
+          ansible.builtin.template:
+            src: "templates/{{ item }}.j2"
+            dest: "/etc/systemd/system/{{ item }}"
+            owner: root
+            group: root
+            mode: "0644"
+          loop:
+            - node-listening-ports.service
+            - node-listening-ports.timer
+          vars:
+            collector: "{{ obs.node_exporter.textfile_collectors | selectattr('name', 'eq', 'listening_ports') | first }}"
+          notify: reload systemd
+
+        - name: Enable node_exporter
+          ansible.builtin.systemd:
+            name: node_exporter
+            enabled: true
+            state: started
+            daemon_reload: true
+
+        # Both of these depend on files a check run never wrote, so systemd
+        # would fail to find a unit that does not exist yet and the preview
+        # would end red for no real reason.
+        - name: Enable the listening-port timer
+          ansible.builtin.systemd:
+            name: node-listening-ports.timer
+            enabled: true
+            state: started
+            daemon_reload: true
+          when: not ansible_check_mode
+
+        # Without this the metric does not appear until the timer first fires,
+        # so a converge run would report success while the dashboard stayed
+        # empty for up to the timer interval.
+        - name: Produce the listening-port metric once now
+          ansible.builtin.command: /usr/local/bin/node-listening-ports.sh --dir {{ obs.node_exporter.textfile_dir }}
+          changed_when: false
+          when: not ansible_check_mode
+
+    # ── macOS ────────────────────────────────────────────────────
+    # The same verified-tarball path as Linux, not homebrew. Three reasons, all
+    # found by looking rather than assuming:
+    #   - macstudio already ran node_exporter from a LaunchDaemon at
+    #     /Library/LaunchDaemons/io.prometheus.node_exporter.plist, so
+    #     `brew services` would have fought a working setup instead of
+    #     converging it.
+    #   - brew is not on a non-login ssh PATH here (it lives at
+    #     /opt/homebrew/bin/brew), so the homebrew module would not have run.
+    #   - a formula tracks whatever upstream ships. It happens to be 1.12.1
+    #     today, which is why "brew cannot pin a version" read as harmless, but
+    #     the manifest promises an exact version and only the tarball delivers
+    #     one.
+    - name: Converge node_exporter on macOS
+      when: ansible_system == 'Darwin'
+      become: true
+      block:
+        - name: Read the installed node_exporter version
+          ansible.builtin.shell: |
+            set -o pipefail
+            for c in /usr/local/bin/node_exporter /opt/homebrew/bin/node_exporter; do
+              [ -x "$c" ] && { "$c" --version 2>&1 | head -1 | awk '{print $3}'; exit 0; }
+            done
+            echo absent
+          args: { executable: /bin/bash }
+          register: ne_mac
+          changed_when: false
+          check_mode: false
+
+        - name: Install or upgrade node_exporter
+          when:
+            - ne_mac.stdout | trim != obs.node_exporter.version
+            - not ansible_check_mode
+          vars:
+            mac_arch: "{{ 'arm64' if ansible_architecture == 'arm64' else 'amd64' }}"
+            ne_base_url: "https://github.com/prometheus/node_exporter/releases/download/v{{ obs.node_exporter.version }}"
+          block:
+            - name: Download the darwin tarball and its checksums
+              ansible.builtin.get_url:
+                url: "{{ item }}"
+                dest: "/tmp/{{ item | basename }}"
+                mode: "0644"
+              loop:
+                - "{{ ne_base_url }}/node_exporter-{{ obs.node_exporter.version }}.darwin-{{ mac_arch }}.tar.gz"
+                - "{{ ne_base_url }}/sha256sums.txt"
+
+            - name: Verify the tarball against the published checksum
+              ansible.builtin.shell: |
+                set -o pipefail
+                cd /tmp
+                grep " node_exporter-{{ obs.node_exporter.version }}.darwin-{{ mac_arch }}.tar.gz$" sha256sums.txt \
+                  | shasum -a 256 -c -
+              args: { executable: /bin/bash }
+              changed_when: false
+
+            # tar, not the unarchive module. macOS ships BSD tar and the
+            # module refuses anything that is not GNU tar, even though BSD tar
+            # reads a .tar.gz perfectly well.
+            - name: Unpack the verified tarball
+              ansible.builtin.command:
+                cmd: "tar -xzf /tmp/node_exporter-{{ obs.node_exporter.version }}.darwin-{{ mac_arch }}.tar.gz -C /tmp"
+              changed_when: true
+
+            - name: Install the binary
+              ansible.builtin.copy:
+                src: "/tmp/node_exporter-{{ obs.node_exporter.version }}.darwin-{{ mac_arch }}/node_exporter"
+                dest: /usr/local/bin/node_exporter
+                remote_src: true
+                owner: root
+                group: wheel
+                mode: "0755"
+              notify: reload node_exporter launchd
+
+            - name: Remove the download artifacts
+              ansible.builtin.file:
+                path: "{{ item }}"
+                state: absent
+              loop:
+                - "/tmp/node_exporter-{{ obs.node_exporter.version }}.darwin-{{ mac_arch }}.tar.gz"
+                - "/tmp/node_exporter-{{ obs.node_exporter.version }}.darwin-{{ mac_arch }}"
+                - /tmp/sha256sums.txt
+
+        - name: Ensure the textfile collector directory exists
+          ansible.builtin.file:
+            path: "{{ obs.node_exporter.textfile_dir }}"
+            state: directory
+            owner: root
+            group: wheel
+            mode: "0755"
+
+        - name: Install the listening-port collector
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/../scripts/node-listening-ports.sh"
+            dest: /usr/local/bin/node-listening-ports.sh
+            owner: root
+            group: wheel
+            mode: "0755"
+
+        - name: Render the LaunchDaemon
+          ansible.builtin.template:
+            src: templates/node_exporter.plist.j2
+            dest: /Library/LaunchDaemons/io.prometheus.node_exporter.plist
+            owner: root
+            group: wheel
+            mode: "0644"
+          notify: reload node_exporter launchd
+
+        # rc 5 is what launchctl returns when the service is already
+        # bootstrapped, reported as "Input/output error" rather than anything
+        # resembling "already loaded". Treating that as failure would make every
+        # converge run red on a host that is working correctly.
+        # launchd caches the command line from whenever the daemon was last
+        # bootstrapped, so rendering a new plist changes nothing on its own and
+        # the handler only fires when the file itself changed. macstudio ran for
+        # a full converge cycle with the new plist on disk and the old argv in
+        # memory, publishing no textfile metric while reporting success.
+        - name: Is the running daemon using the rendered plist?
+          ansible.builtin.shell: |
+            set -o pipefail
+            ps -ax -o command= | grep '[n]ode_exporter --web.listen-address' || true
+          args: { executable: /bin/bash }
+          register: ne_argv
+          changed_when: false
+          check_mode: false
+
+        - name: Reload the daemon when its argv does not match the plist
+          ansible.builtin.shell: |
+            launchctl bootout system/io.prometheus.node_exporter 2>/dev/null || true
+            launchctl bootstrap system /Library/LaunchDaemons/io.prometheus.node_exporter.plist
+          args: { executable: /bin/bash }
+          when:
+            - "'collector.textfile.directory' not in ne_argv.stdout"
+            - not ansible_check_mode
+
+        - name: Load the LaunchDaemon
+          ansible.builtin.command: launchctl bootstrap system /Library/LaunchDaemons/io.prometheus.node_exporter.plist
+          register: boot
+          changed_when: boot.rc == 0
+          failed_when: boot.rc not in [0, 5]
+          when: not ansible_check_mode
+
+        # macOS has no systemd timer. launchd fires this on the same interval,
+        # via StartInterval on its own daemon.
+        - name: Produce the listening-port metric once now
+          ansible.builtin.command: /usr/local/bin/node-listening-ports.sh --dir {{ obs.node_exporter.textfile_dir }}
+          changed_when: false
+          when: not ansible_check_mode
+
+  handlers:
+    - name: reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+      become: true
+
+    - name: restart node_exporter
+      ansible.builtin.systemd:
+        name: node_exporter
+        state: restarted
+        daemon_reload: true
+      become: true
+
+    - name: reload node_exporter launchd
+      ansible.builtin.shell: |
+        launchctl bootout system/io.prometheus.node_exporter 2>/dev/null || true
+        launchctl bootstrap system /Library/LaunchDaemons/io.prometheus.node_exporter.plist
+      args: { executable: /bin/bash }
+      become: true
+
+# ── 2. The stack, Grafana host only ───────────────────────────────
+- name: Deploy the observability stack
+  hosts: observability_ai
+  gather_facts: true
+  become: true
+  tags: [stack]
+  vars:
+    obs: "{{ lookup('file', playbook_dir ~ '/observability.yml') | from_yaml }}"
+    dotenv: "{{ lookup('file', lookup('env', 'HOME') ~ '/.claude/.env', errors='ignore') | default('', true) }}"
+    grafana_admin_password: "{{ dotenv | regex_search('^GRAFANA_ADMIN_PASSWORD=(.*)$', '\\1', multiline=True) | first | default('', true) }}"
+    grafana_secret_key: "{{ dotenv | regex_search('^GRAFANA_SECRET_KEY=(.*)$', '\\1', multiline=True) | first | default('', true) }}"
+
+  tasks:
+    # Fail closed. Rendering the compose file with an empty password would stand
+    # grafana up with no admin credential at all, on an interface bound to
+    # 0.0.0.0, which is worse than the admin/admin it replaces.
+    - name: Require the grafana secrets before anything is rendered
+      ansible.builtin.assert:
+        that:
+          - grafana_admin_password | length >= 16
+          - grafana_secret_key | length >= 16
+        fail_msg: >-
+          GRAFANA_ADMIN_PASSWORD and GRAFANA_SECRET_KEY must be set in
+          ~/.claude/.env (16+ chars). Add them with
+          './setup.sh env GRAFANA_ADMIN_PASSWORD <value>'. Nothing was changed.
+        quiet: true
+
+    - name: Create the stack directories
+      ansible.builtin.file:
+        path: "{{ obs.stack.dir }}/{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        [
+          "",
+          prometheus,
+          prometheus/extra,
+          promtail,
+          loki,
+          grafana,
+          grafana/provisioning/datasources,
+          grafana/provisioning/dashboards,
+          grafana/dashboards,
+        ]
+
+    # external: true means compose will not create these, so they must exist
+    # first. Creating an existing volume is a no-op.
+    - name: Create the obs_* volumes
+      ansible.builtin.command: "docker volume create {{ item }}"
+      register: vol
+      changed_when: false
+      loop:
+        - obs_prometheus_data
+        - obs_loki_data
+        - obs_promtail_data
+        - obs_grafana_data
+
+    - name: Render the stack configuration
+      ansible.builtin.template:
+        src: "templates/{{ item.src }}"
+        dest: "{{ obs.stack.dir }}/{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "{{ item.mode | default('0644') }}"
+      loop:
+        - {
+            src: observability.compose.yml.j2,
+            dest: docker-compose.yml,
+            mode: "0600",
+          }
+        - {
+            src: grafana-datasources.yml.j2,
+            dest: grafana/provisioning/datasources/datasources.yml,
+          }
+        - {
+            src: grafana-providers.yml.j2,
+            dest: grafana/provisioning/dashboards/providers.yml,
+          }
+        - { src: loki-config.yml.j2, dest: loki/loki-config.yml }
+        - { src: promtail-config.yml.j2, dest: promtail/promtail-config.yml }
+      no_log: false
+
+    # Rendered separately so its changed status can drive the reload below.
+    # A bind-mounted config change does not recreate the container, so without
+    # the reload a newly added fleet host is reported converged and never
+    # scraped.
+    - name: Render prometheus.yml from the inventory
+      ansible.builtin.template:
+        src: templates/prometheus.yml.j2
+        dest: "{{ obs.stack.dir }}/prometheus/prometheus.yml"
+        owner: root
+        group: root
+        mode: "0644"
+      register: prom_cfg
+
+    # check_mode: false because ansible issues a HEAD under --check and
+    # grafana.com answers 405 to HEAD on this endpoint while answering 200 to
+    # GET. Verified directly. This writes only to the control node's /tmp, which
+    # a preview can safely do, and it makes the install task below show a real
+    # diff instead of failing on a file that was never fetched.
+    - name: Fetch the pinned grafana.com dashboards onto the control node
+      ansible.builtin.get_url:
+        url: "https://grafana.com/api/dashboards/{{ item.gnet_id }}/revisions/{{ item.revision }}/download"
+        dest: "/tmp/obs-dash-{{ item.gnet_id }}-{{ item.revision }}.json"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      check_mode: false
+      loop: "{{ (obs.dashboards | selectattr('gnet_id', 'defined') | list) + (obs.exporters.values() | map(attribute='dashboard') | list) }}"
+      loop_control: { label: "{{ item.gnet_id }}" }
+
+    # Two different things look alike here and only one needs rewriting.
+    #
+    # A grafana.com export that declares `__inputs` carries an UPPERCASE
+    # ${DS_*} import placeholder in every panel. File provisioning never
+    # processes __inputs, so left alone those panels render empty with
+    # "datasource not found", which reads exactly like a broken exporter. The
+    # four exporter dashboards are all this shape: 763 (DS_PROM), 7362, 10991
+    # and 9628 (DS_PROMETHEUS), 34 to 92 occurrences each.
+    #
+    # A LOWERCASE ${ds_*} is not a placeholder at all. It is a datasource
+    # template variable the dashboard defines itself, and it resolves without
+    # help. 1860 rev 45 is this shape: no __inputs and 127 refs to
+    # ${ds_prometheus}. Rewriting those would break a working dashboard.
+    #
+    # The regex is therefore deliberately case sensitive and matches zero times
+    # against 1860. Verified against all five pinned revisions on 2026-09-01.
+    # 'prometheus' is the uid in grafana-datasources.yml.j2, not a name.
+    - name: Install the dashboards with the datasource placeholder resolved
+      ansible.builtin.copy:
+        content: "{{ lookup('file', '/tmp/obs-dash-' ~ item.gnet_id ~ '-' ~ item.revision ~ '.json') | regex_replace('\\$\\{DS_[A-Z0-9_-]+\\}', 'prometheus') }}"
+        dest: "{{ obs.stack.dir }}/grafana/dashboards/{{ item.gnet_id }}.json"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ (obs.dashboards | selectattr('gnet_id', 'defined') | list) + (obs.exporters.values() | map(attribute='dashboard') | list) }}"
+      loop_control: { label: "{{ item.gnet_id }}" }
+
+    - name: Install the hand authored dashboards
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/{{ item.file }}"
+        dest: "{{ obs.stack.dir }}/grafana/dashboards/{{ item.name }}.json"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ obs.dashboards | selectattr('file', 'defined') | list }}"
+      loop_control: { label: "{{ item.name }}" }
+
+    # Before the takeover, recon-grafana still holds port 3002 and the obs_*
+    # volumes are empty. Bringing the stack up here would collide on the port
+    # and, if it won, serve an empty grafana over the real one. Config is
+    # rendered either way, since that is harmless and makes the migration a
+    # shorter step.
+    - name: Has the takeover happened?
+      ansible.builtin.stat:
+        path: "{{ obs.stack.dir }}/.migrated-from-recon"
+      register: migrated
+
+    - name: Is the recon stack still holding the ports?
+      ansible.builtin.command: "docker ps --filter name=recon-grafana --format {% raw %}'{{.Names}}'{% endraw %}"
+      register: recon_running
+      changed_when: false
+      check_mode: false
+
+    - name: Say why the stack was not started
+      ansible.builtin.debug:
+        msg: >-
+          Config rendered, stack NOT started. recon-grafana still holds port
+          {{ obs.stack.grafana.port }} and the obs_* volumes are empty. Run
+          'ansible-playbook deploy-observability.yml --tags migrate' to take
+          ownership; nothing here has changed the running stack.
+      when: not migrated.stat.exists and 'recon-grafana' in recon_running.stdout
+
+    - name: Start or update the stack
+      ansible.builtin.command:
+        cmd: "docker compose -f {{ obs.stack.dir }}/docker-compose.yml up -d"
+      register: compose_up
+      changed_when: "'Started' in compose_up.stderr or 'Recreated' in compose_up.stderr or 'Created' in compose_up.stderr"
+      when: migrated.stat.exists or 'recon-grafana' not in recon_running.stdout
+
+    - name: Reload prometheus when the generated target list changed
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ obs.stack.prometheus.port }}/-/reload"
+        method: POST
+        status_code: [200]
+      when:
+        - prom_cfg is changed
+        - compose_up is not changed
+        - compose_up is not skipped
+      retries: 3
+      delay: 5
+
+# ── 3. The one-time takeover, never runs by accident ──────────────
+# `never` means ansible skips these unless someone names the migrate tag on the
+# command line. A routine `just fleet-update` cannot reach them. This stops a
+# live monitoring stack on a host that also runs 18 stubhub-minter containers.
+#
+#   ansible-playbook deploy-observability.yml --tags migrate
+- name: Replace the defunct recon monitoring stack
+  hosts: observability_ai
+  gather_facts: true
+  become: true
+  tags: [migrate, never]
+  vars:
+    obs: "{{ lookup('file', playbook_dir ~ '/observability.yml') | from_yaml }}"
+
+  tasks:
+    - name: Has this migration already run?
+      ansible.builtin.stat:
+        path: "{{ obs.stack.dir }}/.migrated-from-recon"
+      register: marker
+
+    - name: Stop cleanly if it has
+      ansible.builtin.meta: end_host
+      when: marker.stat.exists
+
+    # Preconditions, all read only. If any fails, nothing has been stopped.
+    - name: Check every source volume exists exactly as spelled
+      ansible.builtin.command: "docker volume inspect {{ item.value.migrate_from }}"
+      loop: "{{ obs.stack | dict2items | selectattr('value.migrate_from', 'defined') | list }}"
+      loop_control: { label: "{{ item.value.migrate_from }}" }
+      changed_when: false
+
+    # Docker creates an empty volume for an unknown name instead of failing, so
+    # a typo here would copy nothing and bring the stack up blank while
+    # reporting success.
+
+    # There is deliberately no precondition on recon extracting its scrape jobs.
+    # An earlier version of this play required that and it was simply wrong:
+    # recon's prometheus.yml carries four active jobs (prometheus, node, redis,
+    # mysql) and the generated config is a strict superset of all four, with
+    # more targets in each. Nothing is dropped by the takeover, so blocking on
+    # work in another repo bought nothing and stalled the migration.
+
+    # By name, never `docker compose down`, which would also take
+    # recon-promtail with it and remove the containers that make rollback a
+    # single `up` away. Grafana must also not be writing grafana.db while it is
+    # copied.
+    - name: Stop the recon containers by name
+      ansible.builtin.command: "docker stop {{ item }}"
+      loop: [recon-grafana, recon-prometheus, recon-loki, recon-promtail]
+      register: stopped
+      changed_when: item in stopped.stdout
+      failed_when: false
+
+    # Copy, never move. The untouched originals are the rollback: a byte for
+    # byte copy still wired to recon's compose file. About 92 MB in total.
+    - name: Copy each volume into its obs_ counterpart
+      ansible.builtin.command: >-
+        docker run --rm
+        -v {{ item.value.migrate_from }}:/from:ro
+        -v {{ item.value.volume }}:/to
+        alpine sh -c "cp -a /from/. /to/"
+      loop: "{{ obs.stack | dict2items | selectattr('value.migrate_from', 'defined') | list }}"
+      loop_control:
+        { label: "{{ item.value.migrate_from }} -> {{ item.value.volume }}" }
+
+    - name: Bring the obs stack up on the copied data
+      ansible.builtin.command:
+        cmd: "docker compose -f {{ obs.stack.dir }}/docker-compose.yml up -d"
+
+    - name: Wait for grafana to answer
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ obs.stack.grafana.port }}/api/health"
+        status_code: [200]
+      register: gh
+      retries: 12
+      delay: 5
+      until: gh.status == 200
+
+    - name: Wait for prometheus to answer
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ obs.stack.prometheus.port }}/-/healthy"
+        status_code: [200]
+      register: ph
+      retries: 12
+      delay: 5
+      until: ph.status == 200
+
+    # Written last, and only after both health checks pass. An interrupt at any
+    # earlier point leaves no marker, so a re-run starts from the preconditions
+    # and converges. Every step before this is idempotent.
+    - name: Record that the migration completed
+      ansible.builtin.copy:
+        content: |
+          Replaced the stubhub-recon-gui monitoring stack on {{ ansible_date_time.iso8601 }}.
+          That project is defunct. Only recon-monitoring_prometheus_data was
+          copied, because it holds fleet node_exporter history; grafana, loki
+          and promtail started fresh. The source volumes were copied, never
+          moved, and are untouched, so the old stack can still be started from
+          its own compose file if it is ever needed.
+          To roll back this stack:
+            docker compose -f {{ obs.stack.dir }}/docker-compose.yml down
+        dest: "{{ obs.stack.dir }}/.migrated-from-recon"
+        owner: root
+        group: root
+        mode: "0644"

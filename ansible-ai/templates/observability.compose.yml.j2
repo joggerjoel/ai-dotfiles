@@ -1,0 +1,119 @@
+{{ ansible_managed | comment }}
+# Rendered from ansible-ai/templates/observability.compose.yml.j2.
+#
+# Volumes are obs_* and declared external, so this stack's own `down -v` cannot
+# delete them. They belong to no compose project.
+#
+# The stubhub-recon-gui project is defunct, so there is no ownership split here
+# and no mount into another repo's working tree. Only prometheus carries data
+# forward, because its volume holds fleet node_exporter history. Grafana starts
+# fresh on purpose: the inherited volume carried admin/admin, anonymous access,
+# dashboards for a dead project, and API keys nobody can enumerate.
+#
+# EVERY bind-mount source below must already exist when compose runs. Docker
+# does not fail on a missing source: it CREATES it, as an empty root-owned
+# DIRECTORY, including where a file was expected. That is what destroyed the
+# previous incarnation of this stack. prometheus.yml became a directory, three
+# containers died with exit 127, and grafana's provisioning reconciler then
+# deleted every provisioned dashboard because their files had vanished with it.
+#
+# This is why the stack play renders all four configs and creates prometheus/extra
+# BEFORE it runs `compose up`, and why that ordering is not a stylistic choice.
+# Adding a mount here means adding its producer there.
+services:
+  prometheus:
+    image: "{{ obs.stack.prometheus.image }}@{{ obs.stack.prometheus.digest }}"
+    container_name: obs-prometheus
+    restart: unless-stopped
+    mem_limit: {{ obs.stack.prometheus.mem_limit }}
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Both bounds on purpose. Time alone does not stop a cardinality
+      # explosion filling the disk well inside the window; whichever is hit
+      # first wins.
+      - --storage.tsdb.retention.time={{ obs.retention.prometheus.time }}
+      - --storage.tsdb.retention.size={{ obs.retention.prometheus.size }}
+      # Required for the /-/reload the stack play calls after rendering
+      # prometheus.yml. Without it a new fleet host is reported converged and
+      # never scraped, because a bind-mounted config change does not recreate
+      # the container.
+      - --web.enable-lifecycle
+    volumes:
+      - obs_prometheus_data:/prometheus
+      - {{ obs.stack.dir }}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Extension point for scrape jobs this repo does not generate. Empty is
+      # fine: prometheus starts normally with a glob matching zero files,
+      # verified against v3.9.1.
+      - {{ obs.stack.dir }}/prometheus/extra:/etc/prometheus/extra:ro
+    ports:
+      - "{{ obs.stack.prometheus.bind }}:{{ obs.stack.prometheus.port }}:9090"
+
+  loki:
+    image: "{{ obs.stack.loki.image }}@{{ obs.stack.loki.digest }}"
+    container_name: obs-loki
+    restart: unless-stopped
+    mem_limit: {{ obs.stack.loki.mem_limit }}
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - obs_loki_data:/loki
+      - {{ obs.stack.dir }}/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+    ports:
+      - "{{ obs.stack.loki.bind }}:{{ obs.stack.loki.port }}:3100"
+
+  # Ships this host's /var/log into loki. Config is rendered by the stack play
+  # rather than mounted from another project, which is all the defunct one did.
+  promtail:
+    image: "{{ obs.stack.promtail.image }}@{{ obs.stack.promtail.digest }}"
+    container_name: obs-promtail
+    restart: unless-stopped
+    mem_limit: {{ obs.stack.promtail.mem_limit }}
+    command: -config.file=/etc/promtail/promtail-config.yml
+    depends_on: [loki]
+    volumes:
+      - obs_promtail_data:/promtail
+      - {{ obs.stack.dir }}/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+
+  grafana:
+    image: "{{ obs.stack.grafana.image }}@{{ obs.stack.grafana.digest }}"
+    container_name: obs-grafana
+    restart: unless-stopped
+    mem_limit: {{ obs.stack.grafana.mem_limit }}
+    depends_on: [prometheus, loki]
+    environment:
+      # The stack this replaces ran with the password "admin" and
+      # [auth.anonymous] enabled, bound to 0.0.0.0. Starting on a fresh volume
+      # with these set is what actually fixes that, rather than inheriting a
+      # user table nobody can audit.
+      GF_SECURITY_ADMIN_PASSWORD: "{{ grafana_admin_password }}"
+      # Without an explicit key the datasource secrets in grafana.db stay
+      # encrypted under grafana's well-known default, so anyone who can read
+      # the volume can decrypt them.
+      GF_SECURITY_SECRET_KEY: "{{ grafana_secret_key }}"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - obs_grafana_data:/var/lib/grafana
+      - {{ obs.stack.dir }}/grafana/provisioning:/etc/grafana/provisioning:ro
+      - {{ obs.stack.dir }}/grafana/dashboards:/var/lib/grafana/dashboards/infra:ro
+    ports:
+      - "{{ obs.stack.grafana.bind }}:{{ obs.stack.grafana.port }}:3000"
+
+volumes:
+  obs_prometheus_data:
+    external: true
+  obs_loki_data:
+    external: true
+  obs_promtail_data:
+    external: true
+  obs_grafana_data:
+    external: true
+
+# Created by compose, not external. The network this replaced was external
+# because two projects shared it; verified that only the four monitoring
+# containers were ever attached, so there is nobody left to share it with.
+networks:
+  default:
+    name: {{ obs.stack.network }}

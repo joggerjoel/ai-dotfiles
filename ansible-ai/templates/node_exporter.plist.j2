@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Rendered from ansible-ai/templates/node_exporter.plist.j2. Edit the template,
+  never this file.
+
+  A LaunchDaemon rather than `brew services`, for two reasons. macstudio already
+  ran node_exporter this way, so brew services would have fought an existing
+  setup rather than converging it. And the tarball path pins an exact version,
+  which is what the manifest promises and what a formula cannot guarantee once
+  upstream moves ahead of it.
+
+  Daemon, not agent: it must run without anyone logged in.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.prometheus.node_exporter</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/node_exporter</string>
+        <string>--web.listen-address={{ obs.node_exporter.listen_address }}</string>
+        <string>--collector.textfile.directory={{ obs.node_exporter.textfile_dir }}</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/node_exporter.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/node_exporter.err.log</string>
+</dict>
+</plist>

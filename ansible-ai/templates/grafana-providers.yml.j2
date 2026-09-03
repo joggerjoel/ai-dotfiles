@@ -1,0 +1,30 @@
+{{ ansible_managed | comment }}
+# Rendered from ansible-ai/templates/grafana-providers.yml.j2.
+#
+# One provider. An earlier version carried a second for the stubhub-recon-gui
+# dashboards, which is a defunct project, so those are not provisioned.
+#
+# Deleting a provider from this list DELETES the dashboards it provisioned and
+# leaves an orphaned empty folder behind in grafana. It is the same reconciler
+# `disableDeletion` guards against below, and disableDeletion does NOT stop it,
+# because the provider is gone rather than its files. Removing the recon
+# provider is exactly how those dashboards went away here. That was intended;
+# read this before editing the list on a live instance where it might not be.
+apiVersion: 1
+
+providers:
+  - name: Infrastructure
+    orgId: 1
+    folder: Infrastructure
+    type: file
+    # disableDeletion on every provider. If a mount ever resolves empty, and a
+    # `~` in a bind-mount source is enough to cause that, grafana's file
+    # provisioner deletes the dashboards it had provisioned out of the shared
+    # volume. Degrade to stale, never to destroyed.
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards/infra
+      foldersFromFilesStructure: false
+

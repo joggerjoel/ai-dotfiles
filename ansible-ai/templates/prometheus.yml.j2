@@ -1,0 +1,70 @@
+#jinja2: trim_blocks: True, lstrip_blocks: True
+{{ ansible_managed | comment }}
+# Rendered from ansible-ai/templates/prometheus.yml.j2. Edit the template, never
+# this file: the next converge run overwrites it.
+#
+# Every target below is generated from the ansible inventory. That is the point.
+# The hand-written list this replaces had drifted twice over: it omitted both
+# macs, it named only one of three redis exporters, and it carried no rabbitmq
+# job at all while the plugin answered on three hosts. A roster kept by hand
+# beside the roster ansible deploys against is a copy, and copies drift.
+#
+# Add a host to a group in inventory.local.yml and it is scraped. There is no
+# second place to edit.
+#
+# The jinja header above is load-bearing. Without trim_blocks and lstrip_blocks,
+# block tags leave their own indentation and newlines in the output, and the
+# first attempt at this template emitted `- targets:` at column 0 under an
+# indented static_configs. That is invalid YAML and prometheus refuses to load
+# it, so a converge run would have reported success against a dead config.
+global:
+  scrape_interval: {{ obs.retention.scrape_interval | default('15s') }}
+  evaluation_interval: {{ obs.retention.scrape_interval | default('15s') }}
+  external_labels:
+    fleet: aorus
+
+# Owned by stubhub-recon-gui, not by this repo. Its app jobs live here so that
+# neither repo writes the other's files. ai-dotfiles renders prometheus.yml;
+# recon owns everything under extra/.
+scrape_config_files:
+  - /etc/prometheus/extra/*.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Every managed host. scrape_address exists because ansible_host is the
+  # address ansible connects on, which is not always the address prometheus can
+  # reach: macair's ansible_host is a tailnet name and aorus7 has no tailscale,
+  # so scraping it by that name would read down forever.
+  - job_name: node
+    static_configs:
+    {% for h in groups.get('aorus_ai', []) | sort %}
+    {% if not hostvars[h].get('scrape_skip', false) %}
+      - targets: ['{{ hostvars[h].get('scrape_address', hostvars[h].ansible_host) }}:9100']
+        labels: { host: {{ h }} }
+    {% endif %}
+    {% endfor %}
+
+  # The control node is a laptop that sleeps and leaves the LAN. Its own job so
+  # that expected absence never reads as fleet failure on a health panel.
+  - job_name: control_node
+    static_configs:
+      - targets: ['{{ hostvars['localhost'].get('scrape_address', '127.0.0.1') }}:9100']
+        labels: { host: control_node }
+
+{% for name, e in obs.exporters.items() %}
+{% if groups.get(e.group, []) | length > 0 %}
+
+  # {{ name }}: membership of {{ e.group }} is the only thing that puts a host here.
+  - job_name: {{ e.job }}
+    static_configs:
+    {% for h in groups.get(e.group, []) | sort %}
+    {% if not hostvars[h].get('scrape_skip', false) %}
+      - targets: ['{{ hostvars[h].get('scrape_address', hostvars[h].ansible_host) }}:{{ e.port }}']
+        labels: { host: {{ h }} }
+    {% endif %}
+    {% endfor %}
+{% endif %}
+{% endfor %}
