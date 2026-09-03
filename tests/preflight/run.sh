@@ -50,6 +50,8 @@ run_preflight() {
   PREFLIGHT_ENV_FILE="$TESTS_DIR/fixtures/$fixture/env" \
   PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/$fixture/skills" \
   PREFLIGHT_SMOKE_DIR="$TESTS_DIR/fixtures/$fixture/smoke" \
+  PREFLIGHT_LINK_DIRS="" \
+  PREFLIGHT_LINK_FILES="" \
     bash "$REPO_DIR/scripts/preflight.sh" "$@"
 }
 
@@ -1007,6 +1009,609 @@ case "$out" in
   *"PLUGIN HEALTH"*) report fail "an empty spec list probes nothing" "PLUGIN HEALTH section rendered" ;;
   *) report pass "an empty spec list probes nothing" ;;
 esac
+# --- links probe -----------------------------------------------------------
+# A dangling link is the incident condition. A stale-but-resolving link is the
+# condition that would have made the incident INVISIBLE had the old checkout
+# survived the move — a dangling-only check reports nothing for it. A
+# lookalike directory name must NOT be treated as ours — the case pattern in
+# _probe_one_link must stay an anchored path-component match
+# (*/ai-dotfiles/*), never a bare substring, since a later phase uses this
+# same predicate to decide what to delete.
+links_fixture="$TESTS_DIR/fixtures/links"
+
+# The "not repo-owned" case can't be a fixture committed inside this repo:
+# this checkout's own directory is literally named ai-dotfiles, so any
+# resolved absolute path under tests/preflight/fixtures/ contains a real
+# "/ai-dotfiles/" path component no matter what a fixture subdirectory is
+# named. Build the lookalike (decoy) target outside the repo tree instead,
+# and wire the fixture's decoy.sh symlink to it only for this test.
+DECOY_DIR=$(mktemp -d)
+add_cleanup_dir "$DECOY_DIR"
+mkdir -p "$DECOY_DIR/ai-dotfiles-backup/scripts"
+echo '#!/bin/bash' > "$DECOY_DIR/ai-dotfiles-backup/scripts/decoy.sh"
+chmod +x "$DECOY_DIR/ai-dotfiles-backup/scripts/decoy.sh"
+ln -sfn "$DECOY_DIR/ai-dotfiles-backup/scripts/decoy.sh" "$links_fixture/home/.claude/scripts/decoy.sh"
+
+out=$(PATH="$TESTS_DIR/stubs:$PATH" \
+  PREFLIGHT_CLAUDE_JSON="$TESTS_DIR/fixtures/healthy/claude.json" \
+  PREFLIGHT_SETTINGS_JSON="$TESTS_DIR/fixtures/healthy/settings.json" \
+  PREFLIGHT_ENV_FILE="$TESTS_DIR/fixtures/healthy/env" \
+  PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/healthy/skills" \
+  PREFLIGHT_LINK_DIRS="$links_fixture/home/.claude/scripts" \
+  PREFLIGHT_LINK_FILES="" \
+  PREFLIGHT_DOTFILES_DIR="$links_fixture/checkout" \
+  bash "$REPO_DIR/scripts/preflight.sh" --json 2>/dev/null); rc=$?
+
+# Assert on verdict AND detail string, not just the name being present.
+# render_class collapses every pass onto one bare-name line in human mode,
+# so a name-only assertion can't tell "current checkout" apart from
+# "not repo-owned" — both are pass. --json exposes the detail field.
+link_detail() {
+  jq -r --arg n "$1" '.assets[] | select(.class=="link" and .name==$n) | "\(.verdict) \(.detail)"' <<<"$out"
+}
+
+# Labels are now "<parent-dir>/<name>", not a bare basename (see
+# _probe_one_link) — all the fixture links here live in .../scripts/.
+if grep -q "^pass current checkout$" <<<"$(link_detail scripts/healthy.sh)"; then
+  report pass "links probe passes a correct link as 'current checkout'"
+else
+  report fail "links probe passes a correct link as 'current checkout'" "$(link_detail scripts/healthy.sh)"
+fi
+
+if grep -q "^fail dangling -> " <<<"$(link_detail scripts/dangling.sh)"; then
+  report pass "links probe reports a dangling link as 'dangling'"
+else
+  report fail "links probe reports a dangling link as 'dangling'" "$(link_detail scripts/dangling.sh)"
+fi
+
+if grep -q "^fail stale but resolving -> " <<<"$(link_detail scripts/stale.sh)"; then
+  report pass "links probe reports a stale-but-resolving link as 'stale but resolving'"
+else
+  report fail "links probe reports a stale-but-resolving link as 'stale but resolving'" "$(link_detail scripts/stale.sh)"
+fi
+
+if grep -q "^pass not repo-owned$" <<<"$(link_detail scripts/decoy.sh)"; then
+  report pass "links probe passes a lookalike directory name as 'not repo-owned'"
+else
+  report fail "links probe passes a lookalike directory name as 'not repo-owned'" "$(link_detail scripts/decoy.sh)"
+fi
+
+if [ "$rc" -eq 1 ]; then
+  report pass "links probe fails the run when drift is present"
+else
+  report fail "links probe fails the run when drift is present" "got rc=$rc"
+fi
+
+# preflight.sh:9 computes its own DOTFILES_DIR (which PREFLIGHT_DOTFILES_DIR
+# defaults to) via a plain `cd .. && pwd` — logical, not physical. Every test
+# above bypasses that by overriding PREFLIGHT_DOTFILES_DIR directly, so none
+# of them exercise line 9's own resolution. On a host whose checkout is
+# reached through a symlinked parent (symlinked $HOME, symlinked /Users, a
+# bind mount), a plain `pwd` after `cd` through that symlink preserves the
+# symlinked text instead of resolving it, while a real repo-owned link's
+# target is an absolute, fully-resolved path. The two would then fail to
+# prefix-match and every healthy link would misclassify as "stale but
+# resolving" — a healthy node reported as total drift.
+#
+# Reproduce that without touching the real machine: symlink a temp dir at an
+# ancestor of the real checkout, invoke the real preflight.sh via that
+# symlinked route (no PREFLIGHT_DOTFILES_DIR override — line 9 must compute
+# it), and point a fixture link at a REAL, resolved path inside the actual
+# checkout (what a correctly-resolved repo-owned link looks like). Under the
+# bug, DOTFILES_DIR resolves to the symlinked route and never prefix-matches
+# the link's real-path target.
+SYMROOT=$(mktemp -d)
+add_cleanup_dir "$SYMROOT"
+REPO_REAL="$(cd "$REPO_DIR" && pwd -P)"
+ln -s "$REPO_REAL" "$SYMROOT/repo-symlink"
+mkdir -p "$SYMROOT/home/.claude/scripts"
+ln -sfn "$REPO_REAL/scripts/preflight.sh" "$SYMROOT/home/.claude/scripts/self.sh"
+
+symlink_out=$(PATH="$TESTS_DIR/stubs:$PATH" \
+  PREFLIGHT_CLAUDE_JSON="$TESTS_DIR/fixtures/healthy/claude.json" \
+  PREFLIGHT_SETTINGS_JSON="$TESTS_DIR/fixtures/healthy/settings.json" \
+  PREFLIGHT_ENV_FILE="$TESTS_DIR/fixtures/healthy/env" \
+  PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/healthy/skills" \
+  PREFLIGHT_LINK_DIRS="$SYMROOT/home/.claude/scripts" \
+  PREFLIGHT_LINK_FILES="" \
+  bash "$SYMROOT/repo-symlink/scripts/preflight.sh" --json 2>/dev/null)
+
+if grep -q "^pass current checkout$" \
+   <<<"$(jq -r '.assets[] | select(.class=="link" and .name=="scripts/self.sh") | "\(.verdict) \(.detail)"' <<<"$symlink_out")"; then
+  report pass "links probe resolves DOTFILES_DIR through a symlinked parent"
+else
+  report fail "links probe resolves DOTFILES_DIR through a symlinked parent" "$symlink_out"
+fi
+
+# The probe is read-only. Any write to the fixture is a defect.
+links_tree_hash() {
+  # names + link targets + sizes: catches a created, deleted, retargeted, or
+  # rewritten file. `md5sum` on Linux, `md5` on macOS.
+  # A dangling link has no size to read — `wc -c <"$p"` opens the redirect
+  # before its own `2>/dev/null` takes effect, so the shell's "No such file
+  # or directory" bypasses that redirect and lands on the suite's stderr.
+  # Guard the read instead of relying on the command's own redirect.
+  find "$links_fixture" | sort | while IFS= read -r p; do
+    if [ -e "$p" ]; then
+      printf '%s|%s|%s\n' "$p" "$(readlink "$p" 2>/dev/null)" "$(wc -c <"$p" 2>/dev/null)"
+    else
+      printf '%s|%s|%s\n' "$p" "$(readlink "$p" 2>/dev/null)" "-"
+    fi
+  done | { md5sum 2>/dev/null || md5; }
+}
+before=$(links_tree_hash)
+# Same overrides as the JSON-assertion invocation above — omitting them
+# (as the original brief's example did) let this probe the developer's
+# real ~/.claude.json, real MCP servers, and real ~/.claude/statusline.sh,
+# and on a machine without `claude`/`jq` on the real PATH, check_preconditions
+# fails and main exits 2 before probe_links ever runs — the before/after
+# hashes would then match trivially and this assertion would pass having
+# proven nothing. Capture the output too, so that silent-exit-2 case fails
+# the "did it actually run" check below instead of going unnoticed.
+write_check_out=$(PATH="$TESTS_DIR/stubs:$PATH" \
+  PREFLIGHT_CLAUDE_JSON="$TESTS_DIR/fixtures/healthy/claude.json" \
+  PREFLIGHT_SETTINGS_JSON="$TESTS_DIR/fixtures/healthy/settings.json" \
+  PREFLIGHT_ENV_FILE="$TESTS_DIR/fixtures/healthy/env" \
+  PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/healthy/skills" \
+  PREFLIGHT_LINK_DIRS="$links_fixture/home/.claude/scripts" \
+  PREFLIGHT_LINK_FILES="" \
+  PREFLIGHT_DOTFILES_DIR="$links_fixture/checkout" \
+  bash "$REPO_DIR/scripts/preflight.sh" --json 2>/dev/null)
+after=$(links_tree_hash)
+if [ "$before" = "$after" ]; then
+  report pass "links probe writes nothing"
+else
+  report fail "links probe writes nothing" "fixture tree changed"
+fi
+
+if jq -e '[.assets[] | select(.class=="link")] | length >= 4' <<<"$write_check_out" >/dev/null 2>&1; then
+  report pass "links probe writes-nothing check actually ran probe_links"
+else
+  report fail "links probe writes-nothing check actually ran probe_links" "$write_check_out"
+fi
+
+# decoy.sh is wired up dynamically for this test only — it targets a mktemp
+# dir that add_cleanup_dir will remove, and isn't part of the committed
+# fixture tree, so it must not linger as an untracked file afterward.
+rm -f "$links_fixture/home/.claude/scripts/decoy.sh"
+
+# --- lib/links.sh ----------------------------------------------------------
+source "$REPO_DIR/tests/preflight/links_fixture.sh"
+
+links_case() {  # links_case <name> <body-fn>
+  local name="$1" body="$2"
+  # Called directly, not `tmp=$(links_fixture_setup)`: the latter forks a
+  # subshell, so DOTFILES_DIR/CLAUDE_DIR/HOME set inside the function would
+  # vanish the instant the substitution closes, leaving them unbound here.
+  links_fixture_setup >/dev/null
+  add_cleanup_dir "$LINKS_TMP"
+  source "$REPO_DIR/lib/links.sh"
+  LINK_CHANGED=0; LINK_OK=0; LINK_SKIPPED=0; LINK_FAILED=0
+  "$body"
+}
+
+# 1. a dangling link is repointed at the current checkout
+_t_repoint() {
+  echo 'x' > "$DOTFILES_DIR/scripts/a.sh"
+  mkdir -p "$CLAUDE_DIR/scripts"
+  ln -sfn "/nonexistent/a.sh" "$CLAUDE_DIR/scripts/a.sh"
+  link_file "$DOTFILES_DIR/scripts/a.sh" "$CLAUDE_DIR/scripts/a.sh"
+  if [ "$(readlink "$CLAUDE_DIR/scripts/a.sh")" = "$DOTFILES_DIR/scripts/a.sh" ] \
+     && [ "$LINK_CHANGED" -eq 1 ]; then
+    report pass "link_file repoints a dangling link"
+  else
+    report fail "link_file repoints a dangling link" "changed=$LINK_CHANGED"
+  fi
+}
+links_case repoint _t_repoint
+
+# 2. a correct link is untouched and silent
+_t_verified() {
+  echo 'x' > "$DOTFILES_DIR/scripts/b.sh"
+  mkdir -p "$CLAUDE_DIR/scripts"
+  ln -sfn "$DOTFILES_DIR/scripts/b.sh" "$CLAUDE_DIR/scripts/b.sh"
+  LINKS_OUT=""
+  link_file "$DOTFILES_DIR/scripts/b.sh" "$CLAUDE_DIR/scripts/b.sh"
+  if [ "$LINK_OK" -eq 1 ] && [ -z "$LINKS_OUT" ]; then
+    report pass "link_file leaves a correct link untouched and silent"
+  else
+    report fail "link_file leaves a correct link untouched and silent" "ok=$LINK_OK out=$LINKS_OUT"
+  fi
+}
+links_case verified _t_verified
+
+# 3. dst is a directory -> refused, directory survives
+_t_dstdir() {
+  echo 'x' > "$DOTFILES_DIR/scripts/c.sh"
+  mkdir -p "$CLAUDE_DIR/scripts/c.sh"
+  link_file "$DOTFILES_DIR/scripts/c.sh" "$CLAUDE_DIR/scripts/c.sh"
+  if [ -d "$CLAUDE_DIR/scripts/c.sh" ] && [ "$LINK_FAILED" -eq 1 ]; then
+    report pass "link_file refuses a directory destination"
+  else
+    report fail "link_file refuses a directory destination" "failed=$LINK_FAILED"
+  fi
+}
+links_case dstdir _t_dstdir
+
+# 4. dst is a regular file -> backed up, then replaced
+_t_dstfile() {
+  echo 'new' > "$DOTFILES_DIR/scripts/d.sh"
+  mkdir -p "$CLAUDE_DIR/scripts"
+  echo 'original' > "$CLAUDE_DIR/scripts/d.sh"
+  link_file "$DOTFILES_DIR/scripts/d.sh" "$CLAUDE_DIR/scripts/d.sh"
+  if [ -L "$CLAUDE_DIR/scripts/d.sh" ] \
+     && grep -rq original "$CLAUDE_DIR/.backups" 2>/dev/null; then
+    report pass "link_file backs up a regular file before replacing it"
+  else
+    report fail "link_file backs up a regular file before replacing it" "$(ls -R "$CLAUDE_DIR" 2>&1)"
+  fi
+}
+links_case dstfile _t_dstfile
+
+# 5. src missing -> skip, no link created
+_t_srcmissing() {
+  mkdir -p "$CLAUDE_DIR/scripts"
+  link_file "$DOTFILES_DIR/scripts/nope.sh" "$CLAUDE_DIR/scripts/nope.sh"
+  if [ ! -e "$CLAUDE_DIR/scripts/nope.sh" ] && [ ! -L "$CLAUDE_DIR/scripts/nope.sh" ] \
+     && [ "$LINK_SKIPPED" -eq 1 ]; then
+    report pass "link_file skips a missing source"
+  else
+    report fail "link_file skips a missing source" "skipped=$LINK_SKIPPED"
+  fi
+}
+links_case srcmissing _t_srcmissing
+
+# 6. an exported counter does not leak into the run
+_t_exported() {
+  echo 'x' > "$DOTFILES_DIR/scripts/e.sh"
+  export LINK_CHANGED=7
+  LINK_CHANGED=0; LINK_OK=0; LINK_SKIPPED=0; LINK_FAILED=0
+  link_file "$DOTFILES_DIR/scripts/e.sh" "$CLAUDE_DIR/scripts/e.sh"
+  local got="$LINK_CHANGED"
+  unset LINK_CHANGED
+  if [ "$got" -eq 1 ]; then
+    report pass "an exported counter does not survive explicit assignment"
+  else
+    report fail "an exported counter does not survive explicit assignment" "got $got, want 1"
+  fi
+}
+links_case exported _t_exported
+
+# 7. link_statusline does not chmod through a link it did not create, and its
+# dry-run report matches link_file's dry-run contract: counted, marked
+# "(dry run)", and the fixture tree left byte-for-byte untouched.
+#
+# A destination that is absent under dry run proves nothing: link_file never
+# touches an absent destination anyway, dry run or not, so `[ ! -e dst ]`
+# alone would pass even with the dry-run clause deleted entirely. The guard
+# needs a link that already exists and is WRONG — pointing somewhere other
+# than our statusline.sh — so a leaked chmod has a real, checkable victim:
+# the wrong target's own mode bit.
+_t_statusline_dryrun() {
+  local before after wrong_target
+  wrong_target="$DOTFILES_DIR/not-the-statusline.sh"
+  echo 'not it' > "$wrong_target"
+  chmod 644 "$wrong_target"
+  ln -sfn "$wrong_target" "$CLAUDE_DIR/statusline.sh"
+  before=$(find "$LINKS_TMP" | sort)
+  LINKS_DRY_RUN=1
+  LINKS_OUT=""
+  link_statusline
+  unset LINKS_DRY_RUN
+  after=$(find "$LINKS_TMP" | sort)
+  if [ "$(readlink "$CLAUDE_DIR/statusline.sh")" = "$wrong_target" ] \
+     && [ ! -x "$wrong_target" ] \
+     && [ "$LINK_CHANGED" -eq 1 ] \
+     && printf '%s' "$LINKS_OUT" | grep -q '(dry run)' \
+     && [ "$before" = "$after" ]; then
+    report pass "link_statusline leaves a foreign link and its target's mode alone under dry run"
+  else
+    report fail "link_statusline leaves a foreign link and its target's mode alone under dry run" \
+      "dst=$(readlink "$CLAUDE_DIR/statusline.sh" 2>&1) wrong_target_exec=$([ -x "$wrong_target" ] && echo yes || echo no) changed=$LINK_CHANGED out=$LINKS_OUT tree_changed=$([ "$before" = "$after" ] && echo no || echo yes)"
+  fi
+}
+links_case statusline_dryrun _t_statusline_dryrun
+
+# 7b. the readlink-mismatch half of the guard blocks the chmod even when a
+# link already exists at dst — but does NOT prove the dry-run half does
+# anything, since a pre-existing CORRECT link satisfies the readlink
+# comparison regardless of LINKS_DRY_RUN. That is the one arrangement a
+# readlink-only guard would get wrong: source seeded non-executable, dst
+# already a correct link, called under dry run — the source's mode must be
+# untouched.
+_t_statusline_dryrun_correct() {
+  chmod 644 "$DOTFILES_DIR/statusline.sh"
+  ln -sfn "$DOTFILES_DIR/statusline.sh" "$CLAUDE_DIR/statusline.sh"
+  LINKS_DRY_RUN=1
+  link_statusline
+  unset LINKS_DRY_RUN
+  if [ ! -x "$DOTFILES_DIR/statusline.sh" ]; then
+    report pass "link_statusline does not chmod the source through an already-correct link under dry run"
+  else
+    report fail "link_statusline does not chmod the source through an already-correct link under dry run" \
+      "source_exec=$([ -x "$DOTFILES_DIR/statusline.sh" ] && echo yes || echo no)"
+  fi
+}
+links_case statusline_dryrun_correct _t_statusline_dryrun_correct
+
+# 7c. link_repo_scripts carries the identical guard as link_statusline (a
+# stale/foreign symlink at dst must not get chmod'd, dry run or not) — cover
+# it the same way: a wrong pre-existing link, called under dry run.
+_t_reposcripts_dryrun_foreign() {
+  local wrong_target
+  echo 'x' > "$DOTFILES_DIR/scripts/foo.sh"
+  wrong_target="$DOTFILES_DIR/not-foo.sh"
+  echo 'not it' > "$wrong_target"
+  chmod 644 "$wrong_target"
+  mkdir -p "$CLAUDE_DIR/scripts"
+  ln -sfn "$wrong_target" "$CLAUDE_DIR/scripts/foo.sh"
+  LINKS_DRY_RUN=1
+  link_repo_scripts
+  unset LINKS_DRY_RUN
+  if [ "$(readlink "$CLAUDE_DIR/scripts/foo.sh")" = "$wrong_target" ] \
+     && [ ! -x "$wrong_target" ]; then
+    report pass "link_repo_scripts leaves a foreign link and its target's mode alone under dry run"
+  else
+    report fail "link_repo_scripts leaves a foreign link and its target's mode alone under dry run" \
+      "dst=$(readlink "$CLAUDE_DIR/scripts/foo.sh" 2>&1) wrong_target_exec=$([ -x "$wrong_target" ] && echo yes || echo no)"
+  fi
+}
+links_case reposcripts_dryrun_foreign _t_reposcripts_dryrun_foreign
+
+# 8. a missing source directory is skipped, not failed
+_t_nobindir() {
+  rmdir "$DOTFILES_DIR/bin"
+  link_bin_tools
+  if [ "$LINK_FAILED" -eq 0 ]; then
+    report pass "link_bin_tools skips a missing bin/ without failing"
+  else
+    report fail "link_bin_tools skips a missing bin/ without failing" "failed=$LINK_FAILED"
+  fi
+}
+links_case nobindir _t_nobindir
+
+# 9. hooks with a dotted stem are repo-side helpers, never linked as hooks
+_t_dottedhook() {
+  echo 'x' > "$DOTFILES_DIR/hooks/real.sh"
+  echo 'x' > "$DOTFILES_DIR/hooks/helper.test.sh"
+  link_claude_hooks
+  if [ -L "$CLAUDE_DIR/hooks/real.sh" ] && [ ! -e "$CLAUDE_DIR/hooks/helper.test.sh" ]; then
+    report pass "link_claude_hooks skips dotted-stem helpers"
+  else
+    report fail "link_claude_hooks skips dotted-stem helpers" "$(ls "$CLAUDE_DIR/hooks" 2>&1)"
+  fi
+}
+links_case dottedhook _t_dottedhook
+
+# 10. relink_all zeroes counters on entry — an exported value must not leak
+_t_relink_reset() {
+  export LINK_CHANGED=99
+  echo 'x' > "$DOTFILES_DIR/scripts/f.sh"
+  LINKS_OUT=""
+  relink_all
+  local got="$LINK_CHANGED"
+  unset LINK_CHANGED
+  # Assert the actual count, not the absence of the string "99": a broken
+  # reset that accumulated onto the exported value would report 100, which
+  # does not contain "99" and would pass a substring check. Require also
+  # that a summary was printed, so a relink_all that emitted nothing at all
+  # cannot satisfy this by silence.
+  if [ "$got" -ge 1 ] && [ "$got" -lt 99 ] \
+     && printf '%s' "$LINKS_OUT" | grep -q 'verified'; then
+    report pass "relink_all zeroes counters, ignoring an exported value"
+  else
+    report fail "relink_all zeroes counters, ignoring an exported value" \
+      "changed=$got out=$LINKS_OUT"
+  fi
+}
+links_case relink_reset _t_relink_reset
+
+# 11. AGENTS.md failures are counted, not erased by the reset. This was the
+# review's broadest finding: called BEFORE relink_all, they printed under
+# "0 failed". A success-only run can't exercise that claim, so force an
+# actual failure: $HOME/.gemini exists but is read-only, so link_file's
+# `ln -sfn` into it fails and increments LINK_FAILED. Assert the count is
+# non-zero AFTER relink_all returns (i.e. the reset didn't erase it) and
+# that a non-zero number is in the printed summary, not just the word
+# "failed" (which the summary contains even at zero).
+_t_agents_counted() {
+  echo 'x' > "$CLAUDE_DIR/CLAUDE.md"
+  mkdir -p "$HOME/.gemini"
+  chmod 555 "$HOME/.gemini"
+  LINKS_OUT=""
+  relink_all
+  chmod 755 "$HOME/.gemini"
+  if [ "$LINK_FAILED" -ge 1 ] \
+     && printf '%s' "$LINKS_OUT" | grep -qE '[1-9][0-9]* failed' \
+     && [ -L "$HOME/AGENTS.md" ]; then
+    report pass "relink_all links AGENTS.md and counts a failure, not erasing it"
+  else
+    report fail "relink_all links AGENTS.md and counts a failure, not erasing it" \
+      "failed=$LINK_FAILED out=$LINKS_OUT"
+  fi
+}
+links_case agents_counted _t_agents_counted
+
+# 12. the four counters account for every link attempted. Fixture is fully
+# controlled, so the expected total is derived, not guessed:
+#   1  statusline.sh          — always present (links_fixture_setup)
+# + 1  scripts/g.sh           — seeded below
+# + 1  hooks/h.sh             — seeded below
+# + 0  bin/*                  — empty in the fixture, untouched here
+# + 0  codex/prompts/*.md     — empty in the fixture, untouched here
+# + 0  link_agent_instructions — fixture ships no CLAUDE_DIR/CLAUDE.md, so
+#      link_agent_instructions warns and returns before calling link_file
+# = 3 link_file calls, each landing in exactly one counter.
+_t_counter_sum() {
+  local total
+  echo 'x' > "$DOTFILES_DIR/scripts/g.sh"
+  echo 'x' > "$DOTFILES_DIR/hooks/h.sh"
+  relink_all
+  total=$(( LINK_CHANGED + LINK_OK + LINK_SKIPPED + LINK_FAILED ))
+  if [ "$total" -eq 3 ]; then
+    report pass "relink_all counters sum to exactly the 3 links attempted"
+  else
+    report fail "relink_all counters sum to exactly the 3 links attempted" \
+      "total=$total (changed=$LINK_CHANGED ok=$LINK_OK skipped=$LINK_SKIPPED failed=$LINK_FAILED)"
+  fi
+}
+links_case counter_sum _t_counter_sum
+
+# 13. a repair is a warn, not an ok — 24 silent repairs under a checkmark
+# would hide exactly the condition that caused the incident
+_t_repair_warns() {
+  echo 'x' > "$DOTFILES_DIR/scripts/i.sh"
+  mkdir -p "$CLAUDE_DIR/scripts"
+  ln -sfn /nonexistent/i.sh "$CLAUDE_DIR/scripts/i.sh"
+  LINKS_OUT=""
+  relink_all
+  if grep -q "\[warn\].*changed" <<<"$LINKS_OUT"; then
+    report pass "relink_all summarises a repair as a warn"
+  else
+    report fail "relink_all summarises a repair as a warn" "$LINKS_OUT"
+  fi
+}
+links_case repair_warns _t_repair_warns
+
+# 14. setup.sh and update.sh source lib/links.sh and call relink_all instead
+# of open-coding the statusline/scripts install.
+if grep -q 'source .*lib/links\.sh' "$REPO_DIR/setup.sh" && grep -q 'relink_all' "$REPO_DIR/setup.sh"; then
+  report pass "setup.sh sources lib/links.sh and calls relink_all"
+else
+  report fail "setup.sh sources lib/links.sh and calls relink_all" "missing one or both"
+fi
+
+if grep -q 'source .*lib/links\.sh' "$REPO_DIR/update.sh" && grep -q 'relink_all' "$REPO_DIR/update.sh"; then
+  report pass "update.sh sources lib/links.sh and calls relink_all"
+else
+  report fail "update.sh sources lib/links.sh and calls relink_all" "missing one or both"
+fi
+
+# 14a. Wiring by LINE ORDER, not mere presence: a bare grep for the string
+# "links_reset_counters" would pass even if the call sat before the `source`
+# line (which would fail — the function isn't defined yet), in a comment, or
+# anywhere else in the file. Require the FIRST `links_reset_counters` call to
+# appear strictly after the FIRST `source .../lib/links.sh` line.
+check_reset_after_source() {
+  local file="$1" src_line reset_line
+  src_line=$(grep -n 'source .*lib/links\.sh' "$file" | head -1 | cut -d: -f1)
+  reset_line=$(grep -n '^links_reset_counters$' "$file" | head -1 | cut -d: -f1)
+  [ -n "$src_line" ] && [ -n "$reset_line" ] && [ "$reset_line" -gt "$src_line" ]
+}
+
+if check_reset_after_source "$REPO_DIR/setup.sh"; then
+  report pass "setup.sh calls links_reset_counters after (not before) sourcing lib/links.sh"
+else
+  report fail "setup.sh calls links_reset_counters after (not before) sourcing lib/links.sh" \
+    "src_line=$(grep -n 'source .*lib/links\.sh' "$REPO_DIR/setup.sh" | head -1) reset_line=$(grep -n '^links_reset_counters$' "$REPO_DIR/setup.sh" | head -1)"
+fi
+
+if check_reset_after_source "$REPO_DIR/update.sh"; then
+  report pass "update.sh calls links_reset_counters after (not before) sourcing lib/links.sh"
+else
+  report fail "update.sh calls links_reset_counters after (not before) sourcing lib/links.sh" \
+    "src_line=$(grep -n 'source .*lib/links\.sh' "$REPO_DIR/update.sh" | head -1) reset_line=$(grep -n '^links_reset_counters$' "$REPO_DIR/update.sh" | head -1)"
+fi
+
+# 14b. Precondition pin: link_file must NOT be safely callable before the
+# counters are reset. This documents and enforces the contract
+# setup.sh/update.sh's reset calls exist to satisfy — it fails if the
+# counters are ever made self-initializing (or the contract otherwise
+# changes) without updating this test, so that change can't silently make
+# the reset calls above look load-bearing when they no longer are. A fresh
+# fixture, untouched by any earlier case, so no prior run's `settings.json`
+# symlink can mask the missing reset by taking the "already correct" branch
+# instead of "changed" — though every link_file branch references one of the
+# four counters, so any of them would trip the same unbound-variable abort.
+PRECOND_TMP=$(mktemp -d)
+add_cleanup_dir "$PRECOND_TMP"
+PRECOND_DOTFILES="$PRECOND_TMP/checkout"
+PRECOND_HOME="$PRECOND_TMP/home"
+mkdir -p "$PRECOND_DOTFILES" "$PRECOND_HOME/.claude"
+echo '{}' > "$PRECOND_DOTFILES/settings-src.json"
+
+precond_out=$(DOTFILES_DIR="$PRECOND_DOTFILES" CLAUDE_DIR="$PRECOND_HOME/.claude" HOME="$PRECOND_HOME" \
+  bash -c '
+    set -euo pipefail
+    ok()   { :; }
+    warn() { :; }
+    skip() { :; }
+    source "$1"
+    # Deliberately NO links_reset_counters call — this is the precondition
+    # under test: link_file must not be safely callable without one.
+    link_file "$DOTFILES_DIR/settings-src.json" "$CLAUDE_DIR/settings.json"
+    echo "SHOULD_NOT_REACH_HERE"
+  ' exec-precondition-test "$REPO_DIR/lib/links.sh" 2>&1); precond_rc=$?
+
+if [ "$precond_rc" -ne 0 ] && ! grep -q 'SHOULD_NOT_REACH_HERE' <<<"$precond_out"; then
+  report pass "link_file called before links_reset_counters aborts under set -euo pipefail"
+else
+  report fail "link_file called before links_reset_counters aborts under set -euo pipefail" "rc=$precond_rc: $precond_out"
+fi
+
+# 14c. the wiring checks above only grep for strings — they'd pass even if
+# both strings sat in a comment or a dead branch. Actually RUN the sequence
+# install_settings performs: source lib/links.sh, call link_file directly
+# (no relink_all first), then call relink_all. This is a real `bash -c`
+# subshell under `set -euo pipefail` — this test runner itself only sets
+# `set -uo pipefail` (see the top of this file), so a false pass here can't
+# be explained by inheriting `-e` from the harness; the crash this reproduces
+# (an unbound LINK_CHANGED under `set -u`) doesn't even need `-e` to abort.
+# NOTE: this case alone cannot prove setup.sh/update.sh actually call
+# links_reset_counters — it calls the function itself, inline, so it only
+# proves the library contract is satisfiable. 14a/14b are what pin the
+# callers to that contract.
+EXEC_TMP=$(mktemp -d)
+add_cleanup_dir "$EXEC_TMP"
+EXEC_DOTFILES="$EXEC_TMP/checkout"
+EXEC_HOME="$EXEC_TMP/home"
+mkdir -p "$EXEC_DOTFILES/scripts" "$EXEC_DOTFILES/hooks" "$EXEC_DOTFILES/bin" \
+         "$EXEC_DOTFILES/codex/prompts" "$EXEC_HOME/.claude" "$EXEC_HOME/.local/bin"
+echo '#!/bin/bash' > "$EXEC_DOTFILES/statusline.sh"
+echo '{}' > "$EXEC_DOTFILES/settings-src.json"
+
+exec_out=$(DOTFILES_DIR="$EXEC_DOTFILES" CLAUDE_DIR="$EXEC_HOME/.claude" HOME="$EXEC_HOME" \
+  bash -c '
+    set -euo pipefail
+    ok()   { LINKS_OUT="${LINKS_OUT:-}[ok] $1"$'"'"'\n'"'"'; }
+    warn() { LINKS_OUT="${LINKS_OUT:-}[warn] $1"$'"'"'\n'"'"'; }
+    skip() { LINKS_OUT="${LINKS_OUT:-}[skip] $1"$'"'"'\n'"'"'; }
+    source "$1"
+    links_reset_counters
+    # install_settings'"'"' exact sequence: link_file, called directly,
+    # BEFORE relink_all ever runs in this shell.
+    link_file "$DOTFILES_DIR/settings-src.json" "$CLAUDE_DIR/settings.json"
+    echo "LINK_FILE_SURVIVED"
+    relink_all
+    echo "RELINK_ALL_SURVIVED"
+    printf '"'"'%s'"'"' "$LINKS_OUT"
+  ' exec-wiring-test "$REPO_DIR/lib/links.sh" 2>&1); exec_rc=$?
+
+if [ "$exec_rc" -eq 0 ] && grep -q 'LINK_FILE_SURVIVED' <<<"$exec_out"; then
+  report pass "link_file called directly, before relink_all, does not abort under set -euo pipefail"
+else
+  report fail "link_file called directly, before relink_all, does not abort under set -euo pipefail" "rc=$exec_rc: $exec_out"
+fi
+
+if [ -L "$EXEC_HOME/.claude/settings.json" ]; then
+  report pass "the direct link_file call actually created the settings.json symlink"
+else
+  report fail "the direct link_file call actually created the settings.json symlink" "$exec_out"
+fi
+
+if grep -q 'RELINK_ALL_SURVIVED' <<<"$exec_out" \
+   && grep -qE '[0-9]+ changed, [0-9]+ verified, [0-9]+ skipped, [0-9]+ failed' <<<"$exec_out"; then
+  report pass "relink_all runs after a direct link_file call and prints its summary"
+else
+  report fail "relink_all runs after a direct link_file call and prints its summary" "$exec_out"
+fi
+
+# 15. the moved definitions exist in exactly one place
+if [ "$(grep -c '^link_file() {' "$REPO_DIR/setup.sh")" -eq 0 ]; then
+  report pass "link_file is defined only in lib/links.sh"
+else
+  report fail "link_file is defined only in lib/links.sh" "still in setup.sh"
+fi
 
 echo ""
 echo "  $PASS passed, $FAIL failed"

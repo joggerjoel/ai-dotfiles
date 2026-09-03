@@ -61,6 +61,12 @@ fail()   { echo -e "  ${RED}✗${RESET} $1"; }
 header() { echo -e "\n${BOLD}$1${RESET}"; }
 
 DOTFILES_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/links.sh
+source "$DOTFILES_DIR/lib/links.sh"
+# Counters are only initialized here, not at source time — a caller that
+# calls link_file directly before relink_all ever runs would otherwise hit
+# an unbound variable under `set -u`.
+links_reset_counters
 CLAUDE_DIR="$HOME/.claude"
 CLAUDE_JSON="$HOME/.claude.json"
 BACKUP_ROOT="$DOTFILES_DIR/backup"
@@ -70,7 +76,7 @@ DRY_RUN="no"; RUN_PRUNE="yes"; RUN_AGENTS="yes"; RUN_FLEET="no"
 for arg in "$@"; do
   case "$arg" in
     --all)         RUN_FLEET="yes" ;;
-    --dry-run)     DRY_RUN="yes" ;;
+    --dry-run)     DRY_RUN="yes"; export LINKS_DRY_RUN=1 ;;
     --claude-only) RUN_AGENTS="no" ;;
     --no-prune)    RUN_PRUNE="no" ;;
     -h|--help)
@@ -174,6 +180,16 @@ ROLLBACK
 chmod +x "$BACKUP_DIR/rollback.sh"
 
 ok "Backup: backup/$TS/  ${DIM}(config + rollback.sh)${RESET}"
+
+# ── 1b. Repo links ───────────────────────────────────────────────
+# Before the upgrade steps so the links are correct for the rest of this
+# run and for the next interactive session — which is when hooks fire.
+# Note: step 1's backup does NOT cover symlinks (it captures settings.json,
+# settings.local.json, CLAUDE.md and ~/.claude.json only), so rollback.sh
+# does not undo this step. Recovery for an overwritten real file comes from
+# link_file's own backup into ~/.claude/.backups/, independent of ordering.
+header "Repo links"
+relink_all
 
 # ── 2. Upgrade ───────────────────────────────────────────────────
 if [ "$DRY_RUN" = "yes" ]; then

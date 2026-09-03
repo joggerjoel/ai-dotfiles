@@ -31,6 +31,12 @@ fi
 # ── Asset registry ───────────────────────────────────────────────
 # shellcheck source=lib/integrations.sh
 source "$DOTFILES_DIR/lib/integrations.sh"
+# shellcheck source=lib/links.sh
+source "$DOTFILES_DIR/lib/links.sh"
+# install_settings calls link_file directly, before relink_all ever runs —
+# every link_file call increments a counter, so it must not be left unbound
+# under `set -u`.
+links_reset_counters
 
 # Postgres MCP package for self-hosted ("internal") Supabase. The old reference
 # server @modelcontextprotocol/server-postgres is deprecated; this one is
@@ -826,28 +832,6 @@ remove_mcp_server() {
   echo "$tmp" > "$CLAUDE_JSON"
 }
 
-link_file() {
-  local src="$1" dst="$2"
-  local dst_dir
-  dst_dir=$(dirname "$dst")
-  mkdir -p "$dst_dir"
-
-  if [ -L "$dst" ]; then
-    rm "$dst"
-  elif [ -f "$dst" ]; then
-    # Backup existing file
-    local backup_dir
-    backup_dir="$CLAUDE_DIR/.backups/setup-$(date +%Y%m%d_%H%M%S)"
-    mkdir -p "$backup_dir"
-    cp "$dst" "$backup_dir/$(basename "$dst")"
-    warn "Backed up existing $(basename "$dst") to $backup_dir/"
-    rm "$dst"
-  fi
-
-  ln -s "$src" "$dst"
-  ok "$(basename "$dst") -> $(basename "$src")"
-}
-
 # ── Settings installation ────────────────────────────────────────
 # Claude Code refuses to read feature flags when any of DISABLE_TELEMETRY,
 # DO_NOT_TRACK, or CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is set, which
@@ -1070,31 +1054,6 @@ POLICY
   ok "CLAUDE.md assembled (base + $profile$([ -f "$local_md" ] && echo " + local"))"
 }
 
-# ── Unify agent instructions: AGENTS.md -> CLAUDE.md ─────────────
-# Single source of truth for the agent CLIs we run alongside Claude Code
-# (codex-cli, cursor-cli, opencode, gemini-cli). Claude and Cursor read CLAUDE.md
-# natively; Codex and opencode read AGENTS.md; Gemini reads GEMINI.md. Symlinking
-# each tool's global instructions file to CLAUDE.md shares the one assembled file
-# with no duplication.
-#   ~/.codex/AGENTS.md            Codex global instructions
-#   ~/.config/opencode/AGENTS.md  opencode global instructions
-#   ~/.gemini/GEMINI.md           Gemini global instructions
-#   ~/AGENTS.md                   home-level file Cursor resolves when run near $HOME
-# link_file backs up any existing real file to ~/.claude/.backups/ before linking
-# and is idempotent (a stale symlink is replaced, not nested).
-link_agent_instructions() {
-  local canonical="$CLAUDE_DIR/CLAUDE.md"
-  [ -f "$canonical" ] || { warn "CLAUDE.md not found; skipping agent-instruction symlinks"; return 0; }
-  link_file "$canonical" "$HOME/.codex/AGENTS.md"
-  link_file "$canonical" "$HOME/.config/opencode/AGENTS.md"
-  link_file "$canonical" "$HOME/.gemini/GEMINI.md"
-  link_file "$canonical" "$HOME/AGENTS.md"
-  link_codex_prompts
-  sync_pstack
-  link_claude_hooks
-  link_bin_tools
-}
-
 # pstack for the shared-skills runtimes (Codex, Prime Agent, opencode, Gemini
 # CLI): clones michael-denyer/pstack-claude and links its 52 skills into
 # ~/.agents/skills plus its 31 Codex slash-command stubs into ~/.codex/prompts,
@@ -1105,65 +1064,6 @@ link_agent_instructions() {
 sync_pstack() {
   [ -x "$DOTFILES_DIR/scripts/sync-pstack.sh" ] || return 0
   "$DOTFILES_DIR/scripts/sync-pstack.sh" || warn "pstack sync had issues (non-fatal — check network)"
-}
-
-# Repo CLI helpers (bin/* -> ~/.local/bin/<name>). Symlinked so a repo pull
-# updates the live tools. Current roster: isolate (clean-room single-shot
-# model call for cold-eyes reviews).
-link_bin_tools() {
-  [ -d "$DOTFILES_DIR/bin" ] || return 0
-  local f
-  # Prune first. A tool retired from bin/ (herdr-new-project left with the
-  # herdr extraction) otherwise stays behind as a dangling link on every host,
-  # forever — nothing below ever removes one. Only links that point INTO this
-  # repo are ours to remove; a dangling link the user made elsewhere is not
-  # our business. Same rule install_skills applies via its manifest.
-  for f in "$HOME"/.local/bin/*; do
-    [ -L "$f" ] || continue
-    case "$(readlink "$f")" in
-      "$DOTFILES_DIR"/*) [ -e "$f" ] || rm -f "$f" ;;
-    esac
-  done
-  for f in "$DOTFILES_DIR"/bin/*; do
-    [ -f "$f" ] || continue
-    chmod +x "$f"
-    link_file "$f" "$HOME/.local/bin/$(basename "$f")"
-  done
-}
-
-# Claude Code hooks (hooks/*.{sh,py} -> ~/.claude/hooks/<name>). The shared
-# profile settings.json references these by $HOME path, so a machine that
-# skips this step gets a "No such file or directory" PreToolUse error on
-# every Bash call. Symlinked so a repo pull updates the live hooks.
-# Both extensions are linked: the glob was .sh-only until injection-guard.py
-# arrived, which meant a registered .py hook silently never got installed.
-link_claude_hooks() {
-  [ -d "$DOTFILES_DIR/hooks" ] || return 0
-  local f
-  for f in "$DOTFILES_DIR"/hooks/*.sh "$DOTFILES_DIR"/hooks/*.py; do
-    [ -f "$f" ] || continue
-    # A real hook is <name>.<ext>. Anything with a dotted stem (foo.test.sh,
-    # foo.backtest.py) is a repo-side helper and must not be linked as a hook.
-    case "$(basename "$f")" in *.*.*) continue ;; esac
-    link_file "$f" "$CLAUDE_DIR/hooks/$(basename "$f")"
-  done
-}
-
-# Repo scripts (scripts/*.sh -> ~/.claude/scripts/<name>). Symlinked so a repo
-# pull updates the live script. Same dotted-stem filter as link_claude_hooks:
-# a real script is <name>.sh; foo.test.sh is a repo-side test helper, not
-# something to deploy fleet-wide. Shared by cmd_setup and cmd_update — it used
-# to be a copy-pasted loop in both places, missing the filter in each.
-link_repo_scripts() {
-  [ -d "$DOTFILES_DIR/scripts" ] || return 0
-  mkdir -p "$CLAUDE_DIR/scripts"
-  local f
-  for f in "$DOTFILES_DIR"/scripts/*.sh; do
-    [ -f "$f" ] || continue
-    case "$(basename "$f")" in *.*.*) continue ;; esac
-    link_file "$f" "$CLAUDE_DIR/scripts/$(basename "$f")"
-    chmod +x "$CLAUDE_DIR/scripts/$(basename "$f")"
-  done
 }
 
 # tmuxp session configs (tmux/*.yaml -> ~/.tmuxp/<name>.yaml). Symlinked so a
@@ -1267,19 +1167,6 @@ install_zsh_modules() {
 
   generate_zshrc
 }
-
-# Codex custom prompts (codex/prompts/*.md -> ~/.codex/prompts/<name>.md,
-# typed as /<name> in the Codex TUI). Symlinked, not copied, so a repo pull
-# updates the live prompts — the Claude-side equivalents live in skills/.
-link_codex_prompts() {
-  [ -d "$DOTFILES_DIR/codex/prompts" ] || return 0
-  local f
-  for f in "$DOTFILES_DIR"/codex/prompts/*.md; do
-    [ -f "$f" ] || continue
-    link_file "$f" "$HOME/.codex/prompts/$(basename "$f")"
-  done
-}
-
 # ── Supabase: Cloud vs internal (self-hosted) ────────────────────
 # Cloud uses the `supabase` plugin's own hosted MCP (mcp.supabase.com, OAuth) —
 # nothing for us to wire. Internal can't use that (it's Cloud-only), so we
@@ -1434,23 +1321,16 @@ cmd_setup() {
   # Assemble CLAUDE.md from layers
   assemble_claude_md "$profile" "$github_user" "$hide_ai"
 
-  # Point Codex/Cursor at the same instructions (AGENTS.md -> CLAUDE.md)
-  link_agent_instructions
-
   # Install profile-specific settings.json (symlink, or stripped copy for Remote Control)
   install_settings "$profile" "$remote_control"
 
-  # Link statusline
-  link_file "$DOTFILES_DIR/statusline.sh" "$CLAUDE_DIR/statusline.sh"
-  chmod +x "$CLAUDE_DIR/statusline.sh"
+  # Every repo-owned link, from one definition (lib/links.sh).
+  relink_all
 
-  # Link scripts
-  link_repo_scripts
-
-  # Link tmuxp session configs (tmux/*.yaml -> ~/.tmuxp/)
+  # Not repo-owned links, so outside relink_all: pstack's shared-skills clone
+  # and links, tmuxp session configs, and the zsh module registry + ~/.zshrc.
+  sync_pstack
   link_tmux_sessions
-
-  # Install/upgrade the zsh module registry and generate ~/.zshrc
   install_zsh_modules
 
   # ── Create .env if missing ──
@@ -1915,20 +1795,16 @@ cmd_update() {
   # Reassemble CLAUDE.md
   assemble_claude_md "$profile" "$github_user" "$hide_ai"
 
-  # Refresh the Codex/Cursor instruction symlinks (AGENTS.md -> CLAUDE.md)
-  link_agent_instructions
-
-  # Re-install settings (honors saved Remote Control choice) and re-link scripts
+  # Re-install settings (honors saved Remote Control choice) and re-link everything
   install_settings "$profile" "$remote_control"
-  link_file "$DOTFILES_DIR/statusline.sh" "$CLAUDE_DIR/statusline.sh"
-  chmod +x "$CLAUDE_DIR/statusline.sh"
 
-  link_repo_scripts
+  # Every repo-owned link, from one definition (lib/links.sh).
+  relink_all
 
-  # Link tmuxp session configs (tmux/*.yaml -> ~/.tmuxp/)
+  # Not repo-owned links, so outside relink_all: pstack's shared-skills clone
+  # and links, tmuxp session configs, and the zsh module registry + ~/.zshrc.
+  sync_pstack
   link_tmux_sessions
-
-  # Re-run each zsh module's install/upgrade step and regenerate ~/.zshrc
   install_zsh_modules
 
   # Re-apply the saved Supabase fork (cloud/internal). Preserves the stored

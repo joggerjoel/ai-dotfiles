@@ -5,8 +5,14 @@
 # continue and report rather than abort on the first broken asset.
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DOTFILES_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# -P: physical/resolved. _probe_one_link resolves relative link targets the
+# same way (pwd -P); a plain `pwd` here would preserve a symlinked ancestor
+# (symlinked $HOME, symlinked /Users, a bind mount) in DOTFILES_DIR while a
+# repo-owned link's target is always an absolute, resolved path — the two
+# would then never prefix-match and every healthy link would misreport as
+# "stale but resolving".
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+DOTFILES_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 # shellcheck source=lib/integrations.sh
 source "$DOTFILES_DIR/lib/integrations.sh"
 
@@ -25,6 +31,14 @@ SKILLS_DIR="${PREFLIGHT_SKILLS_DIR:-$DOTFILES_DIR/skills}"
 PLUGIN_SPECS="${PREFLIGHT_PLUGIN_ASSETS-$(printf '%s\n' ${PLUGIN_ASSETS+"${PLUGIN_ASSETS[@]}"})}"
 SMOKE_DIR="${PREFLIGHT_SMOKE_DIR:-$DOTFILES_DIR/tests/smoke}"
 MCP_TIMEOUT="${PREFLIGHT_MCP_TIMEOUT:-180}"
+
+# Managed link locations. Overridable so tests never read the real $HOME.
+PREFLIGHT_LINK_DIRS="${PREFLIGHT_LINK_DIRS-$HOME/.claude/scripts:$HOME/.claude/hooks:$HOME/.local/bin:$HOME/.codex/prompts}"
+# Non-symlinks are skipped by probe_links (it only probes paths that are
+# `-L`), so a stripped-copy settings.json (the Remote Control case — see
+# install_settings in setup.sh) is harmless here.
+PREFLIGHT_LINK_FILES="${PREFLIGHT_LINK_FILES-$HOME/.claude/statusline.sh:$HOME/.claude/settings.json:$HOME/AGENTS.md:$HOME/.codex/AGENTS.md:$HOME/.config/opencode/AGENTS.md:$HOME/.gemini/GEMINI.md}"
+PREFLIGHT_DOTFILES_DIR="${PREFLIGHT_DOTFILES_DIR:-$DOTFILES_DIR}"
 
 OPT_JSON=0
 OPT_QUARANTINE=0
@@ -391,6 +405,81 @@ probe_skills() {
   done < <(find "$SKILLS_DIR" -maxdepth 2 -name SKILL.md 2>/dev/null)
 }
 
+# Repo-owned symlinks. Two failure modes, both silent today:
+#   dangling            — target does not resolve (the aorus7 incident)
+#   stale but resolving — resolves into a DIFFERENT ai-dotfiles checkout.
+#     Had the old checkout survived the move, every link would have resolved
+#     and a dangling-only check would have reported a clean machine.
+probe_links() {
+  local dir path
+  local IFS_SAVE="$IFS"
+  # set -f around both splits: an unquoted `set --` glob-expands any `*`,
+  # `?`, or `[...]` character in a configured path, which a colon-split list
+  # has no other way to suppress.
+  set -f
+  IFS=':'
+  set -- $PREFLIGHT_LINK_DIRS
+  IFS="$IFS_SAVE"
+  set +f
+  for dir in "$@"; do
+    [ -n "$dir" ] || continue
+    [ -d "$dir" ] || continue
+    for path in "$dir"/*; do
+      [ -L "$path" ] || continue
+      _probe_one_link "$path"
+    done
+  done
+  set -f
+  IFS=':'
+  set -- $PREFLIGHT_LINK_FILES
+  IFS="$IFS_SAVE"
+  set +f
+  for path in "$@"; do
+    [ -n "$path" ] || continue
+    [ -L "$path" ] || continue
+    _probe_one_link "$path"
+  done
+}
+
+_probe_one_link() {
+  local path="$1" target name abs
+  # <parent-dir>/<name>, not a bare basename: hooks/x.sh and scripts/x.sh
+  # would otherwise collide under one label, silently hiding one of the two
+  # from the report.
+  name="$(basename "$(dirname "$path")")/$(basename "$path")"
+  target=$(readlink "$path")
+  if [ ! -e "$path" ]; then
+    add_finding link "$name" fail "dangling -> $target" no
+    return
+  fi
+  # Classify the RESOLVED target, not the literal link text. Both branches
+  # normalize through `pwd -P`, not just the relative one: setup.sh/update.sh
+  # write absolute targets via logical `pwd`, so on a host reached through a
+  # symlinked ancestor (symlinked $HOME, a mounted /Users, /tmp -> /private/tmp)
+  # a literal absolute target would carry that symlinked text while
+  # $PREFLIGHT_DOTFILES_DIR (from this script's own `pwd -P`) is fully
+  # resolved — the two would then never prefix-match and every healthy
+  # absolute link would misreport as "stale but resolving". A relative target
+  # like ../../checkout/scripts/x.sh additionally never string-matches an
+  # absolute path at all, so it must be resolved against the link's own
+  # directory first. The `cd` is safe here — a dangling link already returned
+  # above, so the target's directory exists. CDPATH= keeps `cd` from printing
+  # an unexpected path or matching a directory outside the intended tree when
+  # the caller's environment has CDPATH set.
+  case "$target" in
+    /*) abs="$(CDPATH= cd "$(dirname "$target")" && pwd -P)/$(basename "$target")" ;;
+    *)  abs="$(CDPATH= cd "$(dirname "$path")" && CDPATH= cd "$(dirname "$target")" && pwd -P)/$(basename "$target")" ;;
+  esac
+  case "$abs" in
+    "$PREFLIGHT_DOTFILES_DIR"|"$PREFLIGHT_DOTFILES_DIR"/*)
+      add_finding link "$name" pass "current checkout" no ;;
+    */ai-dotfiles/*)
+      add_finding link "$name" fail "stale but resolving -> $target" no ;;
+    *)
+      add_finding link "$name" pass "not repo-owned" no ;;
+  esac
+}
+
 # The checker's own dependencies. Missing ones mean exit 2 — "could not run" —
 # which must never be confused with exit 1, "ran and found failures".
 check_preconditions() {
@@ -446,6 +535,7 @@ render_human() {
   render_class env   "ENV-VAR SERVICES"
   render_class hook  "HOOKS & SCRIPTS"
   render_class skill "REPO SKILLS"
+  render_class link  "REPO LINKS"
   render_class smoke "SMOKE"
 
   containable=0
@@ -620,6 +710,7 @@ main() {
   probe_env
   probe_hooks
   probe_skills
+  probe_links
 
   if [ "$MCP_TIMED_OUT" -eq 1 ]; then
     # stderr, not stdout: --json callers pipe stdout straight into `jq` and
