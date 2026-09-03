@@ -376,7 +376,7 @@
     "ask": [],
     "defaultMode": "auto"
   },
-  "model": "opus",
+  "model": "opus[1m]",
   "hooks": {
     "PreToolUse": [
       {
@@ -587,7 +587,7 @@
   },
   "alwaysThinkingEnabled": true,
   "effortLevel": "high",
-  "fastMode": true,
+  "tui": "fullscreen",
   "voice": {
     "enabled": true,
     "mode": "hold"
@@ -599,6 +599,5 @@
   "autoCompactEnabled": false,
   "remoteControlAtStartup": true,
   "skipAutoPermissionPrompt": true,
-  "voiceEnabled": true,
-  "tui": "fullscreen"
+  "voiceEnabled": true
 }
