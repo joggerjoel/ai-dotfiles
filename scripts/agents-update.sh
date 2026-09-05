@@ -7,17 +7,20 @@ set -uo pipefail
 #   agy (Google Antigravity), pi (Earendil),
 #   grok (xAI), kimi (Moonshot Kimi Code),
 #   cortex (Snowflake Cortex Code), headroom (context-optimization proxy),
-#   skillspector (NVIDIA agent-skill security scanner),
-#   claude-mem (the memory plugin's repair CLI).
+#   skillspector (NVIDIA agent-skill security scanner).
+# Plus a COMPANION CLI section at the end of the registry: tools that are
+# not agents at all but belong to an installed plugin/skill — claude-mem's
+# repair CLI today. They ride here for reach, not because they are agents;
+# see that block for why, and who actually owns them.
 # Also reports (but never updates) the 9router gateway — a Docker
 # service on the fleet, not a local CLI; see the block at the bottom.
 #
-# Single source of truth for "update every AI CLI besides claude":
-# called by ./update.sh locally and by ansible-ai/update.yml on the
-# fleet. A failed upgrade warns and moves on to the next; exits
-# non-zero if any upgrade failed. Missing CLIs: interactive runs get
-# an install offer (y/N, default no); unattended runs (Ansible, cron)
-# skip them silently.
+# Single source of truth for "update every agent CLI besides claude, plus
+# the companion CLIs the plugin stack depends on": called by ./update.sh
+# locally and by ansible-ai/update.yml on the fleet. A failed upgrade
+# warns and moves on to the next; exits non-zero if any upgrade failed.
+# Missing CLIs: interactive runs get an install offer (y/N, default no);
+# unattended runs (Ansible, cron) skip them silently.
 #
 # Where a latest version is resolvable without installing (npm- and
 # brew-backed CLIs), it is checked first and the upgrade is skipped
@@ -288,17 +291,6 @@ register_cli "pi" "pi" "\"%BIN%\" update self || $PI_INSTALL" "$PI_INSTALL" "npm
 GROK_INSTALL="npm install -g @xai-official/grok@latest"
 register_cli "grok" "grok" "$GROK_INSTALL" "$GROK_INSTALL" "npm_latest @xai-official/grok"
 
-# claude-mem (Claude Code memory) — npm global. The PLUGIN ships the skills,
-# hooks and MCP server; the `claude-mem` CLI that repairs them is a SEPARATE
-# npm package, and nothing here declared it. Unregistered, it resolved only
-# through `npx`, which stops to ask "Ok to proceed?" before downloading 13 MB —
-# and the one moment you reach for `claude-mem restart` or `claude-mem doctor`
-# is mid-outage, on a box that may be unattended, over a link that may be the
-# thing that broke. Hit 2026-09-01: the observer had been failing for 9 hours
-# and the documented recovery command was itself not installed.
-CLAUDE_MEM_INSTALL="npm install -g claude-mem@latest"
-register_cli "claude-mem" "claude-mem" "$CLAUDE_MEM_INSTALL" "$CLAUDE_MEM_INSTALL" "npm_latest claude-mem"
-
 # kimi (Kimi Code CLI, Moonshot) — installs to ~/.kimi-code/bin, which is off
 # PATH in the non-login shells Ansible and cron use, so resolve it by absolute
 # path first (update_cli falls back to `command -v`). It ships a native
@@ -413,9 +405,30 @@ else
   block_cli "skillspector" "skipped (uv not available)"
 fi
 
+# ── Companion CLIs (NOT agents) ──────────────────────────────────
+# Tools that belong to an installed plugin or skill, not to a harness. They are
+# registered in this file for one reason — reach: it is the only step that runs
+# on every host (./update.sh locally, ansible-ai/update.yml on the fleet,
+# provision-firstmate-worker.sh on a fresh worker), so a CLI absent from here
+# never converges. Registration is NOT ownership: the asset is still classified
+# as a plugin everywhere it matters — bootstrap-plugins.sh installs it from its
+# marketplace, and lib/integrations.sh's PLUGIN_ASSETS is what probes whether it
+# is actually doing its job. Nothing in this section is an AI CLI, and the
+# roster at the top of this file must not list it as one.
+
+# claude-mem — the memory PLUGIN's repair CLI, a SEPARATE npm package from the
+# plugin that ships the skills, hooks and MCP server. Unregistered, it resolved
+# only through `npx`, which stops to ask "Ok to proceed?" before downloading
+# 13 MB — and the one moment you reach for `claude-mem restart` or `claude-mem
+# doctor` is mid-outage, on a box that may be unattended, over a link that may
+# be the thing that broke. Hit 2026-09-01: the observer had been failing for 9
+# hours and the documented recovery command was itself not installed.
+CLAUDE_MEM_INSTALL="npm install -g claude-mem@latest"
+register_cli "claude-mem" "claude-mem" "$CLAUDE_MEM_INSTALL" "$CLAUDE_MEM_INSTALL" "npm_latest claude-mem"
+
 # ── Wave 1: survey (read-only) ───────────────────────────────────
 # Resolve and report every CLI before touching any of them.
-echo -e "${BOLD}Sibling agent CLIs${RESET}"
+echo -e "${BOLD}Sibling agent CLIs & plugin companions${RESET}"
 RES_BIN=(); RES_CUR=(); RES_LATEST=(); RES_STATUS=()
 NEED_ACTION="no"
 for i in "${!CLI_NAME[@]}"; do
