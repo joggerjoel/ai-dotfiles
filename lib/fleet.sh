@@ -8,14 +8,14 @@ FLEET_GROUP="aorus_ai"
 # Consulted only where inventory.local.yml is absent. That file is gitignored
 # because this repo is public, so a worker checkout has no fleet list of its
 # own and still needs one to answer --help or run a single named host.
-FLEET_HOSTS_FALLBACK="aorus aorus2 aorus3 aorus4 aorus5 aorus6 aorus7 aorus8 macstudio macair"
+FLEET_HOSTS_FALLBACK="aorus aorus2 aorus3 aorus4 aorus5 aorus6 aorus7 aorus8 macstudio macbookair"
 
 # The fleet, space separated, read from the inventory group when that file is
 # readable. The inventory is what ansible actually deploys against, so a second
 # list written down beside it is a copy that drifts: aorus2 joined the group and
 # stayed missing from both scripts, which silently skipped a managed host for
 # auth probing and token distribution alike. It drifted again later: macstudio
-# and macair had joined the inventory without being added here. Chasing that
+# and macbookair had joined the inventory without being added here. Chasing that
 # down also surfaced aorus2 sitting in ~/.ssh/config but missing from the
 # inventory — reachable the whole time, just never checked in the sync menu, so
 # no playbook had ever touched it. This list mirrors the inventory and nothing

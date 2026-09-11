@@ -123,7 +123,7 @@ exporters:
 
 dashboards:
   # 1860 is a Linux dashboard. It is still the right one for the fleet, but
-  # expect it to be partly blank for macstudio and macair rather than treating
+  # expect it to be partly blank for macstudio and macbookair rather than treating
   # that as a broken exporter.
   #
   # The darwin build simply exposes less, because there is no /proc. Measured
