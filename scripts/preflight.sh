@@ -167,11 +167,19 @@ probe_mcp() {
   # 124 is `timeout` killing the child. Every server becomes UNKNOWN — never
   # FAIL. Auto-quarantining a whole toolchain on a network blip is the worst
   # outcome this script can produce.
+  #
+  # Word these findings as UNMEASURED, not as a failed handshake. One
+  # `claude mcp list` covers every server, so when it is killed nothing is
+  # known about any individual server — the slowest one alone can blow the
+  # budget while the rest are healthy. Claiming "no handshake" per server
+  # reports an observation that was never made, and sends whoever reads the
+  # report debugging servers that are fine. Rows are still emitted per server
+  # so they stay visible; only the claim changes.
   if [ "$rc" -eq 124 ]; then
     MCP_TIMED_OUT=1
     local key
     while IFS= read -r key; do
-      [ -n "$key" ] && add_finding mcp "$key" unknown "no handshake in ${MCP_TIMEOUT}s (cold npx cache? re-run)" no
+      [ -n "$key" ] && add_finding mcp "$key" unknown "not measured — shared probe timed out after ${MCP_TIMEOUT}s" no
     done < <(jq -r '.mcpServers // {} | keys[]' "$CLAUDE_JSON" 2>/dev/null)
     return
   fi
@@ -715,7 +723,8 @@ main() {
   if [ "$MCP_TIMED_OUT" -eq 1 ]; then
     # stderr, not stdout: --json callers pipe stdout straight into `jq` and
     # must see nothing but the JSON object there.
-    echo "MCP handshake timed out after ${MCP_TIMEOUT}s — all servers reported unknown" >&2
+    echo "MCP probe (\`claude mcp list\`) timed out after ${MCP_TIMEOUT}s — no server was measured, none is known to be broken." >&2
+    echo "A cold npx/uvx cache makes the first run slow; re-run, or raise PREFLIGHT_MCP_TIMEOUT." >&2
   fi
 
   # Tier 3 must run — and its findings land in FINDINGS — before either

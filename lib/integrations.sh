@@ -7,6 +7,11 @@ INTEGRATIONS=(
   "context7|Documentation lookup|no||||no"
   "serena|Semantic code assistant|no||||no"
   "morphllm-fast-apply|Fast code application|no||||no"
+  # Needs the `headroom` binary on PATH (agents-update.sh installs it via
+  # `uv tool install headroom-ai[all]`). Registered here rather than by hand so
+  # a host's MCP config comes from one place; before this, the only machine
+  # running it was one where someone had edited ~/.claude.json directly.
+  "headroom|Context-optimization proxy|no||||no"
   "chrome-devtools|Browser DevTools (desktop only)|no||yes||yes"
   "firecrawl|Web scraping (large-scale)|yes|FIRECRAWL_API_KEY|||no"
   "github|GitHub repo/issue/PR management|yes|GITHUB_PERSONAL_ACCESS_TOKEN|yes||no"
@@ -63,6 +68,22 @@ MANDATED_CLIS=(
 PLUGIN_ASSETS=(
   "claude-mem|claude-mem|claude-mem doctor|$HOME/.claude-mem/observer-health.json|21600"
 )
+
+# Map an integration name to its index in INTEGRATIONS. Prints the index;
+# returns 1 with a message on stderr when the name is not in the registry.
+# Unattended callers pass names from a playbook variable, where a typo must
+# fail loudly rather than quietly provision fewer servers than were asked for.
+integration_index_for() {
+  local want="$1" idx
+  for idx in "${!INTEGRATIONS[@]}"; do
+    if [ "${INTEGRATIONS[$idx]%%|*}" = "$want" ]; then
+      echo "$idx"
+      return 0
+    fi
+  done
+  echo "unknown MCP integration '$want' — not in the INTEGRATIONS registry" >&2
+  return 1
+}
 
 # Map an integration name to its key in ~/.claude.json.
 mcp_key_for() {

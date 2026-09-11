@@ -33,6 +33,9 @@
     flock_install_keybinding: false
 
   tasks:
+    - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
+      vars: { unreachable_note: "the flock plugin was not installed here" }
+
     # ── Preflight ────────────────────────────────────────────────────────────
     - name: Check for herdr and a Rust toolchain
       ansible.builtin.shell: |
