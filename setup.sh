@@ -918,10 +918,19 @@ install_skills() {
   ok "$count skill(s) installed to ~/.claude/skills/"
 }
 
-# Copies the agent-agnostic subset of repo skills into ~/.codex/skills/<name>/,
+# Links the agent-agnostic subset of repo skills into ~/.codex/skills/<name>,
 # so Codex gets them too. Deliberately an allowlist, not a mirror of skills/:
 # most skills here assume Claude Code's tools, hooks, or plugin stack and would
 # only mislead Codex. A skill earns a place in CODEX_SKILLS by working in both.
+#
+# Names pstack already serves to Codex stay OUT, even when skills/ has a copy.
+# Codex loads pstack from the clone's own .agents/plugins/marketplace.json and
+# namespaces it (pstack:tdd, pstack:unslop, ...), so adding ours would put two
+# same-named skills in front of it. That rules out the eleven leftovers from the
+# abandoned vendoring in 1b679b6: automate-me, blast-radius, bro, figure-it-out,
+# no-comments, recall, tdd, teach, technical-writing, typescript-best-practices,
+# unslop.
+#
 # skills/unlazy/scripts/ is gitignored — it is third-party Node that runs shell
 # from CHECK: lines, so it is not carried in this repo (see .gitignore). A fresh
 # clone, or any fleet host that pulled from origin, therefore has the skill's
@@ -939,19 +948,63 @@ ensure_unlazy_payload() {
   return 0
 }
 
-CODEX_SKILLS=(unlazy)
+CODEX_SKILLS=(
+  unlazy
+  council
+  explore-plan-code-test
+  first-principles
+  humanizer
+  review-changes
+  test-and-fix
+  verify
+)
 
+# Symlinks, not copies, matching how sync-pstack.sh already serves
+# ~/.agents/skills: one `git pull` then refreshes Codex immediately instead of
+# leaving it stale until the next `setup.sh update`. Verified against codex-cli
+# 0.154.0, which discovers a symlinked skill directory fine — the binary's
+# "Symbolic links are not allowed in skills" string belongs to its GitHub skill
+# publisher walking a repo root, not to local discovery.
 install_codex_skills() {
   [ -d "$DOTFILES_DIR/skills" ] || return 0
-  local count=0
+  mkdir -p "$HOME/.codex/skills"
+  local name count=0
+
+  # Drop links an earlier run made whose name has since left CODEX_SKILLS.
+  # Only symlinks pointing into our own skills/ are ours to remove; a real
+  # directory (caveman, printing-press-library) is a hand-installed Codex skill
+  # and must survive. Same ownership rule as prune_dangling_links in
+  # lib/links.sh, and the pruning install_skills gets from its manifest.
+  local existing keep
+  for existing in "$HOME"/.codex/skills/*; do
+    [ -L "$existing" ] || continue
+    case "$(readlink "$existing")" in
+      "$DOTFILES_DIR/skills/"*) ;;
+      *) continue ;;
+    esac
+    keep=no
+    for name in "${CODEX_SKILLS[@]}"; do
+      if [ "$(basename "$existing")" = "$name" ]; then keep=yes; break; fi
+    done
+    if [ "$keep" = no ]; then
+      rm -f "$existing"
+    fi
+  done
+
   for name in "${CODEX_SKILLS[@]}"; do
     [ -d "$DOTFILES_DIR/skills/$name" ] || continue
-    mkdir -p "$HOME/.codex/skills"
-    rm -rf "${HOME:?}/.codex/skills/$name"
-    cp -R "$DOTFILES_DIR/skills/$name" "$HOME/.codex/skills/$name"
+    # Every copy-model run before this one left a real directory here, and
+    # `ln -sfn` onto a directory creates the link INSIDE it rather than
+    # replacing it — the same trap link_file guards against.
+    if [ ! -L "$HOME/.codex/skills/$name" ]; then
+      rm -rf "${HOME:?}/.codex/skills/${name:?}"
+    fi
+    ln -sfn "$DOTFILES_DIR/skills/$name" "$HOME/.codex/skills/$name"
     count=$((count+1))
   done
-  [ "$count" -gt 0 ] && ok "$count skill(s) installed to ~/.codex/skills/"
+  if [ "$count" -gt 0 ]; then
+    ok "$count skill(s) linked into ~/.codex/skills/"
+  fi
   return 0
 }
 
