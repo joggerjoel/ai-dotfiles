@@ -725,13 +725,27 @@ ensure_serena_dashboard_off() {
 
   if [ ! -f "$SERENA_CONFIG" ]; then
     cat > "$SERENA_CONFIG" <<'YAML'
-# Seeded by setup.sh. Serena fills all other keys with defaults; edit freely.
+# Seeded by setup.sh. Serena fills most other keys with defaults; edit freely.
 gui_log_window: false
 web_dashboard: false
 web_dashboard_open_on_launch: false
+projects: []
 YAML
     ok "Serena dashboard disabled (created $SERENA_CONFIG)"
     return 0
+  fi
+
+  # `projects` is NOT one of the keys serena defaults. Seeding this file without
+  # it makes serena abort every launch with
+  #     SerenaConfigError: `projects` key not found in Serena configuration
+  # so the MCP server never handshakes and `claude mcp list` reports only
+  # "Connection closed". Hosts where serena had run before setup.sh got a
+  # complete file and were fine; every freshly provisioned host got the seed
+  # above and a permanently broken serena. Repaired here, not just in the seed,
+  # so hosts already carrying the truncated file heal on their next update.
+  if ! grep -qE '^projects:' "$SERENA_CONFIG"; then
+    printf 'projects: []\n' >> "$SERENA_CONFIG"
+    ok "Serena config repaired (added the required \`projects\` key)"
   fi
 
   local changed="no" key tmp
@@ -1783,6 +1797,13 @@ cmd_update() {
   # wherever pipx is absent, which is most of the fleet. Idempotent: no-ops
   # when uv is already present.
   ensure_uv
+
+  # Same reasoning as ensure_uv above: this lives in the dependency pass that
+  # update skips, and the hosts that need it most are the provisioned ones that
+  # never run `setup.sh` again. It repairs a seeded serena_config.yml missing
+  # the required `projects` key, which otherwise makes serena abort on every
+  # launch. Idempotent: a complete config is left untouched.
+  ensure_serena_dashboard_off
 
   # Read saved preferences
   local profile="desktop" github_user="" hide_ai="no" remote_control="no"
