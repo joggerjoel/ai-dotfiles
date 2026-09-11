@@ -13,7 +13,8 @@
 # This lived as a hand-copied pair in three playbooks and was missing from the
 # other seven. check-fleet-preflight.yml was one of the seven, which is how
 # aorus2 and aorus3 came to report `failed=1` on a fleet update while being
-# merely switched off. Import it instead of copying it:
+# merely switched off. All ten now import it, so the count above is the whole
+# set and a new play joins it by importing rather than by copying:
 #
 #   - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
 #     vars: { unreachable_note: "no token written" }

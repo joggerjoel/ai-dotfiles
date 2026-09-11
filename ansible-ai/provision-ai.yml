@@ -58,6 +58,9 @@
     # downgrade healthy hosts for no reason.
     node_min_version: "22.19.0"
   tasks:
+    - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
+      vars: { unreachable_note: "nothing was provisioned here" }
+
     # ── Stage 0: prerequisites ───────────────────────────────────────
     # Every CLI installer below pipes `curl`, and setup.sh needs git/jq. Install
     # (or confirm) these FIRST, then fail the host fast with a clear message so we

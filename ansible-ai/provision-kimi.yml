@@ -34,6 +34,9 @@
     curl_retry: "--retry 5 --retry-delay 2 --retry-connrefused"
     kimi_bin: "{{ ansible_facts.env.HOME }}/.kimi-code/bin/kimi"
   tasks:
+    - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
+      vars: { unreachable_note: "kimi was not installed here" }
+
     - name: Check whether kimi is already installed
       ansible.builtin.shell: |
         export PATH="$HOME/.kimi-code/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
