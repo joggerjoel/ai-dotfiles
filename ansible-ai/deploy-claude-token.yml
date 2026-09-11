@@ -69,17 +69,8 @@
     claude_token: "{{ claude_token_from_env if claude_token_from_env | length > 0 else claude_token_from_file }}"
 
   tasks:
-    # Same guard as update.yml: ignore_unreachable marches dead hosts into the
-    # tasks below, where ansible_facts.env is undefined, and the recap then
-    # reads `failed=1` for what is really an absent host.
-    - name: Say plainly that a host was unreachable
-      ansible.builtin.debug:
-        msg: "{{ inventory_hostname }} UNREACHABLE — skipped entirely, no token written"
-      when: ansible_facts == {}
-
-    - name: Stop cleanly on hosts we could not reach
-      ansible.builtin.meta: end_host
-      when: ansible_facts == {}
+    - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
+      vars: { unreachable_note: "no token written" }
 
     # Fail loudly and early rather than writing an empty export that would look
     # installed and authenticate nothing.

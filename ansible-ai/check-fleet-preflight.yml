@@ -25,6 +25,9 @@
   ignore_unreachable: true
 
   tasks:
+    - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
+      vars: { unreachable_note: "no assets probed here" }
+
     - name: Is ai-dotfiles present?
       ansible.builtin.stat:
         path: "{{ dotfiles_dir }}/scripts/preflight.sh"

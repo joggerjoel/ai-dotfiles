@@ -29,18 +29,37 @@
     obs: "{{ lookup('file', playbook_dir ~ '/observability.yml') | from_yaml }}"
 
   tasks:
-    # ignore_unreachable marches absent hosts into the tasks below, where any
-    # fact lookup fails with a message that reads like a broken task rather than
-    # a dead host. update.yml already learned this; the recap books an absent
-    # host as ignored=1, never as unreachable=1, so say it out loud.
-    - name: Say plainly that a host was unreachable
-      ansible.builtin.debug:
-        msg: "{{ inventory_hostname }} UNREACHABLE, nothing was converged here"
-      when: ansible_facts == {}
+    - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
+      vars: { unreachable_note: "nothing was converged here" }
 
-    - name: Stop cleanly on hosts we could not reach
+    # Every task below needs root. The aorus fleet and macstudio grant sudo
+    # without a password; localhost and macbookair are personal Macs that prompt for
+    # one, which an unattended run has no way to answer. That surfaced as
+    # `failed=1` on the first become task — and a failed host is dropped from
+    # every later play in update.yml, so one absent sudoers line was also
+    # costing those two hosts their preflight report. A host we cannot reach
+    # root on is not a broken task, so it gets the same treatment as a host we
+    # cannot reach at all: say so, end the play, stay in the run.
+    - name: Can we become root without a password?
+      ansible.builtin.command: sudo -n true
+      become: false
+      register: sudo_probe
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Say plainly that root is out of reach
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} NEEDS SUDO — node_exporter was not converged.
+          Grant passwordless sudo on that host, or converge it by hand with
+          `ansible-playbook deploy-observability.yml --tags exporter
+          --limit {{ inventory_hostname }} --ask-become-pass`.
+      when: sudo_probe.rc != 0
+
+    - name: Stop cleanly on hosts we cannot become root on
       ansible.builtin.meta: end_host
-      when: ansible_facts == {}
+      when: sudo_probe.rc != 0
 
     # ── Linux ────────────────────────────────────────────────────
     - name: Converge node_exporter on Linux
