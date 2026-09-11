@@ -81,7 +81,14 @@ else
 fi
 
 # The whole point: what gets written must be valid YAML serena can parse.
-if command -v python3 >/dev/null 2>&1; then
+#
+# Gated on PyYAML being importable, not merely on python3 existing. PyYAML is
+# not in the stdlib, so `import yaml` fails on a bare interpreter — and a bare
+# interpreter is easy to land on, since pyenv resolves a different python3 per
+# directory. Checking only for python3 turned an absent optional dependency
+# into a failing assertion about the config, which is a false report of the
+# very kind the rest of this change exists to remove.
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then
   if python3 -c "
 import sys, yaml
 d = yaml.safe_load(open('$C'))
