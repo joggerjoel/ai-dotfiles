@@ -53,6 +53,11 @@ mcp_json_for() {
       echo '{"type":"stdio","command":"uvx","args":["--from","git+https://github.com/oraios/serena","serena","start-mcp-server","--context","ide-assistant","--enable-web-dashboard","false","--enable-gui-log-window","false"],"env":{}}';;
     morphllm-fast-apply)
       echo '{"type":"stdio","command":"npx","args":["-y","@morph-llm/morph-fast-apply"],"env":{}}';;
+    headroom)
+      # Bare `headroom`, not an absolute path: the binary lands in ~/.local/bin
+      # on Linux and under brew or uv on macOS, and Claude Code resolves the
+      # command against the PATH it was launched with.
+      echo '{"type":"stdio","command":"headroom","args":["mcp","serve"],"env":{}}';;
     chrome-devtools)
       echo '{"type":"stdio","command":"npx","args":["-y","chrome-devtools-mcp@latest"],"env":{}}';;
     firecrawl)
@@ -846,6 +851,76 @@ remove_mcp_server() {
   echo "$tmp" > "$CLAUDE_JSON"
 }
 
+# ── MCP integration picker ───────────────────────────────────────
+# Menu numbering and name lookup must agree on which integrations exist for a
+# profile, so both read this one list rather than each filtering for itself.
+# Prints INTEGRATIONS indices in menu order, one per line.
+visible_integration_indices() {
+  local profile="$1" idx
+  for idx in "${!INTEGRATIONS[@]}"; do
+    if [ "$profile" = "vps" ] && [ "$(get_field "${INTEGRATIONS[$idx]}" 7)" = "yes" ]; then
+      continue
+    fi
+    echo "$idx"
+  done
+}
+
+# Resolve a picker selection into INTEGRATIONS indices, one per line.
+#
+#   $1  selection  "all"; "none" or empty; menu numbers and ranges
+#                  ("1,2,5-8"); or names ("context7,serena"). Unattended
+#                  callers pass names.
+#   $2  profile    desktop|vps
+#
+# An unknown name returns 1 — a typo in a playbook variable must stop the run,
+# not quietly provision fewer servers than were asked for. A name that is known
+# but hidden on this profile (desktop-only on a vps) is dropped with a notice,
+# so one shared list stays usable across mixed hosts.
+#
+# Lives here, outside cmd_setup, so the tests can reach it: setup.sh's test
+# harness sources the definitions above the dispatch case, and logic buried
+# inline in cmd_setup is unreachable without running the whole setup.
+integration_selection() {
+  local selection="$1" profile="$2"
+  local visible=() parts=() part idx n start end real_idx hit
+
+  # `while read` rather than mapfile: setup.sh runs under stock macOS
+  # /bin/bash, which is 3.2.
+  while IFS= read -r idx; do
+    [ -n "$idx" ] && visible+=("$idx")
+  done < <(visible_integration_indices "$profile")
+
+  case "$selection" in
+    ""|none) return 0 ;;
+    all)     printf '%s\n' ${visible+"${visible[@]}"}; return 0 ;;
+  esac
+
+  IFS=',' read -ra parts <<< "$selection"
+  for part in ${parts+"${parts[@]}"}; do
+    part="${part//[[:space:]]/}"
+    [ -z "$part" ] && continue
+    if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+      start="${BASH_REMATCH[1]}"; end="${BASH_REMATCH[2]}"
+      for ((n=start; n<=end; n++)); do
+        [ "$n" -ge 1 ] && [ "$n" -le "${#visible[@]}" ] && echo "${visible[$((n - 1))]}"
+      done
+    elif [[ "$part" =~ ^[0-9]+$ ]]; then
+      [ "$part" -ge 1 ] && [ "$part" -le "${#visible[@]}" ] && echo "${visible[$((part - 1))]}"
+    else
+      real_idx=$(integration_index_for "$part") || return 1
+      hit=""
+      for idx in ${visible+"${visible[@]}"}; do
+        [ "$idx" = "$real_idx" ] && { hit=yes; break; }
+      done
+      if [ -n "$hit" ]; then
+        echo "$real_idx"
+      else
+        echo "${part} is not available on the ${profile} profile — skipped" >&2
+      fi
+    fi
+  done
+}
+
 # ── Settings installation ────────────────────────────────────────
 # Claude Code refuses to read feature flags when any of DISABLE_TELEMETRY,
 # DO_NOT_TRACK, or CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is set, which
@@ -1442,23 +1517,12 @@ cmd_setup() {
   echo ""
 
   local i=1
-  local names=()
-  local visible_indices=()
-  for idx in "${!INTEGRATIONS[@]}"; do
+  for idx in $(visible_integration_indices "$profile"); do
     local entry="${INTEGRATIONS[$idx]}"
-    local name desc needs_key desktop_only
+    local name desc needs_key
     name=$(get_field "$entry" 1)
     desc=$(get_field "$entry" 2)
     needs_key=$(get_field "$entry" 3)
-    desktop_only=$(get_field "$entry" 7)
-
-    # Skip desktop-only integrations on VPS
-    if [ "$profile" = "vps" ] && [ "$desktop_only" = "yes" ]; then
-      continue
-    fi
-
-    names+=("$name")
-    visible_indices+=("$idx")
 
     local tag=""
     if [ "$needs_key" = "yes" ]; then
@@ -1472,32 +1536,41 @@ cmd_setup() {
   done
 
   echo ""
-  echo -e "  ${DIM}Examples: 1,2,3  |  1-5  |  all  |  Enter to skip${RESET}"
-  echo -n "  > "
-  read -r selection || selection=""
+  # An unattended run (ansible pipes a fixed set of answers into this script)
+  # reaches this prompt with stdin already at EOF. `read` then yields "", and
+  # "" means skip-all — which is how every fleet host ended up with
+  # `mcpServers: null` while looking like a clean setup run. DOTFILES_MCP
+  # answers the picker out of band so the unattended path states its intent.
+  #
+  # It takes NAMES, not menu numbers. Numbers shift whenever INTEGRATIONS gains
+  # a row, and a playbook that quietly installs a different server after an
+  # unrelated registry edit is the same class of silent-drift bug this fixes.
+  local selection
+  if [ -n "${DOTFILES_MCP:-}" ]; then
+    selection="$DOTFILES_MCP"
+    echo -e "  ${DIM}DOTFILES_MCP=${selection}${RESET}"
+  else
+    echo -e "  ${DIM}Examples: 1,2,3  |  1-5  |  all  |  none  |  Enter to skip${RESET}"
+    echo -n "  > "
+    read -r selection || selection=""
+  fi
 
   # ── Parse selection ──
-  local selected=()
-  if [ -z "$selection" ]; then
+  # Captured, not piped: a process substitution would discard the exit status,
+  # and an unknown name has to stop the run rather than silently install less.
+  local selection_out
+  if ! selection_out=$(integration_selection "$selection" "$profile"); then
+    fail "MCP selection names an integration that is not in the registry — aborting"
+    exit 1
+  fi
+
+  local selected=() sel_idx
+  while IFS= read -r sel_idx; do
+    [ -n "$sel_idx" ] && selected+=("$sel_idx")
+  done <<< "$selection_out"
+
+  if [ ${#selected[@]} -eq 0 ]; then
     skip "Skipped integrations (run './setup.sh add <name>' later)"
-  elif [ "$selection" = "all" ]; then
-    for ((j=0; j<${#visible_indices[@]}; j++)); do
-      selected+=("$j")
-    done
-  else
-    # Parse comma-separated numbers and ranges like "1,2,5-8"
-    IFS=',' read -ra parts <<< "$selection"
-    for part in "${parts[@]}"; do
-      part=$(echo "$part" | tr -d ' ')
-      if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then
-        local start="${BASH_REMATCH[1]}" end="${BASH_REMATCH[2]}"
-        for ((n=start; n<=end; n++)); do
-          [ "$n" -ge 1 ] && [ "$n" -le "${#visible_indices[@]}" ] && selected+=("$((n-1))")
-        done
-      elif [[ "$part" =~ ^[0-9]+$ ]]; then
-        [ "$part" -ge 1 ] && [ "$part" -le "${#visible_indices[@]}" ] && selected+=("$((part-1))")
-      fi
-    done
   fi
 
   # ── Configure selected integrations ──
@@ -1506,8 +1579,9 @@ cmd_setup() {
     echo ""
     local enabled_count=0
 
-    for sel_idx in "${selected[@]}"; do
-      local real_idx="${visible_indices[$sel_idx]}"
+    # integration_selection prints INTEGRATIONS indices directly, so there is
+    # no longer a menu-position indirection to resolve here.
+    for real_idx in "${selected[@]}"; do
       local entry="${INTEGRATIONS[$real_idx]}"
       local name desc needs_key key_var disabled_default extra_vars
       name=$(get_field "$entry" 1)

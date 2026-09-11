@@ -30,6 +30,22 @@
     # desktop profile, a headless box wants vps. The fleet is headless, hence "2".
     dotfiles_profile: "2"
 
+    # setup.sh's MCP picker is prompt-driven, and it is reached AFTER the three
+    # answers piped in above are consumed — so stdin is at EOF, `read` returns
+    # "", and "" means skip-all. Every host provisioned this way silently ended
+    # up with `mcpServers: null`. DOTFILES_MCP answers that prompt out of band.
+    # Names, not menu numbers, so a new row in the INTEGRATIONS registry cannot
+    # change what the fleet installs. Desktop-only entries are skipped with a
+    # notice on the vps profile, so this list is safe to share across hosts.
+    #
+    # context7 and serena are deliberately ABSENT. The fleet already gets both
+    # from marketplace plugins (`plugin:context7:context7` over HTTP and
+    # `plugin:serena:serena` via uvx), and a ~/.claude.json entry does not
+    # replace a plugin one — it runs alongside it, so listing them here would
+    # start two of each on every host. Only servers no plugin provides belong
+    # in this list. Revisit it if the fleet's core plugin set changes.
+    dotfiles_mcp: "morphllm-fast-apply,headroom"
+
     # ~/.claude/settings.json also appears on hosts where Claude Code ran before
     # ai-dotfiles was ever installed, so its presence is not proof setup.sh ran.
     # Set true to run setup anyway on such a host.
@@ -527,6 +543,8 @@
       args:
         chdir: "{{ dotfiles_dir }}"
         executable: /bin/bash
+      environment:
+        DOTFILES_MCP: "{{ dotfiles_mcp }}"
       register: dotfiles_setup
       changed_when: "'Setup complete' in dotfiles_setup.stdout"
       when:
