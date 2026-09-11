@@ -51,8 +51,17 @@ REPO_G="$(readlink -f "$G" 2>/dev/null || echo "$G")"
 t "reading the guard via its repo path" 0 \
   "$(jq -cn --arg p "$PAY" --arg g "$REPO_G" '{tool_name:"Read",tool_input:{file_path:$g},
      tool_response:{type:"text",file:{content:("BLOCK_PATTERNS = [\n"+$p)}}}')"
+# Absolute, derived from the guard under test -- NOT the bare relative
+# "hooks/injection-guard.test.sh". The guard resolves command tokens against its
+# own CWD, and SELF_PATHS only ever holds the checkout the installed hook points
+# at. A relative fixture therefore passes from the main checkout and fails from
+# any worktree or second clone, where it resolves to a sibling copy the guard has
+# never been told about. That is correct guard behaviour -- an ambiguous relative
+# path falls through to detection, which is the fail-safe side -- but it made the
+# suite report a self-reference regression that was really just a CWD difference.
+REPO_T="$(dirname "$REPO_G")/injection-guard.test.sh"
 t "running the guard's test suite" 0 \
-  "$(jq -cn --arg p "$PAY" '{tool_name:"Bash",tool_input:{command:"bash hooks/injection-guard.test.sh"},
+  "$(jq -cn --arg p "$PAY" --arg t "$REPO_T" '{tool_name:"Bash",tool_input:{command:("bash "+$t)},
      tool_response:{stdout:("PASS\n"+$p)}}')"
 t "grepping the real guard log" 0 \
   "$(jq -cn --arg p "$PAY" --arg l "$HOME/.claude/hooks/.logs/injection-guard.jsonl" \
