@@ -6,7 +6,7 @@
 # running it and never prints its URL to a pipe, so a browser on the Mac cannot
 # reach a listener on aorus4 and the URL cannot even be scraped to tunnel it.
 # Per-host login is not inconvenient, it is impossible. Measured 2026-08-11 —
-# see references/herdr-auth.md.
+# see ~/Developer/herdr (references/herdr-auth.md moved there).
 #
 # And why it belongs in the UPDATE path, not only in provisioning: the refresh
 # token runs ~30 days from the original interactive login and is NOT extended by
@@ -52,7 +52,12 @@
   vars:
     claude_token_dir: "{{ ansible_facts.env.HOME }}/.config/claude-fleet"
     claude_token_file: "{{ ansible_facts.env.HOME }}/.config/claude-fleet/env"
-    claude_rc: "{{ ansible_facts.env.HOME }}/.bashrc"
+    # bash -lc (the herdr pane shape) reaches ~/.bashrc on Linux through
+    # ~/.profile, but a bash LOGIN shell on macOS reads ~/.bash_profile — and a
+    # Mac has no ~/.bashrc at all, which this play used to require outright
+    # (macstudio: "Path .bashrc does not exist"). No interactive guard there,
+    # so blockinfile appends at the end, which a login shell still reaches.
+    claude_rc: "{{ ansible_facts.env.HOME }}/{{ '.bash_profile' if ansible_facts.os_family == 'Darwin' else '.bashrc' }}"
     # Read from the control node's ~/.claude/.env by name. An explicitly
     # exported CLAUDE_CODE_OAUTH_TOKEN wins, so a one-off run can override the
     # file without editing it.
@@ -64,17 +69,8 @@
     claude_token: "{{ claude_token_from_env if claude_token_from_env | length > 0 else claude_token_from_file }}"
 
   tasks:
-    # Same guard as update.yml: ignore_unreachable marches dead hosts into the
-    # tasks below, where ansible_facts.env is undefined, and the recap then
-    # reads `failed=1` for what is really an absent host.
-    - name: Say plainly that a host was unreachable
-      ansible.builtin.debug:
-        msg: "{{ inventory_hostname }} UNREACHABLE — skipped entirely, no token written"
-      when: ansible_facts == {}
-
-    - name: Stop cleanly on hosts we could not reach
-      ansible.builtin.meta: end_host
-      when: ansible_facts == {}
+    - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
+      vars: { unreachable_note: "no token written" }
 
     # Fail loudly and early rather than writing an empty export that would look
     # installed and authenticate nothing.
@@ -154,7 +150,7 @@
     # nothing. Verified on aorus8: TEAM_DIR (defined below the guard) reads
     # empty under `bash -lc` and `bulls` under `bash -ic`. insertbefore puts the
     # stanza above the guard, where nvm already sits for exactly this reason.
-    - name: Source the token from above the interactive guard in .bashrc
+    - name: Source the token from the login rc, above any interactive guard
       ansible.builtin.blockinfile:
         path: "{{ claude_rc }}"
         marker: "# {mark} ANSIBLE MANAGED — claude fleet token"
@@ -188,7 +184,7 @@
         fail_msg: >-
           {{ inventory_hostname }}: `bash -lc` did not resolve the expected
           CLAUDE_CODE_OAUTH_TOKEN. Check that the source stanza landed ABOVE the
-          `case $- in *i*)` guard in ~/.bashrc — below it, a login
+          `case $- in *i*)` guard in {{ claude_rc }} — below it, a login
           non-interactive shell never reaches it.
         success_msg: "{{ inventory_hostname }}: pane-shaped shell resolves the token"
       when: not ansible_check_mode

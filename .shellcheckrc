@@ -1,0 +1,8 @@
+# Follow `source`d files so cross-file references check for real instead of
+# reporting SC2154 on every variable a script inherits from a library
+# (observability.test.sh sources observability.sh; setup.sh sources
+# lib/links.sh). Only takes effect from this file — the directive is not
+# accepted inline. SCRIPTDIR lets `# shellcheck source=<name>` resolve
+# relative to the script wherever shellcheck is invoked from.
+external-sources=true
+source-path=SCRIPTDIR

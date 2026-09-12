@@ -1,9 +1,9 @@
 name: tests
 
+# Manual only. CI does not run on pushes or pull requests; trigger it from the
+# Actions tab or `gh workflow run tests.yml` when a full cross-platform run is
+# wanted. Local gate remains `just fix-skills && just test-all`.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:

@@ -439,7 +439,7 @@ D2="$TMP/s2"
 run "$D2" refresh --docs-only >/dev/null
 first_id=$(count "$D2" "items[0]['id']")
 
-out=$(run "$D2" done "$first_id")
+out=$(run "$D2" "done" "$first_id")
 case "$out" in
   done:*) ok "done closes an item" ;;
   *) ko "done closes an item" "$out" ;;
@@ -453,7 +453,7 @@ run "$D2" reopen "$first_id" >/dev/null
 st=$(count "$D2" "[i['status'] for i in items if i['id']=='$first_id'][0]")
 [ "$st" = "open" ] && ok "reopen clears the closure" || ko "reopen clears the closure" "status=$st"
 
-out=$(run "$D2" done ffffffff 2>&1); rc=$?
+out=$(run "$D2" "done" ffffffff 2>&1); rc=$?
 [ "$rc" != "0" ] && ok "closing an unknown id fails loudly" \
                  || ko "closing an unknown id fails loudly" "exit 0"
 
@@ -469,7 +469,7 @@ with core.store_lock():
     time.sleep(3)
 PY
 sleep 1
-run "$D2" done "$first_id" >/dev/null 2>&1; rc=$?
+run "$D2" "done" "$first_id" >/dev/null 2>&1; rc=$?
 [ "$rc" = "75" ] && ok "lock contention exits 75, not 0" \
                  || ko "lock contention exits 75, not 0" "exit $rc"
 wait

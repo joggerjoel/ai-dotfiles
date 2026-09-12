@@ -7,6 +7,7 @@
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
+# shellcheck source=observability.sh
 . "$ROOT/scripts/observability.sh"
 pass=0 fail=0
 
@@ -118,14 +119,14 @@ src = open(sys.argv[1]).read().split("\n", 1)[1]          # drop the #jinja2 hea
 src = src.replace("{{ ansible_managed | comment }}", "# managed")
 
 groups = {
-    "aorus_ai": ["aorus", "aorus2", "macair"],
+    "aorus_ai": ["aorus", "aorus2", "macbookair"],
     "redis_ai": ["aorus", "aorus2"],
 }
 hostvars = {
-    "aorus":     {"ansible_host": "10.0.0.1"},
-    "aorus2":    {"ansible_host": "10.0.0.2", "scrape_address": "10.9.9.9"},
-    "macair":    {"ansible_host": "tail.name", "scrape_skip": True},
-    "localhost": {"scrape_address": "10.0.0.99"},
+    "aorus":      {"ansible_host": "10.0.0.1"},
+    "aorus2":     {"ansible_host": "10.0.0.2", "scrape_address": "10.9.9.9"},
+    "macbookair": {"ansible_host": "tail.name", "scrape_skip": True},
+    "localhost":  {"scrape_address": "10.0.0.99"},
 }
 obs = {
     "retention": {"scrape_interval": "15s"},
@@ -160,7 +161,6 @@ fi
 # production containers, so assert it against ansible's own task list rather
 # than by reading the file.
 
-PB="$ROOT/ansible-ai/deploy-observability.yml"
 INV_REAL="$ROOT/ansible-ai/inventory.local.yml"
 
 if command -v ansible-playbook >/dev/null 2>&1 && [ -r "$INV_REAL" ]; then

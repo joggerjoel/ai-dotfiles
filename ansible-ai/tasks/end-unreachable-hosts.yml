@@ -1,0 +1,30 @@
+---
+# The first two tasks of every play that pairs `ignore_unreachable: true` with
+# `gather_facts: true`.
+#
+# ignore_unreachable stops one dead host from killing a fleet run, but it also
+# marches that host into every task below — where anything templating a gathered
+# fact (claude_bin, dotfiles_dir) dies with "'ansible_env' is undefined". The
+# recap then reads `unreachable=0 failed=1`, so a powered-off box is
+# indistinguishable from a broken playbook. It never reads `unreachable=1`
+# either: ignore_unreachable books an absent host as `ignored`, which is why the
+# debug line has to say it out loud.
+#
+# This lived as a hand-copied pair in three playbooks and was missing from the
+# other seven. check-fleet-preflight.yml was one of the seven, which is how
+# aorus2 and aorus3 came to report `failed=1` on a fleet update while being
+# merely switched off. All ten now import it, so the count above is the whole
+# set and a new play joins it by importing rather than by copying:
+#
+#   - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
+#     vars: { unreachable_note: "no token written" }
+- name: Say plainly that a host was unreachable
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }} UNREACHABLE — skipped entirely,
+      {{ unreachable_note | default('nothing ran here') }}
+  when: ansible_facts == {}
+
+- name: Stop cleanly on hosts we could not reach
+  ansible.builtin.meta: end_host
+  when: ansible_facts == {}

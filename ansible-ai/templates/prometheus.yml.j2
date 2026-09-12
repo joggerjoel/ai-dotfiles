@@ -36,8 +36,10 @@ scrape_configs:
 
   # Every managed host. scrape_address exists because ansible_host is the
   # address ansible connects on, which is not always the address prometheus can
-  # reach: macair's ansible_host is a tailnet name and aorus7 has no tailscale,
-  # so scraping it by that name would read down forever.
+  # reach. macstudio's ansible_host is a MagicDNS name and aorus7, which runs
+  # prometheus, has no tailscale, so scraping it by that name would read down
+  # forever. The control node needs the same escape for a different reason: it
+  # is "localhost" to ansible and a roaming DHCP address to prometheus.
   - job_name: node
     static_configs:
     {% for h in groups.get('aorus_ai', []) | sort %}

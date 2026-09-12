@@ -57,7 +57,7 @@ resumes the same session.
 
 1. **`just`** reads `FLEET_ROLE` from `.env`. It is `hud`, so this is not the node.
 2. The recipe branches: on a node it would `exec herdr` directly; here it runs
-   `herdr-remote`, which SSHes to `FLEET_NODE`.
+   `herdr-remote` (in ~/Developer/herdr), which SSHes to `FLEET_NODE`.
 3. **herdr** on the node has been running since it was provisioned. The session,
    its panes, and every agent in them are already alive.
 4. You are attached. Anything the crew started while the laptop was shut is

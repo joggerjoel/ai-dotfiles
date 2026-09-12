@@ -14,6 +14,9 @@
     # Retry transient CDN/network errors so a blip doesn't hard-fail a host.
     curl_retry: "--retry 5 --retry-delay 2 --retry-connrefused"
   tasks:
+    - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
+      vars: { unreachable_note: "just was not installed here" }
+
     - name: Check whether just is already installed
       ansible.builtin.shell: |
         export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"

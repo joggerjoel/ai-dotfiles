@@ -47,7 +47,7 @@ echo "setup-maintenance: running (results → $LOG)"
 
 # Node-only health (macstudio): herdr server + launchd agents.
 if [ -f "$HOME/Library/LaunchAgents/dev.herdr.node.plist" ]; then
-  run herdr-status "$DOTFILES_DIR/scripts/herdr-node.sh" status
+  run herdr-status "$HOME/Developer/herdr/scripts/herdr-node.sh" status
 fi
 
 log summary ok "maintenance pass complete"

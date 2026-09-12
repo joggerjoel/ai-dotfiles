@@ -22,6 +22,9 @@
       XDG_RUNTIME_DIR: "/run/user/{{ ansible_user_uid }}"
       DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ ansible_user_uid }}/bus"
   tasks:
+    - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
+      vars: { unreachable_note: "the proxy was not refreshed here" }
+
     - name: Check the headroom CLI is installed
       ansible.builtin.stat:
         path: "{{ ansible_facts.env.HOME }}/.local/bin/headroom"

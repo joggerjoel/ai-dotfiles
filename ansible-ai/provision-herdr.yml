@@ -29,6 +29,9 @@
     herdr_converge_existing: true
 
   tasks:
+    - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
+      vars: { unreachable_note: "herdr was not converged here" }
+
     - name: Check whether herdr is already installed, and at what version
       ansible.builtin.shell: |
         export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"

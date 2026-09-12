@@ -31,6 +31,12 @@ fi
 # ── Asset registry ───────────────────────────────────────────────
 # shellcheck source=lib/integrations.sh
 source "$DOTFILES_DIR/lib/integrations.sh"
+# shellcheck source=lib/links.sh
+source "$DOTFILES_DIR/lib/links.sh"
+# install_settings calls link_file directly, before relink_all ever runs —
+# every link_file call increments a counter, so it must not be left unbound
+# under `set -u`.
+links_reset_counters
 
 # Postgres MCP package for self-hosted ("internal") Supabase. The old reference
 # server @modelcontextprotocol/server-postgres is deprecated; this one is
@@ -47,6 +53,11 @@ mcp_json_for() {
       echo '{"type":"stdio","command":"uvx","args":["--from","git+https://github.com/oraios/serena","serena","start-mcp-server","--context","ide-assistant","--enable-web-dashboard","false","--enable-gui-log-window","false"],"env":{}}';;
     morphllm-fast-apply)
       echo '{"type":"stdio","command":"npx","args":["-y","@morph-llm/morph-fast-apply"],"env":{}}';;
+    headroom)
+      # Bare `headroom`, not an absolute path: the binary lands in ~/.local/bin
+      # on Linux and under brew or uv on macOS, and Claude Code resolves the
+      # command against the PATH it was launched with.
+      echo '{"type":"stdio","command":"headroom","args":["mcp","serve"],"env":{}}';;
     chrome-devtools)
       echo '{"type":"stdio","command":"npx","args":["-y","chrome-devtools-mcp@latest"],"env":{}}';;
     firecrawl)
@@ -719,13 +730,27 @@ ensure_serena_dashboard_off() {
 
   if [ ! -f "$SERENA_CONFIG" ]; then
     cat > "$SERENA_CONFIG" <<'YAML'
-# Seeded by setup.sh. Serena fills all other keys with defaults; edit freely.
+# Seeded by setup.sh. Serena fills most other keys with defaults; edit freely.
 gui_log_window: false
 web_dashboard: false
 web_dashboard_open_on_launch: false
+projects: []
 YAML
     ok "Serena dashboard disabled (created $SERENA_CONFIG)"
     return 0
+  fi
+
+  # `projects` is NOT one of the keys serena defaults. Seeding this file without
+  # it makes serena abort every launch with
+  #     SerenaConfigError: `projects` key not found in Serena configuration
+  # so the MCP server never handshakes and `claude mcp list` reports only
+  # "Connection closed". Hosts where serena had run before setup.sh got a
+  # complete file and were fine; every freshly provisioned host got the seed
+  # above and a permanently broken serena. Repaired here, not just in the seed,
+  # so hosts already carrying the truncated file heal on their next update.
+  if ! grep -qE '^projects:' "$SERENA_CONFIG"; then
+    printf 'projects: []\n' >> "$SERENA_CONFIG"
+    ok "Serena config repaired (added the required \`projects\` key)"
   fi
 
   local changed="no" key tmp
@@ -826,26 +851,74 @@ remove_mcp_server() {
   echo "$tmp" > "$CLAUDE_JSON"
 }
 
-link_file() {
-  local src="$1" dst="$2"
-  local dst_dir
-  dst_dir=$(dirname "$dst")
-  mkdir -p "$dst_dir"
+# ── MCP integration picker ───────────────────────────────────────
+# Menu numbering and name lookup must agree on which integrations exist for a
+# profile, so both read this one list rather than each filtering for itself.
+# Prints INTEGRATIONS indices in menu order, one per line.
+visible_integration_indices() {
+  local profile="$1" idx
+  for idx in "${!INTEGRATIONS[@]}"; do
+    if [ "$profile" = "vps" ] && [ "$(get_field "${INTEGRATIONS[$idx]}" 7)" = "yes" ]; then
+      continue
+    fi
+    echo "$idx"
+  done
+}
 
-  if [ -L "$dst" ]; then
-    rm "$dst"
-  elif [ -f "$dst" ]; then
-    # Backup existing file
-    local backup_dir
-    backup_dir="$CLAUDE_DIR/.backups/setup-$(date +%Y%m%d_%H%M%S)"
-    mkdir -p "$backup_dir"
-    cp "$dst" "$backup_dir/$(basename "$dst")"
-    warn "Backed up existing $(basename "$dst") to $backup_dir/"
-    rm "$dst"
-  fi
+# Resolve a picker selection into INTEGRATIONS indices, one per line.
+#
+#   $1  selection  "all"; "none" or empty; menu numbers and ranges
+#                  ("1,2,5-8"); or names ("context7,serena"). Unattended
+#                  callers pass names.
+#   $2  profile    desktop|vps
+#
+# An unknown name returns 1 — a typo in a playbook variable must stop the run,
+# not quietly provision fewer servers than were asked for. A name that is known
+# but hidden on this profile (desktop-only on a vps) is dropped with a notice,
+# so one shared list stays usable across mixed hosts.
+#
+# Lives here, outside cmd_setup, so the tests can reach it: setup.sh's test
+# harness sources the definitions above the dispatch case, and logic buried
+# inline in cmd_setup is unreachable without running the whole setup.
+integration_selection() {
+  local selection="$1" profile="$2"
+  local visible=() parts=() part idx n start end real_idx hit
 
-  ln -s "$src" "$dst"
-  ok "$(basename "$dst") -> $(basename "$src")"
+  # `while read` rather than mapfile: setup.sh runs under stock macOS
+  # /bin/bash, which is 3.2.
+  while IFS= read -r idx; do
+    [ -n "$idx" ] && visible+=("$idx")
+  done < <(visible_integration_indices "$profile")
+
+  case "$selection" in
+    ""|none) return 0 ;;
+    all)     printf '%s\n' ${visible+"${visible[@]}"}; return 0 ;;
+  esac
+
+  IFS=',' read -ra parts <<< "$selection"
+  for part in ${parts+"${parts[@]}"}; do
+    part="${part//[[:space:]]/}"
+    [ -z "$part" ] && continue
+    if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+      start="${BASH_REMATCH[1]}"; end="${BASH_REMATCH[2]}"
+      for ((n=start; n<=end; n++)); do
+        [ "$n" -ge 1 ] && [ "$n" -le "${#visible[@]}" ] && echo "${visible[$((n - 1))]}"
+      done
+    elif [[ "$part" =~ ^[0-9]+$ ]]; then
+      [ "$part" -ge 1 ] && [ "$part" -le "${#visible[@]}" ] && echo "${visible[$((part - 1))]}"
+    else
+      real_idx=$(integration_index_for "$part") || return 1
+      hit=""
+      for idx in ${visible+"${visible[@]}"}; do
+        [ "$idx" = "$real_idx" ] && { hit=yes; break; }
+      done
+      if [ -n "$hit" ]; then
+        echo "$real_idx"
+      else
+        echo "${part} is not available on the ${profile} profile — skipped" >&2
+      fi
+    fi
+  done
 }
 
 # ── Settings installation ────────────────────────────────────────
@@ -934,10 +1007,19 @@ install_skills() {
   ok "$count skill(s) installed to ~/.claude/skills/"
 }
 
-# Copies the agent-agnostic subset of repo skills into ~/.codex/skills/<name>/,
+# Links the agent-agnostic subset of repo skills into ~/.codex/skills/<name>,
 # so Codex gets them too. Deliberately an allowlist, not a mirror of skills/:
 # most skills here assume Claude Code's tools, hooks, or plugin stack and would
 # only mislead Codex. A skill earns a place in CODEX_SKILLS by working in both.
+#
+# Names pstack already serves to Codex stay OUT, even when skills/ has a copy.
+# Codex loads pstack from the clone's own .agents/plugins/marketplace.json and
+# namespaces it (pstack:tdd, pstack:unslop, ...), so adding ours would put two
+# same-named skills in front of it. That rules out the eleven leftovers from the
+# abandoned vendoring in 1b679b6: automate-me, blast-radius, bro, figure-it-out,
+# no-comments, recall, tdd, teach, technical-writing, typescript-best-practices,
+# unslop.
+#
 # skills/unlazy/scripts/ is gitignored — it is third-party Node that runs shell
 # from CHECK: lines, so it is not carried in this repo (see .gitignore). A fresh
 # clone, or any fleet host that pulled from origin, therefore has the skill's
@@ -955,19 +1037,63 @@ ensure_unlazy_payload() {
   return 0
 }
 
-CODEX_SKILLS=(unlazy)
+CODEX_SKILLS=(
+  unlazy
+  council
+  explore-plan-code-test
+  first-principles
+  humanizer
+  review-changes
+  test-and-fix
+  verify
+)
 
+# Symlinks, not copies, matching how sync-pstack.sh already serves
+# ~/.agents/skills: one `git pull` then refreshes Codex immediately instead of
+# leaving it stale until the next `setup.sh update`. Verified against codex-cli
+# 0.154.0, which discovers a symlinked skill directory fine — the binary's
+# "Symbolic links are not allowed in skills" string belongs to its GitHub skill
+# publisher walking a repo root, not to local discovery.
 install_codex_skills() {
   [ -d "$DOTFILES_DIR/skills" ] || return 0
-  local count=0
+  mkdir -p "$HOME/.codex/skills"
+  local name count=0
+
+  # Drop links an earlier run made whose name has since left CODEX_SKILLS.
+  # Only symlinks pointing into our own skills/ are ours to remove; a real
+  # directory (caveman, printing-press-library) is a hand-installed Codex skill
+  # and must survive. Same ownership rule as prune_dangling_links in
+  # lib/links.sh, and the pruning install_skills gets from its manifest.
+  local existing keep
+  for existing in "$HOME"/.codex/skills/*; do
+    [ -L "$existing" ] || continue
+    case "$(readlink "$existing")" in
+      "$DOTFILES_DIR/skills/"*) ;;
+      *) continue ;;
+    esac
+    keep=no
+    for name in "${CODEX_SKILLS[@]}"; do
+      if [ "$(basename "$existing")" = "$name" ]; then keep=yes; break; fi
+    done
+    if [ "$keep" = no ]; then
+      rm -f "$existing"
+    fi
+  done
+
   for name in "${CODEX_SKILLS[@]}"; do
     [ -d "$DOTFILES_DIR/skills/$name" ] || continue
-    mkdir -p "$HOME/.codex/skills"
-    rm -rf "${HOME:?}/.codex/skills/$name"
-    cp -R "$DOTFILES_DIR/skills/$name" "$HOME/.codex/skills/$name"
+    # Every copy-model run before this one left a real directory here, and
+    # `ln -sfn` onto a directory creates the link INSIDE it rather than
+    # replacing it — the same trap link_file guards against.
+    if [ ! -L "$HOME/.codex/skills/$name" ]; then
+      rm -rf "${HOME:?}/.codex/skills/${name:?}"
+    fi
+    ln -sfn "$DOTFILES_DIR/skills/$name" "$HOME/.codex/skills/$name"
     count=$((count+1))
   done
-  [ "$count" -gt 0 ] && ok "$count skill(s) installed to ~/.codex/skills/"
+  if [ "$count" -gt 0 ]; then
+    ok "$count skill(s) linked into ~/.codex/skills/"
+  fi
   return 0
 }
 
@@ -1070,31 +1196,6 @@ POLICY
   ok "CLAUDE.md assembled (base + $profile$([ -f "$local_md" ] && echo " + local"))"
 }
 
-# ── Unify agent instructions: AGENTS.md -> CLAUDE.md ─────────────
-# Single source of truth for the agent CLIs we run alongside Claude Code
-# (codex-cli, cursor-cli, opencode, gemini-cli). Claude and Cursor read CLAUDE.md
-# natively; Codex and opencode read AGENTS.md; Gemini reads GEMINI.md. Symlinking
-# each tool's global instructions file to CLAUDE.md shares the one assembled file
-# with no duplication.
-#   ~/.codex/AGENTS.md            Codex global instructions
-#   ~/.config/opencode/AGENTS.md  opencode global instructions
-#   ~/.gemini/GEMINI.md           Gemini global instructions
-#   ~/AGENTS.md                   home-level file Cursor resolves when run near $HOME
-# link_file backs up any existing real file to ~/.claude/.backups/ before linking
-# and is idempotent (a stale symlink is replaced, not nested).
-link_agent_instructions() {
-  local canonical="$CLAUDE_DIR/CLAUDE.md"
-  [ -f "$canonical" ] || { warn "CLAUDE.md not found; skipping agent-instruction symlinks"; return 0; }
-  link_file "$canonical" "$HOME/.codex/AGENTS.md"
-  link_file "$canonical" "$HOME/.config/opencode/AGENTS.md"
-  link_file "$canonical" "$HOME/.gemini/GEMINI.md"
-  link_file "$canonical" "$HOME/AGENTS.md"
-  link_codex_prompts
-  sync_pstack
-  link_claude_hooks
-  link_bin_tools
-}
-
 # pstack for the shared-skills runtimes (Codex, Prime Agent, opencode, Gemini
 # CLI): clones michael-denyer/pstack-claude and links its 52 skills into
 # ~/.agents/skills plus its 31 Codex slash-command stubs into ~/.codex/prompts,
@@ -1105,54 +1206,6 @@ link_agent_instructions() {
 sync_pstack() {
   [ -x "$DOTFILES_DIR/scripts/sync-pstack.sh" ] || return 0
   "$DOTFILES_DIR/scripts/sync-pstack.sh" || warn "pstack sync had issues (non-fatal — check network)"
-}
-
-# Repo CLI helpers (bin/* -> ~/.local/bin/<name>). Symlinked so a repo pull
-# updates the live tools. Current roster: isolate (clean-room single-shot
-# model call for cold-eyes reviews).
-link_bin_tools() {
-  [ -d "$DOTFILES_DIR/bin" ] || return 0
-  local f
-  for f in "$DOTFILES_DIR"/bin/*; do
-    [ -f "$f" ] || continue
-    chmod +x "$f"
-    link_file "$f" "$HOME/.local/bin/$(basename "$f")"
-  done
-}
-
-# Claude Code hooks (hooks/*.{sh,py} -> ~/.claude/hooks/<name>). The shared
-# profile settings.json references these by $HOME path, so a machine that
-# skips this step gets a "No such file or directory" PreToolUse error on
-# every Bash call. Symlinked so a repo pull updates the live hooks.
-# Both extensions are linked: the glob was .sh-only until injection-guard.py
-# arrived, which meant a registered .py hook silently never got installed.
-link_claude_hooks() {
-  [ -d "$DOTFILES_DIR/hooks" ] || return 0
-  local f
-  for f in "$DOTFILES_DIR"/hooks/*.sh "$DOTFILES_DIR"/hooks/*.py; do
-    [ -f "$f" ] || continue
-    # A real hook is <name>.<ext>. Anything with a dotted stem (foo.test.sh,
-    # foo.backtest.py) is a repo-side helper and must not be linked as a hook.
-    case "$(basename "$f")" in *.*.*) continue ;; esac
-    link_file "$f" "$CLAUDE_DIR/hooks/$(basename "$f")"
-  done
-}
-
-# Repo scripts (scripts/*.sh -> ~/.claude/scripts/<name>). Symlinked so a repo
-# pull updates the live script. Same dotted-stem filter as link_claude_hooks:
-# a real script is <name>.sh; foo.test.sh is a repo-side test helper, not
-# something to deploy fleet-wide. Shared by cmd_setup and cmd_update — it used
-# to be a copy-pasted loop in both places, missing the filter in each.
-link_repo_scripts() {
-  [ -d "$DOTFILES_DIR/scripts" ] || return 0
-  mkdir -p "$CLAUDE_DIR/scripts"
-  local f
-  for f in "$DOTFILES_DIR"/scripts/*.sh; do
-    [ -f "$f" ] || continue
-    case "$(basename "$f")" in *.*.*) continue ;; esac
-    link_file "$f" "$CLAUDE_DIR/scripts/$(basename "$f")"
-    chmod +x "$CLAUDE_DIR/scripts/$(basename "$f")"
-  done
 }
 
 # tmuxp session configs (tmux/*.yaml -> ~/.tmuxp/<name>.yaml). Symlinked so a
@@ -1256,19 +1309,6 @@ install_zsh_modules() {
 
   generate_zshrc
 }
-
-# Codex custom prompts (codex/prompts/*.md -> ~/.codex/prompts/<name>.md,
-# typed as /<name> in the Codex TUI). Symlinked, not copied, so a repo pull
-# updates the live prompts — the Claude-side equivalents live in skills/.
-link_codex_prompts() {
-  [ -d "$DOTFILES_DIR/codex/prompts" ] || return 0
-  local f
-  for f in "$DOTFILES_DIR"/codex/prompts/*.md; do
-    [ -f "$f" ] || continue
-    link_file "$f" "$HOME/.codex/prompts/$(basename "$f")"
-  done
-}
-
 # ── Supabase: Cloud vs internal (self-hosted) ────────────────────
 # Cloud uses the `supabase` plugin's own hosted MCP (mcp.supabase.com, OAuth) —
 # nothing for us to wire. Internal can't use that (it's Cloud-only), so we
@@ -1423,23 +1463,16 @@ cmd_setup() {
   # Assemble CLAUDE.md from layers
   assemble_claude_md "$profile" "$github_user" "$hide_ai"
 
-  # Point Codex/Cursor at the same instructions (AGENTS.md -> CLAUDE.md)
-  link_agent_instructions
-
   # Install profile-specific settings.json (symlink, or stripped copy for Remote Control)
   install_settings "$profile" "$remote_control"
 
-  # Link statusline
-  link_file "$DOTFILES_DIR/statusline.sh" "$CLAUDE_DIR/statusline.sh"
-  chmod +x "$CLAUDE_DIR/statusline.sh"
+  # Every repo-owned link, from one definition (lib/links.sh).
+  relink_all
 
-  # Link scripts
-  link_repo_scripts
-
-  # Link tmuxp session configs (tmux/*.yaml -> ~/.tmuxp/)
+  # Not repo-owned links, so outside relink_all: pstack's shared-skills clone
+  # and links, tmuxp session configs, and the zsh module registry + ~/.zshrc.
+  sync_pstack
   link_tmux_sessions
-
-  # Install/upgrade the zsh module registry and generate ~/.zshrc
   install_zsh_modules
 
   # ── Create .env if missing ──
@@ -1484,23 +1517,12 @@ cmd_setup() {
   echo ""
 
   local i=1
-  local names=()
-  local visible_indices=()
-  for idx in "${!INTEGRATIONS[@]}"; do
+  for idx in $(visible_integration_indices "$profile"); do
     local entry="${INTEGRATIONS[$idx]}"
-    local name desc needs_key desktop_only
+    local name desc needs_key
     name=$(get_field "$entry" 1)
     desc=$(get_field "$entry" 2)
     needs_key=$(get_field "$entry" 3)
-    desktop_only=$(get_field "$entry" 7)
-
-    # Skip desktop-only integrations on VPS
-    if [ "$profile" = "vps" ] && [ "$desktop_only" = "yes" ]; then
-      continue
-    fi
-
-    names+=("$name")
-    visible_indices+=("$idx")
 
     local tag=""
     if [ "$needs_key" = "yes" ]; then
@@ -1514,32 +1536,41 @@ cmd_setup() {
   done
 
   echo ""
-  echo -e "  ${DIM}Examples: 1,2,3  |  1-5  |  all  |  Enter to skip${RESET}"
-  echo -n "  > "
-  read -r selection || selection=""
+  # An unattended run (ansible pipes a fixed set of answers into this script)
+  # reaches this prompt with stdin already at EOF. `read` then yields "", and
+  # "" means skip-all — which is how every fleet host ended up with
+  # `mcpServers: null` while looking like a clean setup run. DOTFILES_MCP
+  # answers the picker out of band so the unattended path states its intent.
+  #
+  # It takes NAMES, not menu numbers. Numbers shift whenever INTEGRATIONS gains
+  # a row, and a playbook that quietly installs a different server after an
+  # unrelated registry edit is the same class of silent-drift bug this fixes.
+  local selection
+  if [ -n "${DOTFILES_MCP:-}" ]; then
+    selection="$DOTFILES_MCP"
+    echo -e "  ${DIM}DOTFILES_MCP=${selection}${RESET}"
+  else
+    echo -e "  ${DIM}Examples: 1,2,3  |  1-5  |  all  |  none  |  Enter to skip${RESET}"
+    echo -n "  > "
+    read -r selection || selection=""
+  fi
 
   # ── Parse selection ──
-  local selected=()
-  if [ -z "$selection" ]; then
+  # Captured, not piped: a process substitution would discard the exit status,
+  # and an unknown name has to stop the run rather than silently install less.
+  local selection_out
+  if ! selection_out=$(integration_selection "$selection" "$profile"); then
+    fail "MCP selection names an integration that is not in the registry — aborting"
+    exit 1
+  fi
+
+  local selected=() sel_idx
+  while IFS= read -r sel_idx; do
+    [ -n "$sel_idx" ] && selected+=("$sel_idx")
+  done <<< "$selection_out"
+
+  if [ ${#selected[@]} -eq 0 ]; then
     skip "Skipped integrations (run './setup.sh add <name>' later)"
-  elif [ "$selection" = "all" ]; then
-    for ((j=0; j<${#visible_indices[@]}; j++)); do
-      selected+=("$j")
-    done
-  else
-    # Parse comma-separated numbers and ranges like "1,2,5-8"
-    IFS=',' read -ra parts <<< "$selection"
-    for part in "${parts[@]}"; do
-      part=$(echo "$part" | tr -d ' ')
-      if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then
-        local start="${BASH_REMATCH[1]}" end="${BASH_REMATCH[2]}"
-        for ((n=start; n<=end; n++)); do
-          [ "$n" -ge 1 ] && [ "$n" -le "${#visible_indices[@]}" ] && selected+=("$((n-1))")
-        done
-      elif [[ "$part" =~ ^[0-9]+$ ]]; then
-        [ "$part" -ge 1 ] && [ "$part" -le "${#visible_indices[@]}" ] && selected+=("$((part-1))")
-      fi
-    done
   fi
 
   # ── Configure selected integrations ──
@@ -1548,8 +1579,9 @@ cmd_setup() {
     echo ""
     local enabled_count=0
 
-    for sel_idx in "${selected[@]}"; do
-      local real_idx="${visible_indices[$sel_idx]}"
+    # integration_selection prints INTEGRATIONS indices directly, so there is
+    # no longer a menu-position indirection to resolve here.
+    for real_idx in "${selected[@]}"; do
       local entry="${INTEGRATIONS[$real_idx]}"
       local name desc needs_key key_var disabled_default extra_vars
       name=$(get_field "$entry" 1)
@@ -1840,6 +1872,13 @@ cmd_update() {
   # when uv is already present.
   ensure_uv
 
+  # Same reasoning as ensure_uv above: this lives in the dependency pass that
+  # update skips, and the hosts that need it most are the provisioned ones that
+  # never run `setup.sh` again. It repairs a seeded serena_config.yml missing
+  # the required `projects` key, which otherwise makes serena abort on every
+  # launch. Idempotent: a complete config is left untouched.
+  ensure_serena_dashboard_off
+
   # Read saved preferences
   local profile="desktop" github_user="" hide_ai="no" remote_control="no"
   if [ -f "$DOTFILES_DIR/.local/.profile" ]; then
@@ -1904,20 +1943,16 @@ cmd_update() {
   # Reassemble CLAUDE.md
   assemble_claude_md "$profile" "$github_user" "$hide_ai"
 
-  # Refresh the Codex/Cursor instruction symlinks (AGENTS.md -> CLAUDE.md)
-  link_agent_instructions
-
-  # Re-install settings (honors saved Remote Control choice) and re-link scripts
+  # Re-install settings (honors saved Remote Control choice) and re-link everything
   install_settings "$profile" "$remote_control"
-  link_file "$DOTFILES_DIR/statusline.sh" "$CLAUDE_DIR/statusline.sh"
-  chmod +x "$CLAUDE_DIR/statusline.sh"
 
-  link_repo_scripts
+  # Every repo-owned link, from one definition (lib/links.sh).
+  relink_all
 
-  # Link tmuxp session configs (tmux/*.yaml -> ~/.tmuxp/)
+  # Not repo-owned links, so outside relink_all: pstack's shared-skills clone
+  # and links, tmuxp session configs, and the zsh module registry + ~/.zshrc.
+  sync_pstack
   link_tmux_sessions
-
-  # Re-run each zsh module's install/upgrade step and regenerate ~/.zshrc
   install_zsh_modules
 
   # Re-apply the saved Supabase fork (cloud/internal). Preserves the stored
