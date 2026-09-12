@@ -3,6 +3,7 @@
 ## 1. Executive Summary
 
 Autonomous coding agents (Claude Code, Codex, Grok, Devin, etc.) operating across multiple machines frequently stall due to:
+
 - **Interactive blocking prompts** (`[y/N]`, confirmation dialogs, license terms, diff approvals).
 - **Ambiguous fork questions** ("Should I use X or Y?", "Where should I create this file?").
 - **Premature completion declarations** (declaring a task complete without running or passing unit tests).
@@ -70,7 +71,7 @@ flowchart TD
     Start([Start Task Run]) --> ReadTodo[Read Next Item in TODO.md]
     ReadTodo --> InjectPrompt[Inject Task + MACHINE.md Context via herdr agent prompt]
     InjectPrompt --> WaitState[Wait on herdr agent wait]
-    
+
     WaitState -->|Status: blocked| CheckPrompt{Classify Prompt}
     CheckPrompt -->|Trivial y/n or Enter| SendKeys[herdr agent send-keys]
     CheckPrompt -->|Architectural Question| QueryLLM[Query Model with Context]
@@ -78,7 +79,7 @@ flowchart TD
     SendKeys --> WaitState
     QueryLLM --> PromptResponse[herdr agent prompt with Answer]
     PromptResponse --> WaitState
-    
+
     WaitState -->|Status: idle / done| TriggerTest[Run Independent Tests in Test Pane]
     TriggerTest --> TestPass{Tests Passed?}
     TestPass -->|No - Tests Failed| FeedErrors[Feed Test Trace Back into Agent]
@@ -97,6 +98,7 @@ Each machine hosts a localized configuration file that standardizes agent behavi
 
 ```markdown
 # Machine Context & Autonomy Rules
+
 - **Machine ID**: mac-mini-backend-01
 - **Working Directory**: ~/projects/api-service
 - **Runtime**: Node 22, Bun, Docker, Postgres (5432)
@@ -114,14 +116,14 @@ Each machine hosts a localized configuration file that standardizes agent behavi
 
 When an agent enters the `blocked` state in Herdr, Master Control executes the following triage logic:
 
-| Event Type | Detected Pattern | Automated Action |
-|---|---|---|
-| **Simple Confirmation** | `\[y/N\]`, `\(y/n\)`, `proceed\?` | `herdr agent send-keys <name> y enter` |
-| **Pager / Continuation** | `Press Enter to continue`, `(END)`, `:` | `herdr agent send-keys <name> enter` or `q` |
-| **Diff / Review Prompt** | `Accept this change\?`, `Approve diff\?` | `herdr agent send-keys <name> y enter` |
-| **Architectural Fork** | *"Should I use library A or B?"* | Consult `MACHINE.md` + repo `README.md`; prompt decision via `herdr agent prompt` |
-| **Safety Violation** | `rm -rf`, `DROP TABLE`, AWS key prompt | Pause runner, trigger system audio chime, send OS notification |
-| **Infinite Loop** | Terminal buffer unchanged after 2 consecutive inputs | Halt agent, preserve session logs, ping human |
+| Event Type               | Detected Pattern                                     | Automated Action                                                                  |
+| ------------------------ | ---------------------------------------------------- | --------------------------------------------------------------------------------- |
+| **Simple Confirmation**  | `\[y/N\]`, `\(y/n\)`, `proceed\?`                    | `herdr agent send-keys <name> y enter`                                            |
+| **Pager / Continuation** | `Press Enter to continue`, `(END)`, `:`              | `herdr agent send-keys <name> enter` or `q`                                       |
+| **Diff / Review Prompt** | `Accept this change\?`, `Approve diff\?`             | `herdr agent send-keys <name> y enter`                                            |
+| **Architectural Fork**   | _"Should I use library A or B?"_                     | Consult `MACHINE.md` + repo `README.md`; prompt decision via `herdr agent prompt` |
+| **Safety Violation**     | `rm -rf`, `DROP TABLE`, AWS key prompt               | Pause runner, trigger system audio chime, send OS notification                    |
+| **Infinite Loop**        | Terminal buffer unchanged after 2 consecutive inputs | Halt agent, preserve session logs, ping human                                     |
 
 ---
 
@@ -199,21 +201,50 @@ Master Control can act as an **Autonomous On-Call SRE Fleet**, ingesting incomin
                                                    ▼
                                   ┌─────────────────────────────────┐
                                   │      RESOLUTION FEEDBACK        │
-                                  │  - Creates PR: `fix/alert-4091` │
+                                  │  - Creates PR: `fix/incident-*` │
                                   │  - Replies to email thread with │
                                   │    diff & health check proof    │
                                   └─────────────────────────────────┘
 ```
 
 ### Inbound Ingestion Pipeline
+
 1. **Email / Alert Ingestion**:
    - Monitored via a dedicated lightweight IMAP poller (`alert_poller.py`) or inbound webhook receiver.
    - Ingests alerts from Sentry, Datadog, AWS CloudWatch, Pingdom, and uptime monitors.
 2. **Alert De-duplication & Throttling**:
-   - Groups repeating alarm bursts into a single incident ID.
+   - Groups repeating alarm bursts under a single **fingerprint** (see below).
    - Prevents cascading tasks from flooding agent panes.
 
+### Incident Identity: Fingerprint vs. Incident ID
+
+Deduplication and branch naming require **two** distinct identifiers. One value cannot serve both: dedup needs _same problem → same key_, while branch creation needs _each remediation attempt → distinct key_.
+
+1. **Fingerprint (dedupe key)** — deterministic hash over the _normalized_ alert. Volatile fields (timestamps, request IDs, hex addresses, PIDs, vendored line numbers) are stripped before hashing, or every repeat of one crash reads as a new incident.
+
+   ```python
+   sig = "\n".join([service, error_class, normalized_frames])
+   fingerprint = hashlib.sha256(sig.encode()).hexdigest()[:12]   # 48 bits
+   ```
+
+2. **Incident ID (instance key)** — unique per remediation attempt, carrying the fingerprint as a prefix so history still groups.
+
+   ```python
+   incident_id = f"{fingerprint}-{datetime.now(UTC):%Y%m%d}-{secrets.token_hex(3)}"
+   branch      = f"fix/incident-{incident_id}"
+   ```
+
+**Collision budget**: 12 hex characters is 48 bits — a 50% birthday collision requires ~16.7M distinct fingerprints. Widen to 16 characters (64 bits) if ingest volume ever approaches that.
+
+**Injection containment (mandatory)**: `[0-9a-f-]` is a closed charset that cannot express `/`, `..`, `;`, `$(`, backticks, whitespace, or a leading `-`, making it simultaneously a valid git ref and shell-safe.
+
+- **Only the hash is ever interpolated** into a branch name, pane name, file path, or shell command.
+- Raw alert text (subject, body, stack trace, reporter address) is persisted to supervisor-owned state keyed by `fingerprint`, and passed to the agent as data — never as a command fragment.
+
+**Dedup rule**: same `fingerprint` inside the throttle window → append to the open incident and do **not** spawn a new pane. Outside the window → a new `incident_id` under the same fingerprint prefix.
+
 ### Service Routing Matrix (`ROUTER.json`)
+
 The Dispatcher maps incoming service names and stack traces to physical machines and Herdr panes:
 
 ```json
@@ -238,6 +269,7 @@ The Dispatcher maps incoming service names and stack traces to physical machines
 ```
 
 ### Dynamic Dispatching & Concurrency Handling
+
 - **If target pane is `idle`**: Master Control immediately prompts the pane with the incident stack trace and reproduction steps.
 - **If target pane is `working`**: Master Control uses Herdr's git worktree isolation to spin up an isolated sibling pane:
   ```bash
@@ -246,9 +278,10 @@ The Dispatcher maps incoming service names and stack traces to physical machines
   ```
 
 ### Resolution Feedback Loop
+
 1. Worker writes fix and regression test.
 2. Verification pane runs test suite and executes a live HTTP curl against the health check endpoint.
-3. Master Control auto-commits to a `fix/incident-<id>` branch and opens a PR.
+3. Master Control auto-commits to a `fix/incident-<incident_id>` branch (format above) and opens a PR.
 4. Auto-replies to the original email thread with the commit diff, passing test log, and resolution summary.
 
 ---
@@ -290,10 +323,12 @@ To eliminate the cost volatility and runaway risks of metered API keys, Master C
 ```
 
 ### 1. The Economics: Flat Subscription vs. Metered API Keys
+
 - **Metered API Keys**: Have no financial ceiling. An agent caught in an automated loop can burn through $50–$500 in hours.
 - **Flat-Rate Subscriptions ($20/mo)**: Guarantee a predictable hard spending ceiling with high volume, but require periodic re-authentication and enforce hourly rate limits.
 
 ### 2. Automated Browser Authorization Bridge (`herdr_auth_bridge.py`)
+
 1. **Detection**:
    - `herdr_unblocker` monitors for OAuth/device authorization patterns:
      ```python
@@ -308,7 +343,9 @@ To eliminate the cost volatility and runaway risks of metered API keys, Master C
    - If an email verification code is dispatched, the IMAP listener (from Section 8) parses the 6-digit code from the inbox and automatically injects it into the terminal or browser prompt.
 
 ### 3. Rate-Limit Graceful Sleep & Auto-Resume
+
 When an agent reaches its hourly or daily subscription limit:
+
 1. Herdr intercepts the notice: `"You've reached your limit until 2:45 PM"`.
 2. Master Control parses the timestamp, logs the sleep state, and sets a countdown timer.
 3. At exactly 2:45:05 PM, Master Control sends:
@@ -328,5 +365,3 @@ When an agent reaches its hourly or daily subscription limit:
    - If an agent turn count exceeds 25 turns or token limit is reached, Master Control commits progress to a checkpoint branch, resets the agent session, and passes a clean summary to a fresh agent.
 3. **Emergency Stop**:
    - Global abort command: `herdr-ctl abort --all` sends `ctrl+c` to all active panes and halts supervisors.
-
-
