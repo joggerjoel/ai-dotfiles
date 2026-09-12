@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Herdr Service Routing Matrix",
+  "description": "Maps incoming email alerts and health check failures to specific machines, repositories, and Herdr panes.",
+  "services": {
+    "auth-api": {
+      "machine": "local",
+      "herdr_pane": "api-worker",
+      "repo_path": "/Users/joggerjoel/projects/auth-api",
+      "health_check_url": "http://localhost:8080/health",
+      "verification_cmd": "pytest tests/test_auth.py",
+      "keywords": ["auth", "jwt", "login", "users", "session"]
+    },
+    "billing-service": {
+      "machine": "mac-studio.tailnet",
+      "herdr_pane": "billing-worker",
+      "repo_path": "/Users/dev/projects/billing",
+      "health_check_url": "http://100.x.y.z:9000/health",
+      "verification_cmd": "cargo test",
+      "keywords": ["stripe", "invoice", "checkout", "subscription", "payment"]
+    },
+    "web-frontend": {
+      "machine": "local",
+      "herdr_pane": "frontend-worker",
+      "repo_path": "/Users/joggerjoel/projects/web",
+      "health_check_url": "http://localhost:3000/api/health",
+      "verification_cmd": "bun test",
+      "keywords": ["react", "nextjs", "hydration", "ui", "bundle"]
+    }
+  },
+  "throttling": {
+    "dedup_window_seconds": 300,
+    "max_concurrent_incident_panes_per_machine": 2
+  }
+}
