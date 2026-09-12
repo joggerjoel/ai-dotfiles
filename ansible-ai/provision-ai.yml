@@ -44,7 +44,18 @@
     # replace a plugin one — it runs alongside it, so listing them here would
     # start two of each on every host. Only servers no plugin provides belong
     # in this list. Revisit it if the fleet's core plugin set changes.
-    dotfiles_mcp: "morphllm-fast-apply,headroom"
+    #
+    # morphllm-fast-apply is absent for a different reason: it does nothing
+    # useful here. On every host that runs it (macbookair, aorus7) it logs
+    # `MORPH_API_KEY status: missing` and falls back to a plain filesystem
+    # server, and no MORPH_API_KEY exists in ~/.claude/.env. It also hangs
+    # outright on aorus4 — npm fetches its metadata (GET 200, 328ms) and the
+    # process then produces no output and never exits, while cowsay installs
+    # and runs there in 1s and morph itself runs in 1s on aorus7 at the same
+    # node v26.2.0. A server that fails its handshake costs 30s of startup on
+    # every claude invocation, so shipping it fleet-wide trades real latency
+    # for a capability nobody currently has. Add it back alongside a real key.
+    dotfiles_mcp: "headroom"
 
     # ~/.claude/settings.json also appears on hosts where Claude Code ran before
     # ai-dotfiles was ever installed, so its presence is not proof setup.sh ran.
