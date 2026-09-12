@@ -1,6 +1,6 @@
 # Feature Gap Audit — Current State
 
-**Last run:** 2026-09-11 (run 2)
+**Last run:** 2026-09-12 (run 2 + reconciliation)
 **Run snapshot:** runs/2026-09-11-run2.md
 
 ## TL;DR
@@ -44,7 +44,7 @@ portable patterns.
 | Multi-user          | Core feature                                                                                         | Single operator                                                                                                  |
 | Deployment          | `qm` CLI, fly/aws/porter/docker/helm, terraform                                                      | ansible playbooks, `setup.sh`, pull-based from `origin/main`                                                     |
 | Review discipline   | Mandatory independent `/code-review`, dev-instance live QA, zero-comments rule                       | council / fusion / isolate / SHIPIT, pstack + superpowers, code-simplifier gate                                  |
-| CI                  | Sharded tests, eslint+oxlint+knip, PgBouncer, coauthor-trailer rejection                             | 330 tests + shellcheck + cold install, manual dispatch only                                                      |
+| CI                  | Sharded tests, eslint+oxlint+knip, PgBouncer, coauthor-trailer rejection                             | 386 tests (`just test-all`) + shellcheck + cold install, manual dispatch only                                                      |
 | Contributions       | Human-prose ADRs only                                                                                | Cold-install reports                                                                                             |
 
 ## Gap log
@@ -56,6 +56,15 @@ portable patterns.
 - **Shadow-then-enforce injection screening** (qm: `runShadowScreen`). Ours: `hooks/injection-guard.py` `INJECTION_GUARD_MODE`.
 - **Skills pinned from git** (qm: skill packs at pinned ref). Ours: `skills/unlazy/.upstream`, `scripts/vendor-*.sh`, `scripts/sync-pstack.sh`.
 - **Layered private config** (qm: `deploy/layers/<org>/` + private fork). Ours: `base/` + `profiles/` + gitignored `.local/`.
+- **Homebrew shellenv re-assert** — promoted from "Built (unmerged)" on 2026-09-12.
+  Merged as `0b4e469`. `zsh/modules/homebrew.zsh` re-asserts `brew shellenv` at module
+  order 05, ahead of zinit and the `command -v` guards that depend on it, so a missing or
+  clobbered `~/.zprofile` line can no longer strip `/opt/homebrew/bin` from PATH. Verified
+  at merge: recovers `tmux`/`tmuxp` from a PATH cut to `/usr/bin:/bin`, and leaves PATH
+  byte-identical when brew is already present, so no duplicate is prepended per shell.
+  Carried its two siblings with it — the `fastMode` desktop setting and the
+  `agents-update` claude-mem reclassification. **Found only because run 2 surveyed
+  branches; run 1 declared "Built (unmerged): none" without looking.**
 - **Codex skill allowlist widening** — promoted from "In progress" on 2026-09-11 (run 2).
   Shipped as `6aa8e94`; `setup.sh:1040` `CODEX_SKILLS` is now a multi-line array, no longer
   `(unlazy)`.
@@ -65,16 +74,10 @@ portable patterns.
 
 Surveyed 2026-09-11 (run 2), the check the first run skipped.
 
-- **Homebrew shellenv re-assert** — `origin/fix/homebrew-shellenv-module`, 3 ahead / 25
-  behind, last pushed 7 days ago. All three pieces confirmed absent from `main`:
-  `zsh/modules/homebrew.zsh` (does not exist on main), the `fastMode` desktop setting,
-  and the `agents-update` claude-mem reclassification. The shellenv fix is the valuable
-  one: without it a missing `~/.zprofile` line strips `/opt/homebrew/bin` from PATH
-  entirely, and the `command -v` runtime guards in `modules.conf` then answer false for
-  the wrong reason — a silent, total failure on Apple Silicon hosts. Nothing in this repo
-  owns that line. **This is exactly what the first run missed by surveying `main` only.**
+- ~~**Homebrew shellenv re-assert**~~ — **promoted to Shipped 2026-09-12.** See below.
 - **Fleet-connected autopilot design** — `origin/docs/fleet-connected-autopilot-design`,
-  1 ahead / 56 behind, 10 days old. A 173-line design doc, unmerged. No code.
+  1 ahead / 56 behind, 10 days old. A 173-line design doc, unmerged. No code. Still the
+  only genuinely stranded item.
 
 Resolved, not stranded:
 
@@ -170,8 +173,9 @@ unless upstream resumes commits.
 
 ## Recommended priority order
 
-1. **Merge `fix/homebrew-shellenv-module`** (run 2). Not a gap against any reference — a
-   finished fix for a silent total PATH failure, stranded 7 days. Cheapest item here.
+1. ~~Merge `fix/homebrew-shellenv-module`~~ — **done 2026-09-12, `0b4e469`.** Was the
+   cheapest item on the list: a finished fix, stranded 7 days, needing only a
+   merge-forward.
 2. **Command policy for every harness** (P1, now corroborated by qm _and_ firstmate).
    Biggest asymmetry, least design: firstmate's one-classifier-plus-transports shape is
    already cloned onto macstudio. Read it before designing anything.
@@ -188,3 +192,4 @@ Dropped from the list: `iamnolanhu/claude-dotfiles`, exhausted (see above).
 | ---------- | ----------------------- | ---------------------------------------------------------------- |
 | 2026-09-11 | runs/2026-09-11.md      | `compare https://github.com/yc-software/qm`                      |
 | 2026-09-11 | runs/2026-09-11-run2.md | complete the audit: branch survey + the two unaudited references |
+| 2026-09-12 | runs/2026-09-11-run2.md | reconciliation only: merged the stranded homebrew fix, promoted it to Shipped |
