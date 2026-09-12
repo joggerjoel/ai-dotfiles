@@ -609,6 +609,7 @@
   },
   "alwaysThinkingEnabled": true,
   "effortLevel": "high",
+  "fastMode": true,
   "tui": "fullscreen",
   "voice": {
     "enabled": true,
