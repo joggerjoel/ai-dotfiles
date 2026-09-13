@@ -79,7 +79,7 @@ Tailscale SSH. The same applies to the §8 diagram.
 
 1. **Machine Context Pack (`MACHINE.md`)**:
    - Defines local paths, ports, panes, verification commands, timezone, and conventions (schema in §4).
-   - Injected into agent sessions — including every session created by a context-blowout reset (§10.2) — to preemptively answer environmental questions.
+   - Injected into agent sessions — into every per-attempt worker, since each one starts with an empty context (§10.2) — to preemptively answer environmental questions.
    - **Two copies.** The repo-tracked copy is injected into the agent. The **supervisor-owned copy** at `~/.herdr-master/machines/<profile>/MACHINE.md` supplies every value the supervisor acts on, and is read fresh at each use (not cached at session start): `test_cmd`, `lint_cmd`, timezone, allowlists, exhaustion patterns. Reading configuration from the agent's writable checkout would let a worker set its own `test_cmd`.
    - Changes are adopted deliberately: `herdr-master trust <profile>` re-records the SHA-256. Each read compares against the recorded hash; a mismatch **suspends** the run with an open escalation carrying the diff (it does not halt — the operator can `--retry` after trusting).
    - **In the TODO lane this is a mistake-catcher, not a security control** (§0): the agent runs as the same user and could edit the file and the hash together. In the incident lane the separate user makes it real.
@@ -90,22 +90,44 @@ Tailscale SSH. The same applies to the §8 diagram.
 3. **Herdr Runtime Interface**:
    - Uses Herdr's session persistence so agent processes survive disconnections and sleep modes.
    - **This plan is invasive by design.** It injects keystrokes and prompts into live sessions; nothing here is passive telemetry. Every injected action — pane, timestamp, matched rule, keys or prompt sent, triggering buffer excerpt — is appended to `~/.herdr-master/actions.jsonl`. This is an audit trail against mistakes and for reconstruction, **not** tamper-evident against a same-user agent in the TODO lane; in the incident lane the log is owned by the operator user and the agent user cannot write it.
-   - **Capabilities depended on** (§11.1 — none verified against a real Herdr build):
+   - **Capabilities depended on**, probed against **herdr 0.9.0** (client and server, protocol 22, socket `~/.config/herdr/herdr.sock`) on 2026-09-12. Every row below was run. `✓` means the real invocation is in the Real column and works; `✗` means the assumed invocation does not exist and the Real column is the replacement.
 
-     | Capability                           | Invocation assumed                                                  | Used by                             |
-     | ------------------------------------ | ------------------------------------------------------------------- | ----------------------------------- |
-     | Create a session/window on a machine | `herdr session ensure <name>`                                       | §7 bootstrap                        |
-     | Split a pane, returning its id       | `herdr pane split <target> --direction right --no-focus --print-id` | §7, §8                              |
-     | Bind a stable name to a pane id      | `herdr pane name <pane-id> <name>`                                  | §7 (config addresses panes by name) |
-     | Start an agent in a pane             | `herdr agent start <name> --kind <k> --pane <id> --cwd <dir>`       | §3, §8                              |
-     | Send a prompt to an agent            | `herdr agent prompt <name> <text>`                                  | §3, §5, §8                          |
-     | Send raw keys to an agent / a pane   | `herdr agent send-keys` / `herdr pane send-keys`                    | §5, §6, §10.3                       |
-     | Read an agent's / a pane's buffer    | `… read <target> --source recent-unwrapped`                         | §5, §6, §10.1                       |
-     | Poll agent state (non-blocking)      | `herdr agent status <name>`                                         | §3, §7                              |
-     | Bounded wait                         | `herdr agent wait <name> --until <state> --timeout <ms>`            | §3 (≤30 s)                          |
-     | Run a shell command in a pane        | `herdr pane run <pane-id> <cmd>`                                    | §6 and all git/file work            |
-     | Pane process tree / activity         | `herdr pane info <pane-id> --pid`                                   | §10.1                               |
-     | Register a machine / address one     | `herdr machine add …` / `herdr --machine <profile> …`               | §7                                  |
+     | Capability                        | Real invocation (verified 0.9.0)                                                                               | Assumed                       | Used by          |
+     | --------------------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------- | ---------------- |
+     | Create a named session            | ✗ `herdr --session <name>`; `session` has only `list`/`attach`/`stop`/`delete`                                 | `session ensure <name>`       | §7 bootstrap     |
+     | Split a pane, returning its id    | ✓ `herdr pane split <id> --direction right\|down [--ratio F] [--cwd PATH] [--env K=V] --no-focus`              | `--print-id`                  | §7, §8           |
+     | Bind a stable name to a pane id   | ✗ **No such capability.** `herdr pane rename <pane_id> <label>` sets a display label only; the label is not addressable | `pane name`                   | §7               |
+     | Start an agent in a pane          | ✗ `herdr agent start <NAME> --kind <KIND> --pane <ID> [--timeout MS]` — **no `--cwd`**                         | `agent start … --cwd <dir>`   | §3, §8           |
+     | Send a prompt to an agent         | ✓ `herdr agent prompt <TARGET> <TEXT> [--wait] [--until S] [--timeout MS]`                                     | same                          | §3, §5, §8       |
+     | Send raw keys / literal text      | ✓ `herdr agent send-keys` / `herdr pane send-keys`; also `herdr pane send-text <id> <text>`                    | same, minus `send-text`       | §5, §6, §10.3    |
+     | Read an agent's / a pane's buffer | ✓ `… read <TARGET> --source recent-unwrapped [--lines N]`; `agent read` also offers `detection`                | same                          | §5, §6, §10.1    |
+     | Poll agent state (non-blocking)   | ✗ `herdr agent get <target>` → JSON                                                                            | `agent status <name>`         | §3, §7           |
+     | Bounded wait on state             | ✓ `herdr agent wait <TARGET> --until <S> --timeout <MS>`; states `idle\|working\|blocked\|done\|unknown`       | same                          | §3 (≤30 s)       |
+     | Run a shell command in a pane     | ✓ `herdr pane run <PANE_ID> <COMMAND>…` — **fire-and-forget**                                                  | same                          | §6, all git work |
+     | Block until output matches        | ✓ `herdr pane wait-output <id> (--match TEXT\|--regex PAT) [--source S] [--timeout MS]` → `matched_line`       | **not known to exist**        | §6 (see below)   |
+     | Pane process tree / activity      | ✗ `herdr pane process-info --pane <id>` → `shell_pid`, `foreground_process_group_id`, `foreground_processes[]` | `pane info --pid`             | §10.1            |
+     | Register a machine                | ✓ `herdr machine add\|list\|rename\|remove\|enable\|disable`                                                   | same                          | §7               |
+     | Address a remote machine          | ✗ `herdr --remote <ssh-target>`; there is **no `--machine` flag**                                              | `herdr --machine <profile> …` | §7               |
+
+     Four results change the design rather than just its spelling.
+
+     **`pane run` is fire-and-forget.** It prints nothing, and the `herdr` process exits `0` whatever the command did. The §2.3 exit-protocol invariant below is therefore not defensive style, it is the only way to obtain an exit code, and it is now **verified**: `pane run <id> 'sleep 2; { false ; } ; printf "MC-EXIT n9f2 %d\n" "$?"'` produced the line `MC-EXIT n9f2 1`. A second result matters for the wrapper. The command runs **in the pane's own shell**, so a bare `exit <n>` inside it terminates that shell and destroys the pane. The `{ … } ; printf` form is required, not merely preferred.
+
+     **`pane wait-output --regex` exists and returns structured JSON**, including `matched_line`. §6 specifies polling `pane read` on a timer for `MC-EXIT <nonce> <n>`; one blocking `wait-output` call replaces that loop, keeps the same nonce correlation, and removes the poll-interval knob entirely. Reads themselves stay text: `pane read` returns a plain terminal dump while `pane list`, `pane split`, `agent get`, `pane process-info`, and `wait-output` all return JSON on stdout. The "buffer text is not a return value" invariant therefore applies to reads specifically, and structured state is available everywhere else.
+
+     **Working directory is a pane property, not an agent property.** `agent start` has no `--cwd` and requires a pane already sitting at an interactive shell prompt. The cwd must be set when the pane is created, by `pane split --cwd <tree>` (verified: a pane split with `--cwd /tmp` reported `cwd: /private/tmp`), or by a `pane run … cd` before the agent starts. Every "started there with `--cwd`" in §2.4, §3, §8, and §10.2 means the pane, not the agent.
+
+     **A freshly started agent is blocked before it can be prompted.** `agent start` on a clean pane returned `agent_not_ready` with `agent probe-amnesia is blocked during startup and is not ready for prompts`, and `agent get` showed `agent_status: blocked` with `launch_pending: true`. The buffer held Claude Code's folder-trust menu, whose default selection is `No, exit`. This composes badly with a documented `agent prompt` behavior: **if the agent is already blocked, submission is rejected with `agent_blocked` before any input is sent.** So the dispatch sequence cannot be start-then-prompt, and §5's row 7 cannot answer a blocked agent with `agent prompt` at all. Blocked agents are reachable only through `send-keys` and `send-text`. `launch_pending` is the field that distinguishes a startup block from a mid-task block, and §5 should key on it.
+
+     **Results from a live end-to-end run** (2026-09-12, one work unit driven by hand through §3's full lifecycle on a throwaway repo: worktree, split, start, unblock, prompt, verify, commit, close). The lane completed and verification passed independently, at roughly 15 s of agent time for a trivial task. Three further results:
+
+     - **Pane names are not addressable.** `pane rename <id> mc-worker` succeeded and `pane get mc-worker` then returned `pane_not_found`. `rename` sets a display label. The supervisor must therefore hold its own name-to-id map in `state.db` and re-resolve it on restart, and §7's bootstrap cannot rely on binding a configured name to a pane.
+     - **`agent prompt` returns before the agent transitions.** The call returned with `agent_status: idle`, and the agent was still `idle` on the next poll, reaching `working` only about 5 s later. A supervisor that polls immediately after dispatch reads `idle`, finds no sentinel, and takes §3's "idle, no fresh sentinel" branch, burning a nudge on every dispatch. `agent prompt --wait` exists for exactly this and documents a 5000 ms readiness window; §3 uses it rather than polling raw.
+     - **`agent wait` returns plain text**, not JSON, joining `pane read`. Everything else measured here returns JSON on stdout.
+
+     One negative result, recorded because it was deliberately provoked. The injected prompt was made to contain the literal completion sentinel, violating the §2.3 invariant below. It did **not** collide: the sentinel appeared once in `recent-unwrapped`, because Claude Code's TUI collapses its input area and never retained the injected copy. That is per-CLI rendering behavior rather than a guarantee, and another agent kind may echo its prompt verbatim. **The invariant stands**; this run simply failed to falsify it.
+
+     Also present and unused by this plan: `herdr api snapshot` and `herdr api schema` for live structured state, `herdr worktree create|list|open|remove` for native worktree-backed workspaces, and 23 values for `--kind` including `claude`, `codex`, `gemini`, and `cursor`, which is what makes §10.2's per-attempt model rotation reachable.
 
    - **Where state lives, and who reads it.** Supervisor-owned state — `state.db`, `actions.jsonl`, the recorded config hashes — lives on the **orchestrator host only**, under `~/.herdr-master/`, and the daemon reads it with ordinary file I/O. It is never read through a pane. What lives on each worker is the machine's own `MACHINE.md` and repos; the daemon fetches `MACHINE.md` once per session start and per config read via `pane run … cat`, verifies its hash against the orchestrator-side record, and **parses the fetched copy in the daemon** rather than acting on buffer text. The `0600`/`0700` and ownership claims in §10.4 are about the orchestrator host. Per-machine queues therefore live at `~/.herdr-master/machines/<profile>/TODO.md` on the **orchestrator**, describing work on that machine.
 
@@ -133,7 +155,7 @@ Tailscale SSH. The same applies to the §8 diagram.
    | Identity  | `task_id`, recorded in the queue line itself (§2.5)                              | `incident_id` (§8)                                                                 |
    | Base      | `base_branch` from `MACHINE.md`                                                  | `base_branch` from `ROUTER.json`                                                   |
    | Isolation | Linked worktree `wt-<task_id>` on `task/<task_id>`, from `origin/<base_branch>`  | **Separate clone** owned by `herdr-agent` (below), on `fix/incident-<incident_id>` |
-   | Dispatch  | Agent started there with `--cwd`, `MACHINE.md` injected, nonce issued            | Identical                                                                          |
+   | Dispatch  | Pane created with `--cwd` there, then agent started in it (§2.3), `MACHINE.md` injected, nonce issued | Identical                                                    |
    | Verify    | §6, in the work tree                                                             | §6, in the clone, in an **agent-user** verify pane                                 |
    | Land      | Supervisor stages, scans, commits, pushes, opens a PR — never auto-merged        | Identical                                                                          |
    | Close     | Remove the tree only **after** a successful push or archive; mark the queue line | Remove the clone and **close the sibling pane**; release the lease                 |
@@ -206,9 +228,10 @@ flowchart TD
     ReadTodo -->|"unknown mark"| Escalate
     ReadTodo -->|"in-progress marker"| Resume["Resume by task_id: reattach to existing worktree"]
     ReadTodo -->|pending| MakeWt["Mark in-progress; worktree from origin/base_branch"]
-    Resume --> WaitState
-    MakeWt --> InjectPrompt["Start agent --cwd worktree; inject MACHINE.md + task + nonce"]
-    InjectPrompt --> WaitState["Poll herdr agent status (bounded)"]
+    Resume --> Packet["Build task packet: goal, TODO, MACHINE.md, tree, last failure, validated facts (§10.2)"]
+    MakeWt --> Packet
+    Packet --> InjectPrompt["Start CLEAN agent --cwd worktree; inject packet + nonce"]
+    InjectPrompt --> WaitState["agent prompt --wait (§2.3 dispatch race), then poll agent get"]
 
     WaitState --> LoopCheck{"Stall detector: §10.1"}
     LoopCheck -->|stalled| Escalate
@@ -223,7 +246,7 @@ flowchart TD
     AuthBridge --> WaitState
     Sleep --> WaitState
     SendKeys --> WaitState
-    QueryLLM -->|answer| PromptResponse["agent prompt with Answer"]
+    QueryLLM -->|answer| PromptResponse["send-text + enter with Answer (§2.3)"]
     QueryLLM -->|"error / timeout / low confidence"| Escalate
     PromptResponse --> WaitState
 
@@ -234,15 +257,16 @@ flowchart TD
     DoNudge --> WaitState
     TriggerVerify --> TestPass{"MC-EXIT nonce = 0?"}
     TestPass -->|No| RetryBudget{"Fix attempts < 3?"}
-    RetryBudget -->|Yes| FeedErrors["Feed trace back; new nonce"]
+    RetryBudget -->|Yes| CloseAttempt["Commit attempt; validate facts.json; write state.json; DESTROY worker (§10.2)"]
     RetryBudget -->|"No"| Escalate
-    FeedErrors --> WaitState
+    CloseAttempt --> Packet
     TestPass -->|Yes| Land["Stage, secret-scan, gates, commit, push, PR; mark [x]; close tree"]
     Land --> ReadTodo
 
     Escalate["Escalate: kind-tagged, §5 delivery"] --> AckWait{"herdr-master ack within 30 min?"}
-    AckWait -->|"--resolved / --retry / --approve"| Apply["Apply per §5; deliver new nonce if issued"]
+    AckWait -->|"--resolved / --approve"| Apply["Apply per §5 to the live worker; deliver new nonce if issued"]
     Apply --> WaitState
+    AckWait -->|"--retry"| CloseAttempt
     AckWait -->|"--skip"| SafeExit["Safe-default the prompt, stop agent, mark [!], archive-or-remove tree"]
     SafeExit --> ReadTodo
     AckWait -->|"no ack (timeout-exempt kinds wait)"| Halt([Exit: halted - this lane, this machine])
@@ -332,7 +356,7 @@ Row 6 is the exception, and deliberately does not read the window: a diff can ru
 | 4   | **Verification**         | The completion sentinel bearing the **current** nonce                                | Trigger §6                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | 5   | **TUI Permission Menu**  | A numbered or arrow-key menu, or a `❯`-cursor selector                               | If the options are _permission_ choices (yes / yes-and-remember / no): select the plain-affirmative, **never** a "don't ask again" variant, which would permanently remove the prompt this table depends on. If the options are _substantive alternatives_ ("1. npm 2. bun 3. pnpm"): resolve the choice per row 7, then send the **keystroke** for the chosen option — never prose into a keystroke menu. No plain-affirmative and no resolvable choice → escalate |
 | 6   | **Diff / Review Prompt** | `Accept this change?`, `Approve diff?`, or a diff viewer awaiting a decision         | Read the diff; if it matches any row-2 pattern, touches `.env` / credentials / CI config / `.github/workflows` / test or lint configuration (§6), or exceeds 400 changed lines → escalate. Otherwise approve                                                                                                                                                                                                                                                        |
-| 7   | **Contextual Decision**  | A free-text question that is **not** answerable yes/no and **not** a menu            | **TODO lane only**: resolve against §2.2 sources; answer via `agent prompt`. No answer, LLM error/timeout (30 s), or low confidence → escalate. **In the incident lane this row is disabled and always escalates** — see below                                                                                                                                                                                                                                      |
+| 7   | **Contextual Decision**  | A free-text question that is **not** answerable yes/no and **not** a menu            | **TODO lane only**: resolve against §2.2 sources; answer via `pane send-text` then `send-keys enter`, **never `agent prompt`**, which §2.3 measured as rejecting any blocked agent with `agent_blocked` before sending input. No answer, LLM error/timeout (30 s), or low confidence → escalate. **In the incident lane this row is disabled and always escalates** — see below                                                                                                                                                                                                                                      |
 | 8   | **Pager / Continuation** | `-- More --`, `(END)`, or a lone `:` as the entire last line                         | Send `q`. (`enter` advances `less` one line and re-blocks)                                                                                                                                                                                                                                                                                                                                                                                                          |
 | 9   | **Simple Confirmation**  | A **binary** confirmation: `[y/N]`, `[Y/n]`, `(y/n)`, `proceed?`, license acceptance | Send the affirmative key. `[Y/n]` is matched explicitly; omitting it left a common form unclassified                                                                                                                                                                                                                                                                                                                                                                |
 | 10  | **Unclassified**         | Anything blocked matching no row above                                               | Escalate. The default is never "send y"                                                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -392,8 +416,8 @@ silently ignored, and never leaving the escalation with no way out.
 | Safety Violation (row 2), Unclassified (row 10)       | —                                    | **yes**                                      |
 | Diff-approval escalation (row 6), test-surface change | —                                    | **yes** — accept and continue                |
 | Lockfile / dependency violation (§4)                  | —                                    | **yes** — accept the dependency, resume land |
-| Retry budget exhausted, reset budget exhausted        | **yes**                              | —                                            |
-| Stall detected (§10.1), nudge cap, handoff timeout    | **yes**                              | —                                            |
+| Retry budget exhausted                                | **yes**                              | —                                            |
+| Stall detected (§10.1), nudge cap, injection cap      | **yes**                              | —                                            |
 | `MACHINE.md` hash mismatch                            | **yes** — after `herdr-master trust` | —                                            |
 | Machine offline (§7)                                  | **yes** — retry the connection now   | —                                            |
 | Incident cap exceeded (§8)                            | **yes**                              | —                                            |
@@ -442,7 +466,7 @@ The worker's signal is a _trigger_, never evidence:
 
    **Pane serialization.** `verify_pane` and `shell_pane` are a single shell each, so they are leased exactly like worker panes: a `pane run` issued into a pane mid-`cargo test` types into the running process rather than starting a command. Work units queue for these panes FIFO, and the queue depth is reported in `herdr-master status`. The nonce correlates; it does not permit interleaving, and an earlier draft implied it did. If queueing behind other incidents becomes the bottleneck, the fix is a verify pane per concurrent slot — configuration, not protocol.
 
-3. The supervisor polls the **verification pane** for `MC-EXIT <nonce> <n>` with timeout `test_timeout_ms`. Outcomes are total:
+3. The supervisor blocks on `herdr pane wait-output <verify-pane> --regex 'MC-EXIT <nonce> [0-9]+' --source recent-unwrapped --timeout <test_timeout_ms>`, which §2.3 verified returns the matched line as JSON. An earlier draft polled `pane read` on a timer; the blocking call is equivalent, keeps the same nonce correlation, and removes the poll-interval knob. Outcomes are total:
    - `0` → pass, subject to the independence check below.
    - non-zero → fail. The trace is captured from the same verification-pane read — not from the worker, which never ran the tests — and fed back with the real exit code interpolated and a new nonce issued.
    - **Timeout with no line** → failure. Interrupt the pane (`pane send-keys C-c`), capture the partial buffer, count the attempt.
@@ -460,18 +484,19 @@ A unit is marked `[x]` only after a nonce-matched `MC-EXIT … 0`, a clean test-
 
 ### The land step
 
-Staging was previously unspecified, and the only stated policy — §10.2's `git add -u` — would have dropped the new regression test and any new module. The land step is performed by the daemon, and in this order:
+Staging was previously unspecified, and the only stated policy — an earlier §10.2's `git add -u` — would have dropped the new regression test and any new module. §10.2 now defers to this rule for its attempt commits, so there is one staging policy rather than two that disagree. The land step is performed by the daemon, and in this order:
 
-1. `git add -A` in the work tree, minus a fixed exclude set: `.herdr-incident/`, `.env*`, `*.pem`, `*.key`, `id_*`, and anything already in `.gitignore`.
-2. **Secret scan on the staged set.** The checkpoint path (§10.2) had one and the land path did not — which is backwards, since the land path is the one that publishes to a remote. A hit blocks the commit and escalates.
+1. `git add -A` in the work tree, minus a fixed exclude set: `.herdr-incident/`, `.herdr/`, `.env*`, `*.pem`, `*.key`, `id_*`, and anything already in `.gitignore`. **Plus agent-tooling droppings**, which a live run proved are not hypothetical: a single dispatched Claude Code agent left `.serena/project.yml`, `.serena/.gitignore`, and `__pycache__/*.pyc` in the tree, and `add -A` staged all four. The exclude set therefore also carries `.serena/`, `.claude/`, `.codex/`, `.gemini/`, `__pycache__/`, `*.pyc`, `.pytest_cache/`, `node_modules/`, and `.DS_Store`. This set is **open-ended by nature** — every MCP server or agent plugin that persists per-project state adds to it — so the supervisor additionally **escalates any staged path it has never seen before in that repo** rather than trusting the denylist to be complete. A denylist alone would silently publish the next tool's droppings.
+2. **Secret scan on the staged set.** The attempt-close path (§10.2) had one and the land path did not — which is backwards, since the land path is the one that publishes to a remote. A hit blocks the commit and escalates.
 3. Dependency gate (§4) and test-surface gate, both against `--cached`.
 4. Commit, then `git push -u origin <branch>` — a separate step, which `gh pr create` does not perform — then `gh pr create`. Push and PR creation run from the daemon with a credential helper, never as an interpolated token in a pane (§2.3). A failure at any step escalates with the step named; the reply email (§8.6) is sent only after the PR URL is in hand.
 
-### Retry and reset budgets
+### Retry budget
 
-- **Fix-and-reverify: 3 attempts per task.** Exhaustion escalates; only `--retry` resets it.
-- **Context resets: 2 per task** (§10.2). The retry budget decrements only on verification _failure_, so an agent that works productively but never emits a sentinel would otherwise loop reset → fresh turn budget → reset forever. Exhausting the reset budget escalates.
-- **Turn counting has a producer**: the supervisor counts what it injects — task dispatch, fix-feedbacks, row-7 answers, nudges, resume prompts — one per injected prompt, maintained in supervisor state. It does not depend on Herdr or the CLI exposing a turn count, since neither is verified to (§11.1). The 25-turn threshold is therefore "25 supervisor injections," which is the quantity the supervisor can actually observe.
+- **Fix-and-reverify: 3 attempts per task.** Exhaustion escalates; only `--retry` resets it. Each attempt is a distinct worker with an empty context (§10.2), so the budget counts workers, not conversational turns.
+- **There is no separate reset budget.** An earlier draft carried one (2 per task) because a context reset was an exceptional, lossy event worth rationing. Under §10.2 every attempt ends in a destroyed worker, so a reset is no longer a distinct event and has nothing to count. The retry budget is the only counter, and the reset-loop hazard the second budget guarded against is gone with it: an agent that works productively without emitting a sentinel is bounded by the per-attempt injection cap below, then escalated.
+- **Turn counting has a producer, and its scope is one attempt**: the supervisor counts what it injects into the current worker — packet dispatch, row-7 answers, nudges, unblocking keys — one per injected prompt, maintained in supervisor state. It does not depend on Herdr or the CLI exposing a turn count, since neither is verified to (§11.1). The threshold is therefore "supervisor injections within this attempt," which is the quantity the supervisor can actually observe. Fix-feedback is absent from that list on purpose: a verification failure ends the attempt rather than being injected back into the worker that caused it.
+- **Injection cap: 12 per attempt.** A worker that consumes its cap without reaching the verifier is stuck, and the supervisor escalates rather than nudging further. The old 25-turn threshold was sized for a worker that survived several fix-feedback rounds; one attempt needs roughly half that, and the number is a starting value to be ratified against baseline evidence per §11.2 like every other figure here.
 
 ---
 
@@ -493,11 +518,11 @@ Staging was previously unspecified, and the only stated policy — §10.2's `git
   herdr --machine worker-studio pane read billing-verify --source recent-unwrapped
   ```
 
-  If Herdr has no `--machine` flag, the fallback is `ssh <profile-target> "herdr …"` with the target resolved from the registry, not hand-written per call site (§11.1).
+  **Herdr has no `--machine` flag** (§2.3, measured). The snippet above is therefore not executable as written. Remote addressing is either `herdr --remote <ssh-target> …` or the fallback `ssh <profile-target> "herdr …"`, with the target resolved from the registry rather than hand-written per call site. Choosing between them needs a `--remote` round-trip test that this probe did not run.
 
 - **Concurrency**: one asyncio task per machine (including `local`), polling `herdr agent status` every 5 s; any `agent wait` bounded to ≤30 s. Blocking on one machine would starve the rest — which is why §1 describes polling rather than real-time ingestion. Shared supervisor state is deliberate and enumerated: the action log, the escalation registry, pane leases, incident caps and counters, the webhook replay cache, and the `aborting` flag. Machines share nothing else.
 
-- **Pane bootstrap** (first contact with a machine): `herdr session ensure <profile>` creates a session if none exists — `pane split` needs an existing pane, so a machine with no Herdr session could not otherwise be bootstrapped. Then, for each pane named in `MACHINE.md` that does not exist: split, capture the id, and **bind the configured name to it** with `herdr pane name`, because config addresses panes by name (`billing-verify`) while `split` returns an id. An agent is started only in `worker_pane`.
+- **Pane bootstrap** (first contact with a machine): `herdr --session <profile>` creates a session if none exists (there is no `session ensure`, §2.3) — `pane split` needs an existing pane, so a machine with no Herdr session could not otherwise be bootstrapped. Then, for each pane named in `MACHINE.md` that does not exist: split with `--cwd` set to the unit's tree and read the new id from the split's own JSON at `.result.pane.pane_id` (there is no `--print-id`). **The configured name is resolved supervisor-side, not by Herdr.** Config addresses panes by name (`billing-verify`), `split` returns an id, and `pane rename` only sets a display label that `pane get` cannot resolve (§2.3, measured). The name-to-id map therefore lives in `state.db`, is written at bootstrap, and is re-validated against `pane list` on every daemon start, since a pane closed while the daemon was down would otherwise leave a name pointing at a dead or recycled id. `pane rename` is still issued, for the operator's benefit in the sidebar only. An agent is started only in `worker_pane`.
 
 - **Unreachable machines**: exponential backoff (5 s → 5 min ceiling), `offline` after 3 consecutive failures, and the offline event is **escalated** — a machine that silently vanished while running an agent is exactly what a human needs told. That escalation is **exempt from the 30-minute timeout** (§5) and backoff continues underneath it: an outage longer than 30 minutes — a sleeping laptop, a weekend — would otherwise convert to `halted` and the resync below would never be reached. Reconnection auto-closes the escalation. Incidents routed to an offline machine escalate immediately.
 - **Graceful stop**: `herdr-master stop <profile>` ends a machine's run at the next unit boundary, or immediately with `--now` (archiving the in-flight unit per §2.4). Without it, a running machine with no open escalation could only be stopped by fleet-wide `abort`.
@@ -658,7 +683,8 @@ The health check is three fields, not one command. `just serve-test --port 0 && 
   git clone --origin origin --branch "<base_branch>" "<remote_url>" "<clone_root>/<incident_id>"
   git -C "<clone_root>/<incident_id>" checkout -b "fix/incident-<incident_id>" "origin/<base_branch>"
   chown -R herdr-agent "<clone_root>/<incident_id>"      # the tree is the agent's from here
-  NEW_PANE=$(herdr pane split <herdr_pane> --direction right --no-focus --print-id)
+  NEW_PANE=$(herdr pane split <herdr_pane> --direction right --no-focus --cwd <clone> \
+    | jq -r '.result.pane.pane_id')
   herdr agent start "incident-<incident_id>" --kind "<agent_kind>" --user herdr-agent \
       --pane "$NEW_PANE" --cwd "<clone_root>/<incident_id>"
   # inject MACHINE.md (including the sentinel rule) and a fresh nonce before the incident prompt
@@ -735,7 +761,7 @@ Reached from §5 row 3 — without that row this feature is unreachable, since a
    - Absolute times carry no date or timezone. Interpret in **the target machine's** timezone (`MACHINE.md` §4, not the orchestrator's); a time earlier than now means tomorrow. No declared timezone → escalate.
    - Relative forms convert directly.
    - Current Claude limits are **rolling multi-hour windows**, not fixed hourly buckets, so the parsed reset is a lower bound.
-3. Resume is verified, not fired blind. At reset + 60 s (a margin, not the false precision of "exactly 2:45:05"), read the buffer to confirm the CLI accepts input. A pane still showing the notice is re-checked after 60 s, then 2 min, then 5 min, before escalating. Only then prompt the agent to resume. The prompt restates **the work unit's own text** — the queue line's title and continuation, or the incident's alert path — plus a fresh nonce, and the handoff summary as well if one exists from a prior reset. It never says "resume from TODO.md": that is wrong for incidents, and a handoff record exists only after a §10.2 reset, so a rate-limited agent on a fresh unit would have been pointed at nothing.
+3. Resume is verified, not fired blind. At reset + 60 s (a margin, not the false precision of "exactly 2:45:05"), read the buffer to confirm the CLI accepts input. A pane still showing the notice is re-checked after 60 s, then 2 min, then 5 min, before escalating. Only then prompt the agent to resume. The prompt restates **the work unit's own text** — the queue line's title and continuation, or the incident's alert path — plus a fresh nonce. It never says "resume from TODO.md": that is wrong for incidents, and would have pointed a rate-limited agent on a fresh unit at nothing. No summary of prior work is appended, per §10.2.
 4. Sleep state, wake time, and result go to the action log.
 
 ---
@@ -750,21 +776,41 @@ One detector, evaluated at `LoopCheck` on every poll — not the two contradicto
 - **Two trip conditions, because the common freeze produces no inputs at all.** An agent hung in `working` state receives no nudges (those go only to `idle`), no fix-feedback, and no answers, so a condition requiring "≥2 supervisor inputs since the last change" could never fire on it — and no other cap bounds it, since the turn cap counts injections and there are none.
   - _Blocked-and-unresponsive_: 3 identical consecutive buffer hashes **and** ≥2 supervisor inputs since the last change **and** the process tree is idle.
   - _Working-and-frozen_: buffer unchanged **and** the process tree idle for `stall_idle_seconds` (default 900), regardless of input count.
-- **Idle probe.** Resolve the pane's PID (`pane info --pid`) and walk its **descendants** — the foreground process is the agent CLI, which sits in state `S` while its child runs `cargo test`, so checking only the foreground process measures the wrong thing. Compare **`cputime` deltas** between two samples 30 s apart; `ps %cpu` is cumulative-since-start, so it reads a long-lived agent as busy forever and a freshly-spawned compile as idle. Zero cputime growth across the whole tree, and no process in state `R`, counts as idle.
+- **Idle probe.** Resolve the pane's PID (`herdr pane process-info --pane <id>`, which returns `shell_pid`, `foreground_process_group_id`, and a `foreground_processes[]` array of `{pid, argv, cwd, name}` — §2.3) and walk its **descendants** — the foreground process is the agent CLI, which sits in state `S` while its child runs `cargo test`, so checking only the foreground process measures the wrong thing. Compare **`cputime` deltas** between two samples 30 s apart; `ps %cpu` is cumulative-since-start, so it reads a long-lived agent as busy forever and a freshly-spawned compile as idle. Zero cputime growth across the whole tree, and no process in state `R`, counts as idle.
 - **Fallback if Herdr exposes no pane PID** (§11.1): trip on buffer hashes alone, but only after the buffer has been unchanged for longer than `test_timeout_ms` — a duration, not a hash count, so a long build outlives it. Slower detection, but it does not kill live work.
 - **One action**: disengage the unblocker for that pane, mark it `escalated`, escalate. Disengaging alone would leave the pane blocked with nobody told; `--retry` re-engages.
 - **Known limit**: a hash detector catches only a _frozen_ buffer. A thrashing loop emitting different failing output each cycle — the shape of the `FeedErrors` loop and the nudge cycle — never trips it. Those are bounded by the 3-attempt retry budget, the 3-nudge cap, the 25-injection turn cap, and the 2-reset cap. All five mechanisms are required; none substitutes for another.
 
-### 2. Context Blowout Mitigation
+### 2. Worker Context Lifecycle (Amnesiac Workers)
 
-Triggered by 25 supervisor injections (§6), or a CLI context-exhaustion notice matched against the per-kind patterns in `MACHINE.md`; an unlisted kind escalates.
+The invariants are stated once, in the `amnesiac-workers` skill (`skills/amnesiac-workers/SKILL.md`); this section is their implementation against panes, worktrees, and nonces. **Master has memory. Workers have amnesia. The repository has truth. Tests determine completion.**
 
-1. **Handoff.** The supervisor asks the still-running agent for a structured handoff — task, files touched, what passed, what remains, next step — reads it back and stores it supervisor-side. The agent authors it; the supervisor elicits and keeps it. No readable summary within 90 s → escalate; the reset is not performed with no handoff.
-2. **Secret scan runs before the commit, not after** — an earlier draft sequenced the scan as blocking a commit that had already happened. On a hit: block, escalate.
-3. **Checkpoint commit**: `git add -u` on tracked files only, inside the task's worktree, **on the task branch**. A `checkpoint/<work_unit_id>` ref is created with `git branch … HEAD` — created, not checked out, so HEAD does not move and the PR branch still contains the work. Untracked files are listed in the handoff but never committed, keeping `.env`, keys, and build detritus out.
-4. **The checkpoint is not evidence.** It is unverified work-in-progress; only a nonce-matched `MC-EXIT … 0` marks anything done.
-5. **Fresh session**: stop the exhausted agent first, then start the new one with `--cwd` the same worktree, re-inject `MACHINE.md` (with the §2.1 hash check), then the handoff and a fresh nonce. Starting a second agent into an occupied pane, and skipping the re-injection that discards the environmental context, were both live defects.
-6. The retry budget carries across the reset; the reset budget (2 per work unit, §6) decrements.
+This is not blowout mitigation. An earlier draft treated a context reset as an exceptional event, triggered at 25 injections or a CLI exhaustion notice, and bridged it with an agent-authored handoff summarizing what remained and what to do next. Both halves were wrong. Rationing resets meant the common case was a worker accumulating every failed hypothesis it had produced across up to three verification rounds, and the handoff propagated the worst of that content in its most confident form, stripped of the uncertainty that produced it. A worker is now destroyed **after every attempt**, and nothing it said survives.
+
+**Three things end an attempt**: a verification failure with retry budget remaining (§6, the normal path), a CLI context-exhaustion notice matched against the per-kind patterns in `MACHINE.md` (§4; an unlisted kind escalates), or the per-attempt injection cap (§6). All three run the same close. Exhaustion is no longer a special case with its own machinery, it is an early close, which is the point: the handling that used to be reserved for the rare path is now the only path.
+
+**The attempt close**, performed in this order:
+
+1. **Secret scan before the commit, not after.** An earlier draft sequenced the scan as blocking a commit that had already happened. On a hit: block, escalate, do not commit.
+2. **Attempt commit** on the task branch inside the unit's work tree, staged with §6's land-step rule (`git add -A` minus the fixed exclude set, which gains `.herdr/`) rather than the `git add -u` an earlier draft specified here. `add -u` silently dropped every new file, which is most of what a worker writing a module or a regression test produces. The message is fixed and carries the attempt number and the verifier exit code.
+3. **The attempt commit is not evidence.** It is unverified work-in-progress. Only a nonce-matched `MC-EXIT … 0` plus the §6 gates marks anything done, and the human squash-merges the PR, so a branch of failed attempts costs nothing downstream.
+4. **Harvest and validate.** Read `.herdr/facts.json` and `.herdr/blockers.json` through `pane run … cat`, parse in the daemon, and validate with `skills/amnesiac-workers/scripts/validate_state.py`. These are worker-authored, therefore untrusted, and they arrive from a process that just failed its verifier. A file that fails validation is dropped whole and its reasons escalated; partial salvage would reintroduce the judgment call the closed schema exists to remove. A blocker escalates.
+5. **Write master state** to `~/.herdr-master/machines/<profile>/units/<unit_id>/state.json` on the orchestrator, never inside the work tree (§2.3). A worker that can edit its own attempt counter, retry budget, or verifier record can talk itself into a pass. The schema holds `unit_id`, `attempt`, `retry_budget`, and the last verification result, and **rejects** commit, files-changed, and remaining-TODO as unpermitted fields, because those derive from `git rev-parse`, `git diff --name-only`, and the queue at packet-build time, and a stored copy drifts the moment an attempt dies between the commit and the write.
+6. **Destroy the worker**: stop the agent, then close its pane. Retire the nonce. Stopping before starting anything new is the same live defect an earlier draft named, and it still applies: starting a second agent into an occupied pane types into the first one.
+
+**The packet build**, which happens on every dispatch, including the first and including a daemon-restart resume (§3):
+
+Assemble from scratch, never by mutating the previous packet: the original goal from the queue line or incident, the remaining `[ ]` items, `MACHINE.md` re-fetched with the §2.1 hash check, the work tree at its current commit, the last verifier failure verbatim from `state.json`, and the validated facts. Issue a fresh nonce. The packet names no prior author and contains no transcript, plan, or summary, which is what lets `--kind` vary per attempt: attempt 3 may run on a different model than attempt 2 with no translation step. Nothing else is injected.
+
+**Measured, 2026-09-12**, three attempts driven against a deliberately unsatisfiable task (two tests asserting different values for the same call). Three results.
+
+Amnesia held. Attempt 2 ran with **no carried state at all** — a driver bug sent `state.json` to the wrong path, so its packet claimed this was the first attempt. It read the tree, re-ran the verifier itself, and correctly changed nothing rather than thrashing or reverting attempt 1's work. The repository carried the progress, which is the load-bearing claim of this section and the only one that had never been exercised.
+
+**The packet must carry the blocker instruction.** Without it, attempt 2 reported `done` against a red verifier and said nothing about why. §6 catches that, because a sentinel is never evidence, but the lane would have drained its retry budget re-confirming an impossibility. Attempt 3, given one paragraph naming `.herdr/blockers.json` and its shape, wrote a valid blocker — and ran the **reciprocal experiment** first, flipping the implementation to prove the other test then failed. Asking for evidence rather than an explanation is what produced a record a supervisor can act on. It also caught a stale instruction in the supervisor's own packet, naming files that did not exist in that repo.
+
+**The startup block is once per path, not once per dispatch.** Attempts 2 and 3 reached `idle` with no trust prompt, because the CLI had already recorded the worktree as trusted. §3 must branch on the observed state rather than assume a block, and `launch_pending` is the field to branch on (§2.3).
+
+**Residual.** Rediscovery is paid on every attempt. Where a task's difficulty lives in accumulated understanding of an unfamiliar repo, `facts.json` recovers only the part that reduces to evidence, and the rest is re-derived. That cost is real and is accepted in exchange for an attempt whose failure mode is ignorance rather than confident error.
 
 ### 3. Emergency Stop
 
@@ -775,7 +821,7 @@ Triggered by 25 supervisor injections (§6), or a CLI context-exhaustion notice 
 3. Stop the daemon's own work: cancel the asyncio poll tasks in-process (they are tasks, not processes, and cannot be signalled by PID), then terminate the subprocesses from the pidfile — alert poller, webhook receiver, auth bridge, Chrome automation (tabs closed, localhost server shut down, launch token invalidated). Because all of these are children of the one daemon (§2.6), this is a single coherent step rather than a hunt across unrelated processes.
 4. Interrupt **every** pane — agent, verify, and shell — with `pane send-keys C-c`, then re-read each after 5 s and repeat once. A verify pane mid-`cargo test` or a shell pane mid-command is otherwise left running. Note the limit honestly: `C-c` cancels the _current turn_ of an agent CLI; it does not exit the process. Abort leaves the CLIs running and idle, which is intended — the operator keeps their sessions — and §11.1 owns confirming one `C-c` suffices per kind.
 5. Run `health_stop_cmd` for every service with a started test instance, then collect each work tree's `git status --porcelain` through the `shell_pane` **after confirming it is idle** — never by typing a shell command into an agent pane, where it lands as a prompt for the agent rather than a command for a shell.
-6. Repos are deliberately **left dirty**; the abort report names them and recovery is a human decision. There is no automated rollback of an interrupted agent's edits — the §10.2 checkpoint ref and the tree-per-unit boundary are what make that recoverable at all.
+6. Repos are deliberately **left dirty**; the abort report names them and recovery is a human decision. There is no automated rollback of an interrupted agent's edits — the §10.2 per-attempt commits and the tree-per-unit boundary are what make that recoverable at all.
 7. Release all pane leases; write an abort summary to the action log.
 
 `abort` interrupts the agents fleet-wide and tears down the daemon's components; `halted` (§3) ends one lane's run on one machine. A halted unit's agent is left alive and typically still blocked on the prompt that caused the escalation — so **`herdr-master run` alone would re-classify it and re-halt.** Recovery is therefore explicit: resolving the blocked prompt is part of the operator's action, either through `ack --resolved` (which re-reads the buffer and continues) or by answering in the pane before re-running. `run` on a machine whose agent is still blocked on an unresolved prompt refuses and says so, rather than starting a loop that halts again in 30 minutes.
@@ -802,30 +848,50 @@ Per §0, the two lanes differ, and this is where that becomes enforcement rather
 
 ## 11. Preconditions & Open Items
 
-> **Review status: not converged.** Five cold-review rounds (§ revision log) reduced MATERIAL
-> findings 25 → 30 → 37 → 28 → 22 without reaching zero, and the residue has a single cause
-> worth stating up front: **every mechanism below is specified against a Herdr CLI, a transport,
-> and a privilege model that §11.1 flags as unverified.** Each round of added specificity
-> therefore generates a fresh layer of "this cannot compose as written" — 22 such findings are
-> open at the time of writing, concentrated in five places: the orchestrator/worker split for
-> daemon-performed git work, the mechanism that hands a clone to another OS user, the transport
-> for writing untrusted alert text to a worker, the long-running health instance's pane
-> occupancy, and whether a nonce visible via `ps` can gate anything against same-UID code.
+> **Review status: CLI surface verified, privilege model still open.** Five cold-review rounds
+> (§ revision log) reduced MATERIAL findings 25 → 30 → 37 → 28 → 22 without reaching zero, and
+> the residue had a single stated cause: every mechanism was specified against a Herdr CLI, a
+> transport, and a privilege model that nothing had verified.
 >
-> Those are not resolvable by further editing. They are resolved by verifying §11.1 against a
-> real Herdr build and rewriting against what it actually offers. **Treat §§2–10 as the intended
-> architecture and the invariants as settled; treat every command, path, and privilege step as
-> provisional until §11.1 is closed.**
+> **The CLI half of that is now closed.** The §2.3 capability table was probed against herdr
+> 0.9.0 on 2026-09-12 and every row carries a measured result. Five assumed invocations do not
+> exist, one capability the plan did not know about (`pane wait-output`) removes a poll loop from
+> §6, and two results are design-level rather than cosmetic: working directory belongs to the
+> pane rather than the agent, and a blocked agent cannot be reached with `agent prompt` at all.
+>
+> **What remains open is the privilege model and the prompt corpus**, both listed in §11.1. The
+> single ship blocker is unchanged and untested: whether `agent start` and `pane run` can execute
+> as a different OS user (§10.4). Until that is answered the incident lane does not ship, and
+> **§§2–10 remain the intended architecture with every privilege step provisional**, though the
+> commands themselves are now real.
 
 ### 1. Verify the real surfaces (blocking)
 
-- **Herdr CLI.** Every gate here is expressed in `herdr …` commands and **none are verified against a real build.** §2.3 is the dependency list. Run each and record the result; where the surface differs, rewrite the affected section rather than working around it. Specifically unconfirmed: `--source recent-unwrapped`; the agent/pane read and send-keys split; `session ensure`; `pane name`; `pane split --print-id`; `pane info --pid` and whether a process tree is reachable (§10.1 states its fallback); `agent start --cwd`; **`agent start` and `pane run` as a different OS user** (§10.4 — the incident lane does not ship without it); a `--machine` flag; `agent status` output shape; and the state vocabulary (`blocked`, `idle`, `working`). `done` is deliberately **not** assumed to be a Herdr state: §6 derives it from the nonce sentinel.
+- **Herdr CLI — verified 2026-09-12 against herdr 0.9.0.** §2.3 holds the measured table; this is the residue. **Confirmed as assumed**: `--source recent-unwrapped`, the agent/pane read and send-keys split, `agent wait --until --timeout`, `pane run`, `machine add`, and the state vocabulary, which is exactly `idle|working|blocked|done|unknown`. **Corrected**: `session ensure`, `pane name`, `pane split --print-id`, `pane info --pid`, `agent status`, `agent start --cwd`, and the `--machine` flag are all wrong; §2.3 gives each replacement. **Newly available**: `pane wait-output`, `pane send-text`, `api snapshot`, `api schema`, `worktree create`, and `launch_pending` on `agent get`.
+
+  One correction of record. This section previously said `done` is "deliberately **not** assumed to be a Herdr state." `done` **is** a real state in `agent wait --until` and `agent get`. The design conclusion is unaffected and stands on its own footing, which is §6's rule that a worker's self-assessment is never evidence, so §6 keeps deriving completion from the nonce sentinel. Only the factual premise was wrong.
+
+  **Still unverified and still blocking**: `agent start` and `pane run` **as a different OS user** (§10.4). The incident lane does not ship without it, and nothing in this probe touched it.
+
 - **Agent prompt corpus.** §5 rows 5–9 assume text current CLIs may not emit, and a harness-level permission prompt cannot be suppressed by a `MACHINE.md` rule. Capture real blocked-state buffers from every agent kind in use — permission menus, diff viewers, session-expiry notices, limit notices — and rewrite the patterns from the captures. Also confirm whether one `C-c` interrupts each CLI (§10.3). Until then, over-escalation is the expected and acceptable failure mode.
+
+  **First corpus entry, captured 2026-09-12** from `agent start --kind claude` on a clean pane. The agent reached `blocked` with `launch_pending: true` before accepting any input, showing Claude Code's folder-trust menu:
+
+  ```
+   Quick safety check: Is this a project you created or one you trust? …
+
+   ❯ No, exit
+     Yes, I trust this folder
+
+   Enter to confirm · Esc to cancel
+  ```
+
+  Three things follow. Startup blocks exist and are the **first** thing a dispatched agent does, so §3 must clear one before any prompt. The default selection is the safe one, so a blind `enter` exits the agent rather than proceeding, which means §5's TUI-menu row must select explicitly rather than confirm the default. And the menu is reached only by `send-keys`, since `agent prompt` refuses a blocked agent outright.
 - **Auth endpoints.** Every entry in the §9.2 allowlist is unverified; confirm each real activation endpoint or drop the entry.
 
 ### 2. Ratify the numbers from baseline evidence
 
-Starting defaults, not measured values: retry budget 3, nudge cap 3, reset budget 2, turn cap 25 injections, ack timeout 30 min, throttle window 1800 s, `pr_mute_seconds` 86400, `max_concurrent_incidents` 4, `max_incidents_per_hour` 12, stall detector 3 buffers / 2 inputs / two 30 s cputime samples / `stall_idle_seconds` 900, OTP wait 120 s, auth re-approval floor 10 min, `test_timeout_ms` 600000, fingerprint width 12, diff-size escalation 400 lines, match window 40 lines, replay-cache retention 24 h.
+Starting defaults, not measured values: retry budget 3, nudge cap 3, injection cap 12 per attempt, ack timeout 30 min, throttle window 1800 s, `pr_mute_seconds` 86400, `max_concurrent_incidents` 4, `max_incidents_per_hour` 12, stall detector 3 buffers / 2 inputs / two 30 s cputime samples / `stall_idle_seconds` 900, OTP wait 120 s, auth re-approval floor 10 min, `test_timeout_ms` 600000, fingerprint width 12, diff-size escalation 400 lines, match window 40 lines, replay-cache retention 24 h.
 
 Two of these are residual-risk knobs rather than tuning knobs, and are called out so they are
 not quietly left at the default: `pr_mute_seconds` trades duplicate incidents against a live
@@ -851,6 +917,10 @@ Web dashboard; auto-merge of any PR; multi-operator authorization; an OS-user bo
 
 ## Revision Log
 
+- **2026-09-12 — first live failing-path run.** Three attempts against an unsatisfiable task, exercising the §10.2 per-attempt destroy loop that the amnesiac-worker rewrite added and nothing had run. Amnesia held: an attempt dispatched with no carried state at all read the tree, re-ran the verifier, and declined to change anything rather than thrashing. Two gaps closed. A packet with no blocker channel produces `done` against a red verifier and silence, so §10.2 now requires the blocker instruction in every packet and `skills/amnesiac-workers` carries the wording that worked. The startup trust prompt is once per path, not once per dispatch, so §3 branches on `launch_pending` rather than assuming a block. The validator's 200-character cap on `need` was measured too tight against a real blocker (276 chars) and was raised to 400 with tests.
+- **2026-09-12 — first live TODO-lane run.** One work unit driven by hand through §3's whole lifecycle against a throwaway repo. It completed: the agent fixed the code, emitted its sentinel, and an independent `MC-EXIT … 0` came back from a separate verify pane. Four defects surfaced that neither five review rounds nor the CLI probe had found, all of them at seams between verified-working pieces. `pane rename` sets a display label that `pane get` cannot resolve, so §7's name-binding bootstrap was replaced by a supervisor-side name-to-id map revalidated on daemon start. `git add -A` staged `.serena/project.yml` and `__pycache__/*.pyc` that the dispatched agent's own tooling wrote into the tree, so §6's land-step exclude set grew and gained an escalate-on-unseen-path rule, since no denylist can anticipate the next MCP server. `agent prompt` returns before the agent leaves `idle`, which would have burned a nudge per dispatch, so §3 now dispatches with `--wait`. `agent wait` returns text rather than JSON. Recorded as a non-result: a deliberately provoked sentinel collision did not reproduce, because Claude Code's TUI does not retain injected prompt text in `recent-unwrapped`; the §2.3 invariant stands unfalsified rather than confirmed.
+- **2026-09-12 — §11.1 CLI probe against herdr 0.9.0.** Every row of §2.3's capability table was run against the live server and now carries a measured result. Five assumed invocations do not exist (`session ensure`, `pane name`, `pane split --print-id`, `pane info --pid`, `agent status`, plus the `--machine` flag and `agent start --cwd`). Four results are design-level. `pane run` is fire-and-forget and returns no exit code, which verifies rather than merely motivates the MC-EXIT nonce protocol, and a bare `exit` inside the command destroys the pane. `pane wait-output --regex` exists and returns JSON, replacing §6's poll loop. Working directory is a pane property, so `pane split --cwd` carries it and `agent start` cannot. A freshly started agent blocks on a startup prompt before accepting input, and `agent prompt` refuses any blocked agent with `agent_blocked`, so §5 row 7 and §3's answer path moved to `send-text` plus `send-keys`. One correction of record: `done` is a real Herdr agent state, contrary to §11.1's previous claim, though §6's reason for not trusting it is unaffected. The privilege model (§10.4, `agent start` as another OS user) was not probed and remains the single ship blocker.
+- **2026-09-12 — amnesiac-worker rewrite.** The worker lifecycle inverted: a worker is now destroyed after every attempt rather than resumed until a context blowout forced a reset. §10.2 drops the agent-authored handoff (a summary is contamination in its most confident form), the `checkpoint/<unit_id>` ref, and the 2-per-task reset budget; it gains a per-attempt close (secret scan, attempt commit under §6's staging rule, validated harvest of `.herdr/facts.json`, master state write, worker destruction) and a packet build that assembles from git and typed state rather than mutating the previous packet. §6 loses the reset budget and rescopes turn counting from per-task to per-attempt with a 12-injection cap. §3's `FeedErrors` edge is gone: a verification failure ends the attempt instead of being injected back into the worker that caused it. Invariants extracted to `skills/amnesiac-workers/SKILL.md`; the ban on reasoning in surviving state is enforced by a closed schema with required evidence fields, not by instruction (`skills/amnesiac-workers/scripts/validate_state.py`).
 - **2026-09-12 — Council adversarial review** (8 lenses, 154 findings). Incident identity split into a dedupe fingerprint and a per-attempt instance id.
 - **2026-09-12 — isolate round 1** (`--wide`: fable deep pass + 4 sonnet lenses; 102 findings, 38 distinct MATERIAL). Triage precedence fixed so Safety precedes Confirmation; diff auto-approval given content inspection; loop detection unified; `Escalate` given outcomes and a timeout; verification rebuilt on a captured exit code instead of a `"passed"` substring match; verification commands sourced from config rather than hardcoded; ingress authentication and prompt-injection containment added; the auth bridge narrowed from domain-wildcard approval to an exact-endpoint allowlist; pane leases added; real `git worktree` commands supplied; auto-reply stripped of diffs; fleet polling made non-blocking; emergency stop extended beyond panes. Unmeasured figures removed; collision arithmetic and the injection-containment argument corrected.
 - **2026-09-12 — isolate round 2** (`--review`; 30 MATERIAL, all in round 1's own fixes). Supervisor-owned `MACHINE.md` separated from the agent-writable checkout; the dependency allowlist given a real enforcer; per-task worktrees created by the TODO lane; `herdr-master ack` added as the escalation input channel; unparseable-queue-line quarantine; nudge cap; §5 expanded with a TUI-menu row and disjoint confirmation rows; single-use nonce added to the completion sentinel; verification fixed to read the verify pane and `cd` into the worktree; `verify_pane`/`shell_pane` moved into the schema with bootstrap; reconnection resync defined; email ingress tightened to DMARC alignment; sibling worktrees given `--cwd`, `MACHINE.md`, and an explicit base branch; the auth URL recognizer fixed for query-less endpoints; the Chrome extension's socket direction corrected; stall-detector idle check given a producer; checkpoint commits kept on the task branch; abort resequenced; halt scope narrowed to one machine.
