@@ -22,7 +22,8 @@ import secrets
 import shlex
 import subprocess
 
-SENTINEL = "MC-EXIT"
+SENTINEL = "MC-EXIT"       # status line from a wrapped `pane run`
+DONE_SENTINEL = "MC-DONE"  # completion claim from a worker (section 4 rule 6)
 DEFAULT_TIMEOUT_S = 30
 
 # 2.3: an injected prompt must never contain a string the supervisor matches on, or the
