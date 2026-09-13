@@ -35,6 +35,7 @@ pstack provides the routing brain and fan-out tools; unlazy wraps long runs.
 | Conventional approach feels wrong                              | `first-principles` / `principle-redesign-from-first-principles`                   |
 | Bug / failing test / "that's weird"                            | `superpowers:systematic-debugging` + `principle-fix-root-causes` — BEFORE any fix |
 | Large migration, no narrower playbook                          | `figure-it-out` (auditable playbook + hypothesis loop)                            |
+| Retry loop where attempt N inherits N-1's reasoning            | `amnesiac-workers` (fresh worker per attempt, evidence-only state)                |
 | Long/multi-part/unattended, or burned before by half-done work | wrap everything in `unlazy` (§2) + `show-me-your-work`                            |
 | Question, not a change                                         | `how` (mechanics) / `why` (rationale) / `teach` (both, for a human)               |
 
@@ -126,6 +127,7 @@ Pairs with `show-me-your-work` (decision trail),
 | principle-* (21 leaves)                                                           | CORE      | The decision rules; cite the leaf that drove the choice                 |
 | architect / arena / swarm / interrogate                                           | ON-DEMAND | Design-first, bakeoff, fan-out, adversarial — see Phase 1/2/4           |
 | blast-radius                                                                      | ON-DEMAND | Pre-ship for untrusted diffs                                            |
+| amnesiac-workers                                                                  | ON-DEMAND | Designing a retry loop; destroy the worker per attempt, keep typed state |
 | figure-it-out                                                                     | ON-DEMAND | Big migrations                                                          |
 | unlazy · show-me-your-work                                                        | ON-DEMAND | Long-run wrapper + decision trail                                       |
 | recall · teach · how · why                                                        | ON-DEMAND | Context resume; explanation                                             |
