@@ -43,9 +43,11 @@ defined consequence, listed against each field below, rather than a silent defau
   5. Where two implementations are equally valid, match the existing project patterns
      rather than pausing for human input.
   6. Follow the repo's existing directory structure.
-  7. Signal completion with the completion sentinel and the nonce supplied with the task.
-     The literal sentinel lives here and in the supervisor, and is deliberately never
-     repeated inside an injected prompt (§2.3).
+  7. Signal completion by printing `MC-DONE` followed by a space and the nonce supplied
+     with the task, and nothing after it. The literal lives here and in the supervisor.
+     A prompt supplies only the nonce and never the pair, because the supervisor matches
+     on `MC-DONE <nonce>` and a prompt containing that pair could satisfy the match with
+     its own echo (§2.3). An echo of this file cannot, since it carries no nonce.
 
 The git and PR token backend is deliberately absent from this file. The daemon reads it, the
 daemon runs on the orchestrator, and it has no access to a remote machine's keychain. Chrome
