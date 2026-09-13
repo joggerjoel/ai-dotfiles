@@ -1,35 +1,53 @@
-# Machine Context Template
+# Machine Context & Autonomy Rules
 
-Use this template to create a localized `MACHINE.md` on each machine in your fleet.
-This file provides context to agents running on this machine so they don't stop to ask environmental, path, or convention questions.
+Copy this to each machine and fill in the placeholders. Two copies exist (plan §2.1): the
+repo-tracked one is injected into agents, and the supervisor-owned one at
+`~/.herdr-master/machines/<profile>/MACHINE.md` supplies every value the supervisor acts on.
 
----
+**This file is a schema, not prose.** `herdr_master/config.py` parses it, and
+`test_config.py` asserts that this template parses. Keep the `- **Key**: value` and
+``- `key`: value`` shapes; a reworded key is an unreadable config. Every absence has a
+defined consequence, listed against each field below, rather than a silent default.
 
-## 1. Machine Identification
-- **Machine Name / Hostname**: `[e.g., macbook-pro-m3, mac-studio-build-01, linux-gpu-node]`
-- **Role in Fleet**: `[e.g., Frontend & Local Testing, Heavy Compiles & Docker, CUDA / Model Inference]`
-- **Operating System**: `[e.g., macOS Sonoma (Apple Silicon), Ubuntu 24.04 LTS]`
-- **Primary Shell**: `[e.g., /bin/zsh, /bin/bash]`
+- **Machine ID**: your-hostname
+- **Profile**: local # a §7 registered profile, or `local`
+- **Timezone**: America/Toronto # absent -> rate-limit events escalate (§9.3)
+- **Working Directory**: ~/projects/your-repo
+- **Base Branch**: main # absent -> TODO-lane dispatch escalates
+- **Worktree Root**: ~/projects/.worktrees
+- **Runtime**: Python 3.13 (uv), Node 22 (bun), Docker # informational, for the agent
+- **Panes**: # §7 bootstrap creates any that are absent
+  - `worker_pane`: your-repo-worker
+  - `verify_pane`: your-repo-verify
+  - `shell_pane`: your-repo-shell # non-agent pane for git and file work (§2.3)
+- **Verification**:
+  - `lint_cmd`: `ruff check .`
+  - `test_cmd`: `python3 -m unittest discover -q` # absent -> the unit escalates, never passes
+  - `test_timeout_ms`: 600000 # absent -> 600000; unratified, see §11.2
+  - `stall_idle_seconds`: 900 # absent -> 900
+- **Agent kinds & exhaustion patterns** (§10.2; unlisted kind -> escalate):
+  - `claude`: `/context (left until |low|exhausted)|running out of context/i`
+    # deliberately NOT a bare /compact/: "auto-compact" appears in routine status
+    # output, and matching it would end an attempt on ordinary text
+- **Dependency policy** (advisory to the agent; enforced at land time in §4):
+  - `allowed_registries`: [`pypi.org`]
+  - `allowed_installers`: [`uv add`]
+- **Rules**:
+  1. Use the runtime's native package manager only; never a second one.
+  2. Never ask permission for standard development actions. Installing a dependency that
+     satisfies the policy above, running builds, running tests, creating files, and
+     formatting code are all pre-approved.
+  3. Anything outside the dependency policy: stop and ask.
+  4. Never ask "Should I run tests?" or "Should I proceed to the next task?". Always run
+     tests before declaring work done, and always proceed.
+  5. Where two implementations are equally valid, match the existing project patterns
+     rather than pausing for human input.
+  6. Follow the repo's existing directory structure.
+  7. Signal completion with the completion sentinel and the nonce supplied with the task.
+     The literal sentinel lives here and in the supervisor, and is deliberately never
+     repeated inside an injected prompt (§2.3).
 
-## 2. Local Runtimes & Toolchains
-- **Node.js**: `[e.g., v22.x via nvm / fnm / brew]`
-- **Package Manager**: `[e.g., bun (preferred), pnpm, npm]`
-- **Python**: `[e.g., 3.11.x via pyenv / uv]`
-- **Rust / Go / Java**: `[e.g., rustc 1.80, go 1.23]`
-- **Container Engine**: `[e.g., Docker Desktop, OrbStack, Podman, None]`
-
-## 3. Local Infrastructure & Services
-- **Databases**: `[e.g., PostgreSQL running locally on port 5432, Redis on 6379, or SQLite only]`
-- **Cloud / API Credentials**: `[e.g., Loaded via ~/.env or 1Password CLI; do not ask user for keys]`
-- **Tailscale IP / Hostname**: `[e.g., 100.x.y.z / my-mac.tailnet-xyz.ts.net]`
-
-## 4. Path & Workspace Standards
-- **Primary Workspace Root**: `[e.g., ~/projects or ~/code]`
-- **Scratch / Temp Directory**: `[e.g., /tmp or ~/scratch]`
-
-## 5. Autonomy Directives (Rules for the Agent)
-1. **Never ask permission for standard dev actions**: You are pre-approved to install npm/pip dependencies, run builds, execute tests, create files, and format code.
-2. **Never ask "Should I proceed to the next task?"**: Always proceed automatically until all items in `TODO.md` are marked complete.
-3. **Preferred Package Manager**: Always use the preferred package manager specified above. Do not switch between `npm` and `yarn` arbitrarily.
-4. **Test Before Done**: Never declare a task complete (`- [x]`) without running the relevant test suite and confirming exit code 0.
-5. **Handling Ambiguity**: If two implementations are equally valid, choose the one that matches existing project patterns rather than pausing for human input.
+The git and PR token backend is deliberately absent from this file. The daemon reads it, the
+daemon runs on the orchestrator, and it has no access to a remote machine's keychain. Chrome
+and browser settings are absent for the same reason: Chrome runs only on the orchestrator, so
+those live in the orchestrator's own config (§9.2) rather than in every machine's file.
