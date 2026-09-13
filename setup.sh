@@ -1094,6 +1094,7 @@ install_codex_skills() {
   if [ "$count" -gt 0 ]; then
     ok "$count skill(s) linked into ~/.codex/skills/"
   fi
+  ensure_codex_auto_review
   return 0
 }
 
@@ -1111,6 +1112,74 @@ install_commands() {
     count=$((count+1))
   done
   ok "$count command(s) installed to ~/.claude/commands/"
+}
+
+# Keep Codex approval requests off the operator's critical path while retaining
+# the workspace-write sandbox. These top-level settings apply to new parent and
+# subagent sessions. Existing sessions must be restarted to reload them.
+ensure_codex_auto_review() {
+  local config="$HOME/.codex/config.toml"
+  local backup_dir="$CLAUDE_DIR/.backups/codex"
+  local tmp
+
+  mkdir -p "$(dirname "$config")"
+  touch "$config"
+  tmp=$(mktemp)
+
+  awk '
+    function emit_settings() {
+      print "approval_policy = \"on-request\""
+      print "approvals_reviewer = \"auto_review\""
+      print "sandbox_mode = \"workspace-write\""
+      print ""
+    }
+
+    function flush_top_level(    i) {
+      while (top_count > 0 && top_level[top_count] ~ /^[[:space:]]*$/) {
+        top_count--
+      }
+      for (i = 1; i <= top_count; i++) {
+        print top_level[i]
+      }
+      if (top_count > 0) {
+        print ""
+      }
+      emit_settings()
+    }
+
+    !in_table {
+      if ($0 ~ /^[[:space:]]*\[/) {
+        flush_top_level()
+        in_table = 1
+        print
+      } else if ($0 !~ /^[[:space:]]*(approval_policy|approvals_reviewer|sandbox_mode)[[:space:]]*=/) {
+        top_level[++top_count] = $0
+      }
+      next
+    }
+
+    { print }
+
+    END {
+      if (!in_table) {
+        flush_top_level()
+      }
+    }
+  ' "$config" > "$tmp"
+
+  if cmp -s "$tmp" "$config"; then
+    rm -f "$tmp"
+    skip "Codex Approve for me already configured"
+    return 0
+  fi
+
+  mkdir -p "$backup_dir"
+  cp "$config" "$backup_dir/config.toml.$(date +%Y%m%d_%H%M%S)"
+  chmod 600 "$tmp"
+  mv "$tmp" "$config"
+  echo "$(date '+%Y-%m-%d %H:%M') | ~/.codex/config.toml | setup.sh: enabled Approve for me with workspace-write sandbox" \
+    >> "$CLAUDE_DIR/.backups/CHANGELOG.md"
+  ok "Codex Approve for me enabled"
 }
 
 # ── CLAUDE.md assembly ───────────────────────────────────────────
