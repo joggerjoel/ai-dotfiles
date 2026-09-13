@@ -1,0 +1,42 @@
+---
+# Executes the control checkout's checker through stdin, without installing files.
+- name: Inspect selected Herdr Temporal workers
+  hosts: ai_all
+  gather_facts: true
+  tasks:
+    - name: Read configuration and probe Temporal without launching agents
+      ansible.builtin.command:
+        argv:
+          - python3
+          - '-'
+          - --prefix
+          - "{{ herdr_temporal_prefix | default(ansible_facts.env.HOME + '/.local/share/herdr-temporal') }}"
+          - --dotfiles
+          - "{{ dotfiles_dir | default(ansible_facts.env.HOME + '/Developer/ai-dotfiles') }}"
+          - --root
+          - "{{ herdr_temporal_root | default(ansible_facts.env.HOME + '/.herdr-temporal/local') }}"
+          - --profile
+          - "{{ herdr_temporal_profile | default('local') }}"
+          - --kind
+          - "{{ herdr_temporal_kind | default('codex') }}"
+          - --address
+          - "{{ herdr_temporal_address | default('localhost:7233') }}"
+          - --namespace
+          - "{{ herdr_temporal_namespace | default('herdr') }}"
+        stdin: "{{ lookup('file', '../scripts/herdr-temporal-check.py') }}"
+      environment:
+        PATH: "{{ ansible_facts.env.HOME }}/.local/bin:/opt/homebrew/bin:/usr/local/bin:{{ ansible_facts.env.PATH }}"
+        PYTHONDONTWRITEBYTECODE: '1'
+      register: temporal_readiness
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Show readiness report
+      ansible.builtin.debug:
+        msg: "{{ temporal_readiness.stdout | default('No readiness report') }}"
+
+    - name: Fail explicitly when setup is incomplete
+      ansible.builtin.assert:
+        that: temporal_readiness.rc == 0
+        fail_msg: Readiness did not pass. Authentication and live panes always require a separate check inside Herdr.

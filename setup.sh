@@ -2058,6 +2058,8 @@ cmd_cache() {
 
 # ── Main ──────────────────────────────────────────────────────────
 case "${1:-}" in
+    provision-herdr-temporal) shift; exec bash "$DOTFILES_DIR/scripts/provision-herdr-temporal.sh" "$@" ;;
+    check-herdr-temporal) shift; exec python3 "$DOTFILES_DIR/scripts/herdr-temporal-check.py" "$@" ;;
   add)      cmd_add "${2:-}" ;;
   list)     cmd_list ;;
   update)   cmd_update "${2:-}" ;;
@@ -2084,6 +2086,9 @@ case "${1:-}" in
     echo "  ./setup.sh              Initial setup (profile + integrations)"
     echo "  ./setup.sh add <name>   Add/enable a single MCP integration"
     echo "  ./setup.sh list         Show all integrations and their status"
+    echo "  ./setup.sh provision-herdr-temporal --artifact FILE --sha256 HASH"
+    echo "                          Install a pinned worker release; never starts agents"
+    echo "  ./setup.sh check-herdr-temporal [--offline]  Read-only readiness report"
     echo "  ./setup.sh zsh          Install or upgrade only the zsh module registry"
     echo "  ./setup.sh env KEY [v]  Add an API key to ~/.claude/.env"
     echo "  ./setup.sh cache [p]    cache-guard policy (subscription|api|custom <s>|off,"

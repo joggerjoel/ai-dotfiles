@@ -83,6 +83,26 @@ fleet-update: _control
 fleet-sync: _control
     set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook update.yml --tags sync 2>&1 | cat
 
+# Build a state-free, checksummed source bundle. Output is an explicit local path.
+herdr-temporal-bundle source output:
+    python3 {{quote(dotfiles)}}/scripts/herdr-temporal-release.py bundle --source {{quote(source)}} --output {{quote(output)}}
+
+# Install locally without starting agents. SHA comes from the reviewed bundle.
+herdr-temporal-install artifact sha256:
+    bash {{quote(dotfiles)}}/setup.sh provision-herdr-temporal --artifact {{quote(artifact)}} --sha256 {{quote(sha256)}}
+
+# Read-only checks; defaults match the worker CLI. Exit 2 means setup is incomplete.
+herdr-temporal-check *args:
+    python3 {{quote(dotfiles)}}/scripts/herdr-temporal-check.py {{args}}
+
+# Targeted worker install, not the broad fleet-update operation.
+fleet-temporal host artifact sha256: _control
+    set -o pipefail; cd {{quote(dotfiles)}}/ansible-ai && HERDR_TEMPORAL_ARTIFACT={{quote(artifact)}} HERDR_TEMPORAL_SHA256={{quote(sha256)}} ansible-playbook provision-herdr-temporal.yml --limit {{quote(host)}} -e herdr_temporal_enabled=true 2>&1 | cat
+
+# Read-only worker check on a selected host. Does not install or launch anything.
+fleet-temporal-check host: _control
+    set -o pipefail; cd {{quote(dotfiles)}}/ansible-ai && ansible-playbook check-herdr-temporal.yml --limit {{quote(host)}} 2>&1 | cat
+
 # [fleet] install/refresh `just` on every host
 fleet-just: _control
     set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook provision-just.yml 2>&1 | cat

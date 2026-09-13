@@ -1,5 +1,9 @@
 # ansible-ai
 
+For opt-in Herdr Temporal worker releases and readiness checks, see
+[Herdr Temporal fleet setup](../guides/herdr-temporal-fleet.md). This does not
+deploy another Temporal server or start coding agents.
+
 Fleet provisioning + updates for the aorus servers, driven from the MacBook Pro
 (control node). Lives inside `ai-dotfiles` so the config it deploys and the
 automation that deploys it version together.

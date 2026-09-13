@@ -143,6 +143,10 @@
 - import_playbook: provision-herdr.yml
   tags: [herdr]
 
+# Opt-in per inventory host. Does not restart workers or copy runtime state.
+- import_playbook: provision-herdr-temporal.yml
+  tags: [temporal]
+
 # ── 7. herdr-flock plugin (local_ai only, by default) ───────────────────────
 # Pixel-art agent visualizer. Scoped to the cockpit deliberately: it renders the
 # LOCAL host's agents, and needs a Rust toolchain to build, so putting it on

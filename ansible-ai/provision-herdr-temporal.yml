@@ -1,0 +1,85 @@
+---
+# Opt-in installation only. Runtime state, authentication, and panes stay local.
+- name: Install pinned Herdr Temporal workers
+  hosts: ai_all
+  gather_facts: false
+  tasks:
+    - name: Provision explicitly enabled workers
+      when: herdr_temporal_enabled | default(false) | bool
+      block:
+        - name: Gather home directory for this worker
+          ansible.builtin.setup:
+            gather_subset: [min]
+
+        - name: Resolve release inputs
+          ansible.builtin.set_fact:
+            temporal_artifact: "{{ herdr_temporal_artifact | default(lookup('env', 'HERDR_TEMPORAL_ARTIFACT'), true) }}"
+            temporal_sha256: "{{ herdr_temporal_sha256 | default(lookup('env', 'HERDR_TEMPORAL_SHA256'), true) }}"
+            temporal_prefix: "{{ herdr_temporal_prefix | default(ansible_facts.env.HOME + '/.local/share/herdr-temporal') }}"
+            temporal_cache: "{{ herdr_temporal_cache | default(ansible_facts.env.HOME + '/.cache/herdr-temporal') }}"
+            temporal_dotfiles: "{{ dotfiles_dir | default(ansible_facts.env.HOME + '/Developer/ai-dotfiles') }}"
+
+        - name: Require an explicit reviewed release
+          ansible.builtin.assert:
+            that:
+              - temporal_artifact is match('^/')
+              - temporal_sha256 is match('^[0-9a-f]{64}$')
+            fail_msg: Set an absolute control-machine artifact path and its SHA-256. No latest release is inferred.
+
+        - name: Validate control-machine artifact checksum before copying
+          ansible.builtin.stat:
+            path: "{{ temporal_artifact }}"
+            checksum_algorithm: sha256
+          delegate_to: localhost
+          register: temporal_bundle
+
+        - name: Reject missing or changed release artifact
+          ansible.builtin.assert:
+            that:
+              - temporal_bundle.stat.isreg | default(false)
+              - temporal_bundle.stat.checksum | default('') == temporal_sha256
+
+        - name: Prepare private artifact cache
+          ansible.builtin.file:
+            path: "{{ temporal_cache }}/{{ temporal_sha256 }}"
+            state: directory
+            mode: '0700'
+
+        - name: Copy reviewed release artifact
+          ansible.builtin.copy:
+            src: "{{ temporal_artifact }}"
+            dest: "{{ temporal_cache }}/{{ temporal_sha256 }}/worker.tar.gz"
+            mode: '0600'
+
+        - name: Copy shared installer from this control checkout
+          ansible.builtin.copy:
+            src: ../scripts/herdr-temporal-release.py
+            dest: "{{ temporal_cache }}/{{ temporal_sha256 }}/installer.py"
+            mode: '0600'
+
+        - name: Install without restarting existing workers
+          ansible.builtin.command:
+            argv:
+              - python3
+              - "{{ temporal_cache }}/{{ temporal_sha256 }}/installer.py"
+              - install
+              - --artifact
+              - "{{ temporal_cache }}/{{ temporal_sha256 }}/worker.tar.gz"
+              - --sha256
+              - "{{ temporal_sha256 }}"
+              - --prefix
+              - "{{ temporal_prefix }}"
+              - --dotfiles
+              - "{{ temporal_dotfiles }}"
+          environment:
+            PATH: "{{ ansible_facts.env.HOME }}/.local/bin:/opt/homebrew/bin:/usr/local/bin:{{ ansible_facts.env.PATH }}"
+          register: temporal_install
+          changed_when: (temporal_install.stdout_lines[-1] | from_json).changed | default(true)
+          when: not ansible_check_mode
+
+        - name: Explain runtime setup boundary
+          ansible.builtin.debug:
+            msg: >-
+              Release provisioning does not start workers. Configure a local approved profile,
+              subscription login, and pane bindings inside this host's Herdr session.
+              Connect to the existing Temporal server through an authenticated tunnel.

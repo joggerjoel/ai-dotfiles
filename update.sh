@@ -80,6 +80,7 @@ for arg in "$@"; do
     --claude-only) RUN_AGENTS="no" ;;
     --no-prune)    RUN_PRUNE="no" ;;
     -h|--help)
+      echo "Optional worker release: set HERDR_TEMPORAL_ARTIFACT and HERDR_TEMPORAL_SHA256."
       echo "Usage: ./update.sh [--all] [--dry-run] [--claude-only] [--no-prune]"
       echo "  Backs up config to backup/<timestamp>/ then upgrades Claude Code"
       echo "  and the sibling agent CLIs (codex, cursor-agent, cortex, opencode, gemini, agy, pi, grok, headroom, skillspector)."
@@ -202,6 +203,18 @@ if [ "$DRY_RUN" = "yes" ]; then
   [ "$RUN_FLEET" = "yes" ] && skip "Would run: ansible-playbook update.yml --limit aorus_ai  (fleet servers)"
   ok "Backup created; no upgrade performed."
   exit 0
+fi
+
+# Explicit release pin only. Neither ordinary updates nor --claude-only enroll
+# or start a worker. Dry-run exits above without installing a release.
+if [ "$RUN_AGENTS" = "yes" ] && { [ -n "${HERDR_TEMPORAL_ARTIFACT:-}" ] || [ -n "${HERDR_TEMPORAL_SHA256:-}" ]; }; then
+    header "Herdr Temporal worker release"
+    if [ -z "${HERDR_TEMPORAL_ARTIFACT:-}" ] || [ -z "${HERDR_TEMPORAL_SHA256:-}" ]; then
+        fail "Set both HERDR_TEMPORAL_ARTIFACT and HERDR_TEMPORAL_SHA256"
+        exit 1
+    fi
+    bash "$DOTFILES_DIR/scripts/provision-herdr-temporal.sh" \
+        --artifact "$HERDR_TEMPORAL_ARTIFACT" --sha256 "$HERDR_TEMPORAL_SHA256" || exit 1
 fi
 
 header "Upgrading"
