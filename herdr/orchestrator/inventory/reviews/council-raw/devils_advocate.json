@@ -1,0 +1,83 @@
+{
+  "source_status": "ok",
+  "source": "busybrain-herdr-grid-and-merge",
+  "source_fingerprint": "074812614dba · FILE /Users/joggerjoel/Documents/Codex/2026-09-13/rev/outputs/busybrain-herdr-capability-grid.md # BusyBrain and Herdr … recorded in the merge plan first.",
+  "reviewed_at": "2026-09-13",
+  "lens": "devils_advocate",
+  "findings": [
+    {
+      "id": "da-initiative-producer-unscheduled",
+      "title": "No roadmap task produces the requirements that initiative scheduling and status consume",
+      "severity": "high",
+      "confidence": 98,
+      "root_cause_group": "missing-feature-producers",
+      "where": {
+        "task": "busybrain-herdr-capability-grid.md / Carryover order / 2. Add the missing initiative producer",
+        "snippet": "Define one plain-goal intake contract. Compile it into a typed requirement ledger and dependency\ngraph.",
+        "line": 98
+      },
+      "detail": "The grid explicitly says initiative creation and its typed requirement ledger are absent. Roadmap I.2 adds storage for units and dependencies, G.6 assumes planner decomposition already produces units, and J.4 renders requirement state, but no task creates the intake/compiler, requirement identities, acceptance mapping, or initiative completion query; completing A–J therefore cannot deliver the promised goal-to-completion workflow.",
+      "fix": "Add a named intake and requirement-ledger piece with an end-to-end goal-to-units-to-verified-requirements acceptance test before I and J."
+    },
+    {
+      "id": "da-review-command-decision-reversed",
+      "title": "The scheduled reviewer implements the command execution the capability decision prohibits",
+      "severity": "high",
+      "confidence": 100,
+      "root_cause_group": "unreconciled-decisions",
+      "where": {
+        "task": "merge-busybrain-herdr-todo.md / Piece C / C.5",
+        "snippet": "the supervisor runs `verify_cmd` or checks `verify_paths` in the verify pane under the\n      exit protocol.",
+        "line": 83
+      },
+      "detail": "The grid's independent-review decision says to build checks from typed operands and never execute a model-authored shell command, but plan §2.2 requires reviewer-supplied verify_cmd and C.5 explicitly executes it. No task replaces that schema or reconciles the decision, so following the roadmap ships the rejected command-trust behavior.",
+      "fix": "Amend §2.2 and C.2/C.5 to use typed operands and supervisor-owned command construction, with a rejection test for arbitrary reviewer commands."
+    },
+    {
+      "id": "da-browser-rest-gates-unscheduled",
+      "title": "The roadmap schedules browser jobs but never supplies the promised real E2E gate",
+      "severity": "high",
+      "confidence": 97,
+      "root_cause_group": "missing-feature-producers",
+      "where": {
+        "task": "busybrain-herdr-capability-grid.md / Carryover order / 5. Add quality gates",
+        "snippet": "Bind lint, unit, build, review, REST, and browser checks to one immutable candidate commit. Adapt\nBusyBrain's structured reviewer and small Playwright scenario format.",
+        "line": 115
+      },
+      "detail": "The grid records that Herdr lacks a REST runner, browser runner, service lifecycle, and API correlation. I.7 only places browser tests on eligible machines and I.4 requests a final pipeline; no named task implements real application startup/readiness, REST and browser scenarios, backend-state assertions, cleanup, or failure when the application is absent, so these final-gate promises remain unsupported after the listed work.",
+      "fix": "Add a named service-lifecycle and REST/browser verifier piece with an unavailable-app negative test and candidate-bound backend-state evidence, or explicitly defer those gates throughout the documents."
+    },
+    {
+      "id": "da-run-record-authority-conflict",
+      "title": "The canonical SQLite run-record decision is absent from the JSONL close tasks",
+      "severity": "medium",
+      "confidence": 99,
+      "root_cause_group": "unreconciled-decisions",
+      "where": {
+        "task": "merge-busybrain-herdr-todo.md / Piece F / F.2–F.3",
+        "snippet": "**F.3 `herdr-master status --unit <id>` renders markdown** from that line.",
+        "line": 117
+      },
+      "detail": "The grid requires one canonical run record in SQLite and an idempotent JSONL export, whereas §2.6 and F.2 append the record to units.jsonl and F.3 reads that line as the status source. No task creates a canonical run-record row or replayable export identity; a crash across the DB close and append can leave missing or duplicate history despite the advertised one-record invariant.",
+      "fix": "Make unit closure insert a unique canonical run record transactionally in SQLite and assign an idempotent export task, then render status from that canonical record."
+    }
+  ],
+  "root_cause_groups": [
+    {
+      "group": "missing-feature-producers",
+      "summary": "Consumers and acceptance promises are scheduled without tasks that produce the underlying feature.",
+      "finding_ids": [
+        "da-initiative-producer-unscheduled",
+        "da-browser-rest-gates-unscheduled"
+      ]
+    },
+    {
+      "group": "unreconciled-decisions",
+      "summary": "Capability-grid decisions were not propagated into the governing merge plan and execution tasks.",
+      "finding_ids": [
+        "da-review-command-decision-reversed",
+        "da-run-record-authority-conflict"
+      ]
+    }
+  ]
+}

@@ -13,6 +13,12 @@ This file records disposition, not a second design authority. The
 Historical council reports describe their audited source versions and are not rewritten as
 though they reviewed this revision. No unchecked implementation item becomes complete here.
 
+The [review inventory](inventory/reviews/README.md) now contains the full reports, capability
+grid, and raw evidence. The [build guide](guides/building-herdr.md) identifies the current reading
+order. The broader all-Markdown audit has additional findings outside this 22-entry resolution;
+they still require revalidation and disposition. The later design-pattern discussion is scheduled
+separately as merge plan §2.13 and TODO Piece M, not retroactively attributed to the council.
+
 ## Finding disposition
 
 All 22 anchored entries are accepted as design work. Related anchors share the implementation

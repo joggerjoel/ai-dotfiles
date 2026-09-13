@@ -1,0 +1,86 @@
+{
+  "source_status": "ok",
+  "source": "busybrain-herdr-grid-and-merge",
+  "source_fingerprint": "074812614dba · FILE /Users/joggerjoel/Documents/Codex/2026-09-13/rev/outputs/busybrain-herdr-capability-grid.md # BusyBrain and Herdr … recorded in the merge plan first.",
+  "reviewed_at": "2026-09-13",
+  "lens": "reliability",
+  "findings": [
+    {
+      "id": "rel-terminal-record-dual-write",
+      "title": "Unit close and JSONL publication have no atomic recovery contract",
+      "severity": "high",
+      "confidence": 97,
+      "root_cause_group": "terminal-record-authority",
+      "where": {
+        "task": "merge-busybrain-herdr-todo.md / Piece F / F.2-F.4",
+        "snippet": "**F.2 The attempt close appends the attempt sub-record** and the unit close appends one\n      line to `~/.herdr-master/units.jsonl`. The daemon writes it from `state.db`. Nothing in a\n      work tree is read for it.",
+        "line": null
+      },
+      "detail": "The capability grid requires a canonical SQLite run record and idempotent JSONL export, but F.2 and plan §2.6 specify an append and F.3-F.4 read that file as the record. A crash between committing terminal state and appending the line loses the record, while retrying an append after an uncertain crash can duplicate it; G's transactional transitions cannot atomically include a filesystem append.",
+      "fix": "Persist the terminal record and export obligation in the unit-close SQLite transaction, then define restart-safe JSONL export keyed by unit and close generation, with status reading the canonical row."
+    },
+    {
+      "id": "rel-review-failure-has-no-transition",
+      "title": "Reviewer and confirmation failures lack a bounded recovery path",
+      "severity": "high",
+      "confidence": 92,
+      "root_cause_group": "review-failure-state",
+      "where": {
+        "task": "merge-busybrain-herdr-plan.md / §2.2 / Where it sits in the lifecycle",
+        "snippet": "A blocking finding the\nsupervisor cannot confirm is logged and demoted to `warning`",
+        "line": null
+      },
+      "detail": "The review lifecycle only defines usable verdicts and confirmed or unconfirmed findings, with no transition for API timeout, missing tool output, invalid schema, or a confirmation runner failure. Under a transient confirmation outage, the quoted rule permits demoting a genuine blocker; a failed review request otherwise leaves an undefined reviewing state despite §2.7 promising unattended continuation.",
+      "fix": "Define durable bounded retry and next-action transitions for reviewer transport/schema failures and confirmation infrastructure errors, and reserve demotion for an executed check that disproves the finding."
+    },
+    {
+      "id": "rel-offline-source-recovery-gap",
+      "title": "Machine-loss recovery requires artifacts from the unavailable machine",
+      "severity": "high",
+      "confidence": 84,
+      "root_cause_group": "relocation-durability",
+      "where": {
+        "task": "merge-busybrain-herdr-plan.md / §2.9 / attempt relocation",
+        "snippet": "A retry may move after the source attempt closes. The source machine preserves a secret-scanned\ncandidate commit or a content-addressed Git bundle plus hashed non-code artifacts.",
+        "line": null
+      },
+      "detail": "The relocation producer is the source machine after attempt close, but §2.9 also permits replacement after machine loss and lease expiry. If that machine disappears before preservation, the destination has no defined accessible checkpoint; no task defines fallback to the last durable base or waiting for source recovery, so the promised disconnect recovery is incomplete.",
+      "fix": "Specify the checkpoint durability boundary and the machine-loss branch that resumes from the last available verified commit or enters a durable wait when required artifacts are unavailable."
+    },
+    {
+      "id": "rel-unstable-failure-fingerprint",
+      "title": "Identical-failure detection hashes unstable reviewer identifiers and prose",
+      "severity": "medium",
+      "confidence": 96,
+      "root_cause_group": "failure-identity",
+      "where": {
+        "task": "merge-busybrain-herdr-plan.md / §2.5 / Lands as",
+        "snippet": "applied to the `verification.excerpt` in `state.json` plus the sorted `finding_id` and `issue`\npairs from §2.2.",
+        "line": null
+      },
+      "detail": "Each independent review supplies its own finding IDs and issue text, and §2.2 supplies no stable cross-attempt identity rule. Rewording or renumbering the same unresolved defect therefore changes this hash and defeats the two-identical-attempt stop; the promised strict-subset progress test is likewise unreliable when labels change.",
+      "fix": "Define a canonical confirmed-failure identity from verification kind, normalized operands, path and expected result, and compare those identities across attempts instead of model-assigned IDs and prose."
+    },
+    {
+      "id": "rel-existing-state-migration-omitted",
+      "title": "New recovery invariants have no migration for existing SQLite rows",
+      "severity": "medium",
+      "confidence": 85,
+      "root_cause_group": "state-schema-migration",
+      "where": {
+        "task": "merge-busybrain-herdr-todo.md / Piece G / G.1",
+        "snippet": "**G.1 Extend `state.db` with unit phases and durable scheduling fields.** Store the owner,\n      dispatch ID, lease expiry, fencing epoch, last observation, last material progress,\n      `next_action_at`, attempt deadline, waiting reason, and candidate commit.",
+        "line": null
+      },
+      "detail": "The grid confirms SQLite already stores units and attempts, but G.1 adds mandatory recovery state without a schema-version migration, backfill, or explicit fresh-database boundary. Existing nonterminal rows can consequently have neither a recoverable owner nor a due next_action_at, violating §2.7's invariant and escaping the startup due-row scan.",
+      "fix": "Add a transactional versioned migration that reconciles existing active rows against real processes and assigns every nonterminal row an owner or due action, with an upgrade fixture test."
+    }
+  ],
+  "root_cause_groups": [
+    {"group": "terminal-record-authority", "summary": "The run record is split across SQLite close state and an unreconciled JSONL append.", "finding_ids": ["rel-terminal-record-dual-write"]},
+    {"group": "review-failure-state", "summary": "Review transport and execution errors are not modeled separately from verdicts.", "finding_ids": ["rel-review-failure-has-no-transition"]},
+    {"group": "relocation-durability", "summary": "Relocation assumes the source remains available to publish its checkpoint.", "finding_ids": ["rel-offline-source-recovery-gap"]},
+    {"group": "failure-identity", "summary": "Failure identity depends on fresh model output rather than stable checked facts.", "finding_ids": ["rel-unstable-failure-fingerprint"]},
+    {"group": "state-schema-migration", "summary": "The expanded schema does not define treatment of existing state.", "finding_ids": ["rel-existing-state-migration-omitted"]}
+  ]
+}

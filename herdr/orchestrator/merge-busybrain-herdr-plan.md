@@ -52,7 +52,7 @@ The measurements that settle the port-versus-rewrite question:
 
 What survives that record is a set of shapes, not a codebase. §2 names them.
 
-## 2. The twelve pieces
+## 2. The thirteen pieces
 
 Each piece names its BusyBrain source, the invariant it carries, how it lands in herdr, and
 what is dropped on the way.
@@ -634,6 +634,74 @@ required profile gate and requirement mapping must be satisfied before completio
 includes wrong REST target/payload, missing backend mutation, absent app, stale server, omitted
 required test, leaked service after crash, and synthetic fallback. All must fail closed.
 
+### 2.13 The supervisor enforces proportional design quality
+
+**Lands as.** `herdr_master/design.py`, design records in SQLite, and architecture checks
+registered in the §2.12 verification policy. This is a required lifecycle gate, not a request
+that a worker judge its own code. It does not guarantee optimal architecture.
+
+For substantial work, intake assigns a separate architect actor before implementation. The
+actor schema gains `architect` and `architecture_reviewer` roles with the same persisted leases,
+budget attribution, and recovery rules as other supervised actors. The
+versioned design record identifies requirement revision, scope, affected interfaces, component
+ownership, allowed dependencies, failure behavior, existing code to reuse, simplest viable
+alternative, and the reason for each chosen abstraction or pattern. A documented choice to use
+no pattern is valid. The worker packet carries the applicable approved design revision and
+constraints, not the complete archive of design prose.
+
+The approved profile defines substantial work by observable triggers such as a new module
+boundary, public interface, persistent state, concurrency, provider adapter, or dependency.
+Small changes may reuse an applicable approved design with a recorded applicability check.
+A model cannot exempt its own change merely by calling it small. Missing policy or an ambiguous
+classification takes the full design gate or requests an authorized decision. Architectural
+changes affecting product scope, permissions, or acceptance require operator approval.
+
+Design review checks whether the proposed structure solves the actual problem, reuses appropriate
+existing components, and avoids unnecessary abstraction. Design approval is recorded against the
+requirement and policy revisions by an actor independent of the implementer. The supervisor
+validates record completeness and approved authority; it does not treat a pattern name as proof.
+
+Recommended applications are Adapter for provider integrations, Strategy for interchangeable
+placement policies, typed Command for approved checks, explicit state transitions for lifecycle,
+and committed events for status subscribers. Choose functions or data types where sufficient;
+neither inheritance nor a named GoF pattern is mandatory. Durable leases, fencing, and atomic
+event publication remain separate distributed-systems obligations under §§2.7-2.10.
+
+Implementation gates combine deterministic tests and an independent architecture review:
+
+- Check forbidden dependency directions, cycles, and provider-specific imports outside adapters.
+- Run shared behavioral contract tests for every declared supported adapter.
+- Verify the state, authorization, and ownership invariants selected by the design contract.
+- Compare the actual candidate diff with that contract; review duplicated responsibilities,
+  unjustified abstractions, interface changes, and failure paths.
+- Use complexity/duplication metrics as review signals unless an approved policy gives a
+  justified enforceable threshold. Never require pattern counts or class counts as quality proof.
+
+Each check and architecture verdict records the repository/base/candidate/policy tuple plus
+design and requirement revisions. A changed tuple or revision invalidates affected approval.
+The reviewer sees the actual code delta and approved design, not the worker's self-evaluation.
+Findings require a location, violated constraint or concrete consequence, and proposed correction.
+Objective violations use typed confirmation under §2.2. Unconfirmable judgments follow its
+escalation policy; a subjective concern cannot become an endless automatic rewrite loop.
+
+Persist design and review operations with actor, status, deadline, budget, evidence, and next
+action. Use explicit pending, running, approved, changes-requested, inconclusive, and waived
+outcomes. Missing or failed review is not approval. Bounded recovery uses G; model calls and
+quota waits use H. A waiver requires authorized operator identity, reason, scope, revision, and
+expiry where appropriate; it cannot override non-waivable safety or authorization policies.
+
+The integration gate requires applicable design approval, passing architecture checks, and
+candidate-bound independent review, or a valid explicitly permitted waiver. Integrated changes
+receive the same applicable checks on the combined candidate so independently acceptable units
+cannot violate the shared architecture after assembly. J shows design/check/review state,
+violations, attempts, waits, waivers, and evidence separately from functional test status.
+
+**Amends master plan §6 and this plan §§2.1, 2.2, 2.7, 2.10-2.12.** Design approval precedes
+substantial implementation; architecture evidence precedes integration and completion.
+Acceptance tests cover forbidden imports, incompatible adapters, unjustified worker exemption,
+worker self-approval, missing review, reviewer crash/quota pause, stale design or candidate,
+expired waiver, and an integrated dependency cycle. Each must block the appropriate transition.
+
 ## 3. What is deliberately not taken
 
 Each item names why, so that nobody reopens it without new evidence.
@@ -680,12 +748,14 @@ The pieces depend on the master plan's phases as follows. The todo file carries 
 | §2.10 | 7.4, then a read-only viewer | §§2.6-2.9 and §2.11 state and actor producers |
 | §2.11 | Local initiative release | Phase 3 lifecycle, §2.8 admission for planner calls |
 | §2.12 | Local verification release, then fleet | §2.2 candidate identity and approved profiles |
+| §2.13 | Planning and pre-integration gate | K design records; B/C/L contracts; G/H recovery and admission |
 
 Phase labels identify integration points, not a strictly numerical execution order. Deliver a
 local vertical slice first: A/B and the master daemon; F/G durable lifecycle; H supported-mode
 admission; K intake (§2.11) and C/L verification (§§2.2/2.12); then I fleet placement. J's local
 CLI can use the single-machine subset before fleet work, while its viewer follows the shared
-snapshot/event contract. Deployment and visual regression remain deferred.
+snapshot/event contract. M adds design records during K planning, packet constraints in B, and
+architecture checks/review in C/L before integration. Deployment and visual regression remain deferred.
 
 ## 5. How the merge proves itself
 
@@ -749,6 +819,9 @@ behaves differently:
    available.
 
 ## Revision log
+
+- **2026-09-13.** Added §2.13 supervisor-enforced design quality and roadmap Piece M. Imported
+  historical review evidence under `inventory/reviews/` and added `guides/building-herdr.md`.
 
 - **2026-09-13.** Applied the capability-grid council findings: typed candidate-bound review,
   durable records and recovery, supported-mode quota admission, intake/completion, real-app gates,

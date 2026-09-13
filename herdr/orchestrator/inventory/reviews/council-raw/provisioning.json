@@ -1,0 +1,49 @@
+{
+  "source_status": "ok",
+  "source": "busybrain-herdr-grid-and-merge",
+  "source_fingerprint": "074812614dba · FILE /Users/joggerjoel/Documents/Codex/2026-09-13/rev/outputs/busybrain-herdr-capability-grid.md # BusyBrain and Herdr … recorded in the merge plan first.",
+  "reviewed_at": "2026-09-13",
+  "lens": "provisioning",
+  "findings": [
+    {
+      "id": "prov-browser-runtime-acquisition",
+      "title": "Browser verification has no provisioned test runtime",
+      "severity": "high",
+      "confidence": 87,
+      "root_cause_group": "browser-verification-prerequisites",
+      "where": {
+        "task": "busybrain-herdr-capability-grid.md / Carryover order / 5. Add quality gates",
+        "snippet": "Adapt\nBusyBrain's structured reviewer and small Playwright scenario format.",
+        "line": "115-116"
+      },
+      "detail": "[ecosystem] Running the proposed Playwright scenarios requires a compatible Playwright package, browser executable revision, and host runtime dependencies. The roadmap records a browser capability in I.1 and schedules browser tests in I.7, but none of its tasks acquires, pins, or live-probes that runtime; the grid also explicitly reports no app lifecycle contract. A machine can therefore match the declared capability while being unable to execute the required final browser gate.",
+      "fix": "Add a prerequisite task that pins and installs the supported browser runner and browser revision, verifies host dependencies, and proves a real application startup, scenario run, and cleanup before advertising browser capability."
+    },
+    {
+      "id": "prov-price-schedule-producer",
+      "title": "Versioned API price schedule has no acquisition or validation task",
+      "severity": "medium",
+      "confidence": 95,
+      "root_cause_group": "unproduced-price-schedule",
+      "where": {
+        "task": "merge-busybrain-herdr-todo.md / Piece J / J.8",
+        "snippet": "Calculate API estimates from a versioned price schedule\n      and reconcile them when provider billing exists.",
+        "line": null
+      },
+      "detail": "J.8 consumes a versioned price schedule and plan §2.10 requires it, but no task names its source, acquires an initial schedule, pins its effective version, or validates coverage for configured models and token categories. H.2 produces quota observations rather than prices, and C.8 only selects the reviewer model, leaving the estimate feature without its required external data producer.",
+      "fix": "Add a price-data task that obtains and verifies rates for the supported model and billing categories, records source and effective version, and makes estimates unavailable when a matching verified rate is absent."
+    }
+  ],
+  "root_cause_groups": [
+    {
+      "group": "browser-verification-prerequisites",
+      "summary": "Browser capability and scheduling are specified without a task producing a verified browser test runtime.",
+      "finding_ids": ["prov-browser-runtime-acquisition"]
+    },
+    {
+      "group": "unproduced-price-schedule",
+      "summary": "Cost estimation consumes external pricing data that no acquisition or validation task supplies.",
+      "finding_ids": ["prov-price-schedule-producer"]
+    }
+  ]
+}

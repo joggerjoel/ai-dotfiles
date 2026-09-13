@@ -14,7 +14,7 @@ run records from F through I. The BusyBrain runtime on this host (merge plan §6
 unresolved and blocks Phase 5's numbers.
 
 Piece letters below map to merge plan sections: A is §2.3, B is §2.1, C is §2.2, D is §2.4,
-E is §2.5, F is §2.6, G is §2.7, H is §2.8, I is §2.9, J is §2.10, K is §2.11, and L is §2.12. The order is
+E is §2.5, F is §2.6, G is §2.7, H is §2.8, I is §2.9, J is §2.10, K is §2.11, L is §2.12, and M is §2.13. The order is
 integration order (merge plan §4), not section order. K and L supply initiative and real-app
 verification producers before the fleet/viewer release. Phase numbers are integration labels;
 the dependency order in merge plan §4 governs execution.
@@ -321,6 +321,34 @@ remote placement; deployment and pixel comparison are not required.
 - [ ] **L.7 Run negative and final-candidate acceptance.** Fail wrong API target/payload, absent
       mutation/app, stale server, synthetic fallback, and missing required tests. Kill the runner
       mid-scenario and prove cleanup; reject results from an older candidate or policy.
+
+## Piece M: Supervisor-enforced design and architecture gates (§2.13)
+
+Deliver design records with K planning, packet constraints through B, and architecture verification
+and review through C/L. G and H supply bounded recovery and admission; J consumes the resulting
+evidence. This is planned behavior, not functionality supplied by these Markdown files.
+
+- [ ] **M.1 Add versioned design records and applicability policy.** Store requirement revision,
+      scope, interfaces, ownership, dependencies, failures, reuse, alternatives, and pattern rationale.
+      Classify substantial work through approved policy; reject worker-selected exemptions.
+- [ ] **M.2 Register independent architect/design-review actors.** Require approved design before
+      substantial implementation, allow justified no-pattern decisions, and forbid self-approval.
+      Clarify scope/authorization changes with the operator before approval.
+- [ ] **M.3 Bind packet and implementation to the design revision.** Supply only relevant constraints;
+      invalidate affected approvals when requirements, design, candidate, or policy changes.
+- [ ] **M.4 Add deterministic architecture checks.** Test dependency directions/cycles, adapter
+      boundaries, shared behavioral contracts, and the selected ownership/state invariants. Keep
+      complexity metrics advisory unless an approved policy specifies a justified hard threshold.
+- [ ] **M.5 Add independent candidate-bound architecture review.** Inspect actual changes and design
+      compliance, unnecessary abstractions, and duplication. Require anchored actionable findings;
+      objective confirmation and subjective escalation follow C rather than worker self-certification.
+- [ ] **M.6 Enforce and expose the integration gate.** Require design/check/review evidence or valid
+      permitted waivers, rerun applicable checks on integrated candidates, and persist operations,
+      actor budgets, deadlines, next actions, and quota waits. Show these separately in J.
+- [ ] **M.7 Run negative lifecycle acceptance.** Reject forbidden imports, adapter contract failure,
+      worker exemption/self-approval, missing review, stale design/candidate, expired waiver, and
+      combined dependency cycles. Stop or quota-pause the reviewer and prove bounded recovery
+      without silently approving the gate.
 
 ## Not scheduled
 

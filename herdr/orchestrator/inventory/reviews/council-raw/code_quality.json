@@ -1,0 +1,49 @@
+{
+  "source_status": "ok",
+  "source": "busybrain-herdr-grid-and-merge",
+  "source_fingerprint": "074812614dba · FILE /Users/joggerjoel/Documents/Codex/2026-09-13/rev/outputs/busybrain-herdr-capability-grid.md # BusyBrain and Herdr … recorded in the merge plan first.",
+  "reviewed_at": "2026-09-13",
+  "lens": "code_quality",
+  "findings": [
+    {
+      "id": "cq-unstable-finding-fingerprints",
+      "title": "Model-assigned identifiers and prose make repeated-failure detection unstable",
+      "severity": "medium",
+      "confidence": 96,
+      "root_cause_group": "unstable-failure-identity",
+      "where": {
+        "task": "merge-busybrain-herdr-plan.md §2.5",
+        "snippet": "applied to the `verification.excerpt` in `state.json` plus the sorted `finding_id` and `issue`\npairs from §2.2.",
+        "line": null
+      },
+      "detail": "Section 2.2 obtains fresh findings from an independent model request on each attempt but defines no stable assignment of finding IDs or issue wording. The same defect can therefore receive a different ID or paraphrase and evade the two-identical-attempt stop; the strict-subset progress rule is likewise unreliable if it compares these model-created pairs. Sorting and whitespace normalization cannot establish semantic identity.",
+      "fix": "Have the supervisor fingerprint canonical objective operands and observed failure results, excluding model-assigned IDs and free-form issue prose, and compare those stable keys for equality and subset progress."
+    },
+    {
+      "id": "cq-unbounded-accumulated-review-diff",
+      "title": "Every review sends an unbounded accumulated branch diff in one request",
+      "severity": "medium",
+      "confidence": 87,
+      "root_cause_group": "unbounded-review-input",
+      "where": {
+        "task": "merge-busybrain-herdr-todo.md C.4",
+        "snippet": "- [ ] **C.4 The API call.** One Messages request with the schema as the tool input schema. The\n      reviewer receives the goal, the diff against `origin/<base_branch>`, and the verifier\n      output.",
+        "line": null
+      },
+      "detail": "Section 2.9 starts units from an integration commit containing their dependencies, so diffing each unit against origin's base repeatedly includes accumulated dependency changes. Across a growing initiative this can produce quadratic total review input, and a sufficiently large diff or verifier output will exceed the single request's input capacity. Neither the plan nor C.4 defines size bounds, a unit-base diff, or a complete-coverage strategy for oversized candidates.",
+      "fix": "Review each immutable candidate against its recorded unit base, bound verifier excerpts, and define a bounded partitioning or explicit oversized-review transition that preserves full required coverage."
+    }
+  ],
+  "root_cause_groups": [
+    {
+      "group": "unstable-failure-identity",
+      "summary": "Repeated-failure identity depends on nondeterministic reviewer presentation fields.",
+      "finding_ids": ["cq-unstable-finding-fingerprints"]
+    },
+    {
+      "group": "unbounded-review-input",
+      "summary": "Review input is neither scoped to the unit's recorded base nor bounded for the single-call transport.",
+      "finding_ids": ["cq-unbounded-accumulated-review-diff"]
+    }
+  ]
+}

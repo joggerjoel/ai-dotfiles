@@ -1,0 +1,71 @@
+{
+  "source_status": "ok",
+  "source": "busybrain-herdr-grid-and-merge",
+  "source_fingerprint": "074812614dba · FILE /Users/joggerjoel/Documents/Codex/2026-09-13/rev/outputs/busybrain-herdr-capability-grid.md # BusyBrain and Herdr … recorded in the merge plan first.",
+  "reviewed_at": "2026-09-13",
+  "lens": "security",
+  "findings": [
+    {
+      "id": "sec-reviewer-shell-authority",
+      "title": "The executable roadmap grants shell authority to reviewer output",
+      "severity": "critical",
+      "confidence": 98,
+      "root_cause_group": "reviewer-trust-boundary",
+      "where": {
+        "task": "merge-busybrain-herdr-todo.md / Piece C / C.5",
+        "snippet": "the supervisor runs `verify_cmd` or checks `verify_paths` in the verify pane under the\n      exit protocol.",
+        "line": null
+      },
+      "detail": "The grid's Independent review decision explicitly prohibits executing model-authored shell commands and requires typed operands, but plan §2.2 makes verify_cmd a reviewer-supplied string and C.5 executes it. A schema-valid response can therefore run arbitrary commands with the verifier's permissions; a nonce-bound exit code authenticates command completion without restricting what the command may do.",
+      "fix": "Replace verify_cmd with closed check kinds and validated operands, build argument vectors in supervisor-owned code, and make C.5 test rejection of arbitrary commands and escaping paths."
+    },
+    {
+      "id": "sec-confirmation-errors-pass-gate",
+      "title": "Inability to confirm a blocking finding permits landing",
+      "severity": "high",
+      "confidence": 95,
+      "root_cause_group": "review-failure-states",
+      "where": {
+        "task": "merge-busybrain-herdr-plan.md / §2.2 / Where it sits in the lifecycle",
+        "snippet": "A blocking finding the\nsupervisor cannot confirm is logged and demoted to `warning`",
+        "line": null
+      },
+      "detail": "The rule, repeated by C.5, conflates a successfully disproven finding with an unavailable check, timeout, invalid command, or missing verifier. Since review precedes landing, an infrastructure failure becomes permission to pass the review gate, matching the failure-transition gap flagged by the grid but leaving it unresolved.",
+      "fix": "Represent confirmed, disproven, and inconclusive confirmation outcomes separately, demoting only disproven findings and persisting retry or blocked transitions for inconclusive checks."
+    },
+    {
+      "id": "sec-review-not-bound-to-candidate",
+      "title": "Review authority is not bound to the candidate that is verified and landed",
+      "severity": "high",
+      "confidence": 93,
+      "root_cause_group": "review-candidate-binding",
+      "where": {
+        "task": "merge-busybrain-herdr-plan.md / §2.2 / Lands as",
+        "snippet": "The reviewer sees the packet's goal, `git diff origin/<base_branch>..HEAD`, and the\nverifier's output.",
+        "line": null
+      },
+      "detail": "The grid requires review and verification to authorize the same immutable candidate, but §2.2 and C.4 use moving refs and define no candidate, base, or policy identity on the review result or landing check. The exact candidate and policy fields added for relocation and verification in §2.9 and I.7 never bind the reviewer, so a later commit or changed base can inherit an earlier approval unless an implementer adds an unstated guard.",
+      "fix": "Capture immutable base and candidate commits plus policy hash before verification, bind the review result to them, and require identical identities at landing or restart the checks."
+    },
+    {
+      "id": "sec-review-outbound-secret-gate",
+      "title": "The new external review request has no pre-send secret gate",
+      "severity": "high",
+      "confidence": 84,
+      "root_cause_group": "review-egress-policy",
+      "where": {
+        "task": "merge-busybrain-herdr-todo.md / Piece C / C.4",
+        "snippet": "The\n      reviewer receives the goal, the diff against `origin/<base_branch>`, and the verifier\n      output. A test asserts the worker transcript is not in the request.",
+        "line": null
+      },
+      "detail": "Assuming a candidate or verifier output contains a secret, C.4 sends it to the external Messages API with no named pre-send scan or redaction gate. The grid identifies secret-screening gaps in independent review, but the supplied plan only explicitly secret-scans relocation artifacts and the TODO tests transcript exclusion rather than the actual outbound payload; those controls do not protect this request.",
+      "fix": "Add supervisor-owned screening and redaction of the complete outbound review payload before the API call, with a blocked transition on unresolved secret hits and tests for secrets in diffs and verifier output."
+    }
+  ],
+  "root_cause_groups": [
+    { "group": "reviewer-trust-boundary", "summary": "Reviewer-provided strings are promoted to executable verification authority.", "finding_ids": ["sec-reviewer-shell-authority"] },
+    { "group": "review-failure-states", "summary": "The review gate treats missing confirmation evidence as nonblocking evidence.", "finding_ids": ["sec-confirmation-errors-pass-gate"] },
+    { "group": "review-candidate-binding", "summary": "Review results lack an immutable subject enforced at landing.", "finding_ids": ["sec-review-not-bound-to-candidate"] },
+    { "group": "review-egress-policy", "summary": "The new external review boundary has no specified outbound payload screening step.", "finding_ids": ["sec-review-outbound-secret-gate"] }
+  ]
+}

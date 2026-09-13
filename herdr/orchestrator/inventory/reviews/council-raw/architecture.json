@@ -1,0 +1,86 @@
+{
+  "source_status": "ok",
+  "source": "busybrain-herdr-grid-and-merge",
+  "source_fingerprint": "074812614dba · FILE /Users/joggerjoel/Documents/Codex/2026-09-13/rev/outputs/busybrain-herdr-capability-grid.md # BusyBrain and Herdr … recorded in the merge plan first.",
+  "reviewed_at": "2026-09-13",
+  "lens": "architecture",
+  "findings": [
+    {
+      "id": "arch-requirement-ledger-has-no-producer",
+      "title": "Initiative status and scheduling consume requirements that no task creates",
+      "severity": "high",
+      "confidence": 98,
+      "root_cause_group": "missing-intake-producer",
+      "where": {
+        "task": "merge-busybrain-herdr-todo.md / J.4",
+        "snippet": "- [ ] **J.4 Generate TODO marks from supervisor state.** Render `[ ]`, `[>]`, `[x]`, and `[!]`\n      from requirement and unit state. Reject agent-authored completion changes.",
+        "line": null
+      },
+      "detail": "The grid requires a plain-goal compiler, normalized requirement ledger, and dependency graph, and plan §2.10 consumes the initiative → requirement → unit hierarchy. A only parses task metadata and I.2 adds units/dependencies; no plan section or TODO task creates requirements, maps units to them, or defines verified/integrated/waived/human-blocked requirement transitions, leaving J.4 and initiative completion without their state producer.",
+      "fix": "Add an intake and requirement-state contract with explicit producer tasks, requirement-to-unit mappings, terminal rules, and dependencies from scheduling and status."
+    },
+    {
+      "id": "arch-review-input-is-not-candidate-bound",
+      "title": "Review still reads moving refs instead of the immutable candidate",
+      "severity": "high",
+      "confidence": 99,
+      "root_cause_group": "candidate-contract-drift",
+      "where": {
+        "task": "merge-busybrain-herdr-plan.md / §2.2 Lands as",
+        "snippet": "The reviewer sees the packet's goal, `git diff origin/<base_branch>..HEAD`, and the\nverifier's output.",
+        "line": null
+      },
+      "detail": "The grid requires review and every verification result to identify one immutable candidate; §2.9 additionally creates unit branches from integration commits containing verified dependencies. §2.2 and C.4 instead build the review from mutable origin/base and HEAD refs without a base SHA, candidate SHA, policy hash, or result binding, so a review can cover a different commit or include already-integrated dependency changes and still be used for landing.",
+      "fix": "Pass explicit unit base SHA, candidate SHA, and policy hash through the reviewer request, finding confirmation, stored verdict, and integration admission check."
+    },
+    {
+      "id": "arch-runrecord-authority-conflicts",
+      "title": "Run records remain append-only JSONL authority despite the SQLite decision",
+      "severity": "high",
+      "confidence": 97,
+      "root_cause_group": "runrecord-authority-drift",
+      "where": {
+        "task": "merge-busybrain-herdr-todo.md / F.2–F.3",
+        "snippet": "- [ ] **F.2 The attempt close appends the attempt sub-record** and the unit close appends one\n      line to `~/.herdr-master/units.jsonl`. The daemon writes it from `state.db`. Nothing in a\n      work tree is read for it.\n- [ ] **F.3 `herdr-master status --unit <id>` renders markdown** from that line.",
+        "line": null
+      },
+      "detail": "The grid explicitly chooses one canonical run record in SQLite and idempotent JSONL export. Plan §2.6 and F.2–F.3 instead make the appended JSONL line the status source, with no persisted close-record key or export cursor; G.2's transactional SQLite transitions cannot atomically commit that file append, so crash recovery can duplicate or omit the only rendered record.",
+      "fix": "Persist a uniquely keyed terminal run record in the unit-close transaction, read status from it, and define resumable idempotent JSONL export as a projection."
+    },
+    {
+      "id": "arch-e2e-placement-without-runner",
+      "title": "REST and browser quality gates have placement but no execution contract",
+      "severity": "high",
+      "confidence": 98,
+      "root_cause_group": "missing-e2e-producer",
+      "where": {
+        "task": "merge-busybrain-herdr-todo.md / I.7",
+        "snippet": "- [ ] **I.7 Schedule verification as its own work.** Builds, platform tests, GPU tests, and browser\n      tests may run on different eligible machines against the exact candidate commit and policy\n      hash.",
+        "line": null
+      },
+      "detail": "The grid adopts a real REST contract runner and a browser scenario runner with service startup, network/backend assertions, artifacts, and cleanup. The plan and TODO only place browser jobs and promise final browser tests; neither produces a runner, app lifecycle, or REST verification contract, so completing I.7 cannot supply the quality gates the grid says to carry over.",
+      "fix": "Add named REST/browser runner and service-lifecycle tasks with real-app failure, candidate binding, backend-state assertions, artifact capture, and cleanup acceptance checks."
+    },
+    {
+      "id": "arch-registered-actor-lifecycle-missing",
+      "title": "Actor drill-down consumes registered children without a registration lifecycle",
+      "severity": "medium",
+      "confidence": 95,
+      "root_cause_group": "missing-actor-producer",
+      "where": {
+        "task": "merge-busybrain-herdr-todo.md / J.5",
+        "snippet": "- [ ] **J.5 Record the complete actor hierarchy.** Link every worker, registered child, reviewer,\n      and verifier job to an attempt. Show its machine, model, lease, deadline, last observation,\n      last material progress, next action, budget, and evidence.",
+        "line": null
+      },
+      "detail": "Plan §2.10 assigns registered children their own leases and budgets, but G.1 persists unit-level scheduling fields and G.6 only creates separate units or absorbs unmanaged processes into a parent attempt. No task defines actor registration, dispatch, close, or the parent/attempt relationships that J.5 and actor-attributed usage require; implementing them as status-only rows would not enforce the promised ownership and budgets.",
+      "fix": "Define actor identity, registration and close transitions, parent/attempt ownership, and lease/budget allocation in the execution layer before J.5 and J.7 consume them."
+    }
+  ],
+  "root_cause_groups": [
+    {"group": "missing-intake-producer", "summary": "Requirement consumers were added without an intake or requirement-state producer.", "finding_ids": ["arch-requirement-ledger-has-no-producer"]},
+    {"group": "candidate-contract-drift", "summary": "The early review interface was not updated to the later immutable candidate architecture.", "finding_ids": ["arch-review-input-is-not-candidate-bound"]},
+    {"group": "runrecord-authority-drift", "summary": "The run-record plan and tasks retain JSONL authority after the grid chose SQLite authority.", "finding_ids": ["arch-runrecord-authority-conflicts"]},
+    {"group": "missing-e2e-producer", "summary": "Verification scheduling was specified without the adopted real-app runners.", "finding_ids": ["arch-e2e-placement-without-runner"]},
+    {"group": "missing-actor-producer", "summary": "Actor observability and accounting precede a defined actor execution lifecycle.", "finding_ids": ["arch-registered-actor-lifecycle-missing"]}
+  ]
+}
