@@ -119,4 +119,5 @@ and attempts exceed roughly three.
 - **`scripts/test_validate_state.py`** - `python3 -m unittest test_validate_state` from `scripts/`.
 
 An implementation of these invariants, with the pane, worktree, and escalation machinery a real
-fleet needs, is specified in `herdr/orchestrator/master-control-herdr-plan.md` sections 6 and 10.2.
+fleet needs, is specified in the sibling project's
+[master-control plan](../../../herdr-orchestrator/master-control-herdr-plan.md), sections 6 and 10.2.
