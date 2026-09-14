@@ -50,6 +50,10 @@ MARKETPLACES=(
   "aiguide|timescale/pg-aiguide"
   "n8n-mcp-skills|czlonkowski/n8n-skills"
   "pstack-claude|michael-denyer/pstack-claude"
+  "caveman|JuliusBrussee/caveman"
+  "trailofbits|trailofbits/skills"
+  "context-mode|mksglu/context-mode"
+  "firecrawl|firecrawl/firecrawl-cli"
 )
 
 # ── CORE: the shipping engine (always installed) ─────────────────
@@ -84,10 +88,12 @@ OPT_AUTOMATION=(
   "n8n-mcp-skills@n8n-mcp-skills|n8n workflow automation expertise"
   "ralph-loop@claude-plugins-official|Long-running autonomous task loop"
   "pstack@pstack-claude|poteto's rigorous parallel workflows: poteto-mode, arena, interrogate, swarm (auto-fires at SessionStart like superpowers)"
+  "firecrawl@firecrawl|Firecrawl CLI skills incl. the Developer Index (needs a Firecrawl API key: npx -y firecrawl-cli@latest init --browser)"
 )
 OPT_INTEL=(
   "serena@claude-plugins-official|Semantic code navigation (LSP-backed)"
   "chrome-devtools-mcp@claude-plugins-official|Chrome DevTools debugging (desktop)"
+  "context-mode@context-mode|Sandboxed tool output + session restore (hooks every Bash/Read/Grep; overlaps claude-mem)"
 )
 OPT_AUTHORING=(
   "plugin-dev@claude-plugins-official|Author your own plugins"
@@ -99,6 +105,12 @@ OPT_AUTHORING=(
 OPT_WRITING=(
   "elements-of-style@superpowers-marketplace|Strunk's writing rules for prose/docs"
   "learning-output-style@claude-plugins-official|Interactive 'learning' output style"
+  "caveman@caveman|Terse output mode, on demand via /caveman (settings env CAVEMAN_DEFAULT_MODE=off keeps it off at start)"
+)
+OPT_SECURITY=(
+  "static-analysis@trailofbits|CodeQL / Semgrep / SARIF static analysis (Trail of Bits)"
+  "variant-analysis@trailofbits|Find variants of a known bug across a codebase (Trail of Bits)"
+  "audit-context-building@trailofbits|Structured codebase understanding before an audit (Trail of Bits)"
 )
 
 # ── Command runner ───────────────────────────────────────────────
@@ -241,6 +253,7 @@ else
   offer_group "Code intelligence"     "${OPT_INTEL[@]}"
   offer_group "Authoring & meta"      "${OPT_AUTHORING[@]}"
   offer_group "Writing & output"      "${OPT_WRITING[@]}"
+  offer_group "Security audit"       "${OPT_SECURITY[@]}"
 fi
 
 header "Plugins bootstrapped"

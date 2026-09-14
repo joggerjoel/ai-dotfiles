@@ -10,7 +10,9 @@
     "CLAUDE_MEM_TELEMETRY": "0",
     "NEXT_TELEMETRY_DISABLED": "1",
     "TURBO_TELEMETRY_DISABLED": "1",
-    "VERCEL_TELEMETRY_DISABLED": "1"
+    "VERCEL_TELEMETRY_DISABLED": "1",
+    "CAVEMAN_DEFAULT_MODE": "off",
+    "AR_DISABLE_SIMPLIFY_GATE": "1"
   },
   "includeCoAuthoredBy": false,
   "permissions": {
@@ -537,7 +539,11 @@
     "codex@openai-codex": true,
     "andrej-karpathy-skills@karpathy-skills": true,
     "superpowers@superpowers-marketplace": true,
-    "pstack@pstack-claude": true
+    "pstack@pstack-claude": true,
+    "caveman@caveman": true,
+    "static-analysis@trailofbits": true,
+    "variant-analysis@trailofbits": true,
+    "audit-context-building@trailofbits": true
   },
   "extraKnownMarketplaces": {
     "autoresearch": {
@@ -604,6 +610,30 @@
       "source": {
         "source": "github",
         "repo": "anthropics/claude-plugins-official"
+      }
+    },
+    "caveman": {
+      "source": {
+        "source": "github",
+        "repo": "JuliusBrussee/caveman"
+      }
+    },
+    "trailofbits": {
+      "source": {
+        "source": "github",
+        "repo": "trailofbits/skills"
+      }
+    },
+    "context-mode": {
+      "source": {
+        "source": "github",
+        "repo": "mksglu/context-mode"
+      }
+    },
+    "firecrawl": {
+      "source": {
+        "source": "github",
+        "repo": "firecrawl/firecrawl-cli"
       }
     }
   },

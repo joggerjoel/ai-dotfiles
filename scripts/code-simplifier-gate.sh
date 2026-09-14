@@ -7,6 +7,13 @@ LOCK_FILE="$HOME/.claude/.code-simplifier-lock"
 COOLDOWN_SECONDS=120  # 2 minute cooldown between runs
 MAX_SUBAGENTS=2       # Hard cap on total subagent count
 
+# Opt-out. Set AR_DISABLE_SIMPLIFY_GATE to any non-empty value in the profile's
+# settings.json `env` block; an export from one shell never reaches the hook's
+# process, so the env block is the only place it persists.
+if [[ -n "${AR_DISABLE_SIMPLIFY_GATE:-}" ]]; then
+  exit 0
+fi
+
 # ── OS-aware helpers ─────────────────────────────────────────────
 if [[ "$(uname -s)" == "Darwin" ]]; then
     stat_mtime() { stat -f %m "$1" 2>/dev/null || echo 0; }
