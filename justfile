@@ -107,6 +107,22 @@ fleet-temporal-check host: _control
 fleet-just: _control
     set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook provision-just.yml 2>&1 | cat
 
+# Guard: the playbook treats a missing key as an optional skip, which is right
+# for `just fleet-update` but wrong for a recipe whose whole point is the key.
+# Fail here instead of running a full fleet pass that quietly distributes nothing.
+_firecrawl_key:
+    @grep -qE '^[[:space:]]*(export[[:space:]]+)?FIRECRAWL_API_KEY[[:space:]]*=[[:space:]]*[^[:space:]]' "$HOME/.claude/.env" 2>/dev/null || { \
+      echo "✗ no FIRECRAWL_API_KEY in ~/.claude/.env."; \
+      echo "  Get one onto this machine first:"; \
+      echo "    firecrawl login"; \
+      echo "    firecrawl env -f ~/.claude/.env"; \
+      exit 1; }
+
+# Pushes the CLI, the firecrawl-* agent skills and the API key in one pass.
+# [fleet] install firecrawl CLI + skills + key on every fleet host
+fleet-firecrawl limit="aorus_ai": _control _firecrawl_key
+    set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook provision-firecrawl.yml --limit {{quote(limit)}} 2>&1 | cat
+
 # [fleet] refresh the agent CLIs (claude/codex/pi/grok/…) everywhere
 fleet-harnesses: _control
     set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook update.yml --tags harnesses 2>&1 | cat

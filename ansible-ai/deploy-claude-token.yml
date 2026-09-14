@@ -32,12 +32,19 @@
 #
 # $TOKEN was empty in the second shell, so the file got
 # `CLAUDE_CODE_OAUTH_TOKEN=` with no value — a line that satisfies every
-# "is the token set?" grep and authenticates nothing. The assert below is what
-# caught it. scripts/claude-token.sh reads and writes in the same process for
-# exactly this reason, and refuses an empty value.
+# "is the token set?" grep and authenticates nothing. The assert in the shared
+# task file is what caught it. scripts/claude-token.sh reads and writes in the
+# same process for exactly this reason, and refuses an empty value.
 #
 # Nothing downstream ever prints the value: every task that touches it sets
 # no_log.
+#
+# ── Where the work lives ──────────────────────────────────────────────────────
+# tasks/fleet-env-secret.yml. It resolves the value, proves it authenticates on
+# the control node, writes ~/.config/claude-fleet/env 0600 and sources that file
+# from the login rc above the interactive guard. provision-firecrawl.yml
+# includes the same file for FIRECRAWL_API_KEY, so both land in one file behind
+# one rc stanza. Read its header before changing anything here.
 #
 # ── Scope ─────────────────────────────────────────────────────────────────────
 # aorus_ai, NOT ai_all. The control node is where the token is MINTED and where
@@ -49,154 +56,17 @@
   gather_facts: true
   ignore_unreachable: true
 
-  vars:
-    claude_token_dir: "{{ ansible_facts.env.HOME }}/.config/claude-fleet"
-    claude_token_file: "{{ ansible_facts.env.HOME }}/.config/claude-fleet/env"
-    # bash -lc (the herdr pane shape) reaches ~/.bashrc on Linux through
-    # ~/.profile, but a bash LOGIN shell on macOS reads ~/.bash_profile — and a
-    # Mac has no ~/.bashrc at all, which this play used to require outright
-    # (macstudio: "Path .bashrc does not exist"). No interactive guard there,
-    # so blockinfile appends at the end, which a login shell still reaches.
-    claude_rc: "{{ ansible_facts.env.HOME }}/{{ '.bash_profile' if ansible_facts.os_family == 'Darwin' else '.bashrc' }}"
-    # Read from the control node's ~/.claude/.env by name. An explicitly
-    # exported CLAUDE_CODE_OAUTH_TOKEN wins, so a one-off run can override the
-    # file without editing it.
-    claude_token_from_env: "{{ lookup('env', 'CLAUDE_CODE_OAUTH_TOKEN') | default('', true) }}"
-    claude_token_from_file: >-
-      {{ (lookup('file', lookup('env', 'HOME') ~ '/.claude/.env', errors='ignore') | default('', true))
-         | regex_findall('(?m)^[ \t]*(?:export[ \t]+)?CLAUDE_CODE_OAUTH_TOKEN[ \t]*=[ \t]*[\"\x27]?([^\"\x27\r\n]+)')
-         | first | default('', true) | trim }}
-    claude_token: "{{ claude_token_from_env if claude_token_from_env | length > 0 else claude_token_from_file }}"
-
   tasks:
     - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
       vars: { unreachable_note: "no token written" }
 
-    # Fail loudly and early rather than writing an empty export that would look
-    # installed and authenticate nothing.
-    - name: Require a token on the control node
-      ansible.builtin.assert:
-        that:
-          - claude_token | length > 0
-        fail_msg: >-
-          No CLAUDE_CODE_OAUTH_TOKEN found. Mint one with `claude setup-token`
-          on the control node and append it to ~/.claude/.env as
-          CLAUDE_CODE_OAUTH_TOKEN=<token>. See the header of this playbook.
-        success_msg: "token found on the control node"
-      run_once: true
-      # The assert message would otherwise echo the var it tested.
-      no_log: true
-
-    # CLAUDE_CODE_OAUTH_TOKEN OVERRIDES a stored credential — verified on aorus8,
-    # where a host that answers `ok` normally returns
-    # `401 OAuth access token is invalid` with a bogus token in the env. That is
-    # what makes distribution work, and it is also the danger: a revoked or
-    # mistyped token does not merely fail to help, it breaks every host it
-    # reaches, including hosts that were perfectly healthy beforehand.
-    #
-    # So prove the token authenticates ON THE CONTROL NODE before writing it
-    # anywhere. Setting it in the environment here tests the token itself rather
-    # than this machine's own login, for exactly the precedence reason above.
-    # A hash-only check cannot catch this: a revoked token installs and verifies
-    # perfectly and authenticates nothing.
-    - name: Prove the token actually authenticates before distributing it
-      ansible.builtin.shell:
-        # Quoted: the `: ` inside the prompt otherwise parses as a YAML mapping.
-        cmd: "claude -p 'reply with just ok'"
-      environment:
-        CLAUDE_CODE_OAUTH_TOKEN: "{{ claude_token }}"
-      delegate_to: localhost
-      run_once: true
-      register: claude_token_liveness
-      changed_when: false
-      failed_when: claude_token_liveness.rc != 0
-      no_log: true
-      check_mode: false
-
-    - name: Say that the token is live
-      ansible.builtin.debug:
-        msg: >-
-          Token authenticates against the API — safe to distribute. (If this had
-          failed, nothing would have been written: a bad token would break every
-          host it reached, including healthy ones.)
-      run_once: true
-
-    - name: Ensure the token directory exists
-      ansible.builtin.file:
-        path: "{{ claude_token_dir }}"
-        state: directory
-        mode: "0700"
-
-    # 0600, in its own file, deliberately NOT appended to .bashrc: .bashrc is
-    # mode 644 on these hosts (verified), so a one-year credential written there
-    # would be readable by every user on the box.
-    - name: Write the token file (0600)
-      ansible.builtin.copy:
-        dest: "{{ claude_token_file }}"
-        content: "export CLAUDE_CODE_OAUTH_TOKEN={{ claude_token }}\n"
-        mode: "0600"
-      no_log: true
-
-    # Placement is load-bearing. herdr wires remote panes as
-    #   ssh -t HOST 'bash -lc "claude; exec $SHELL -l"'
-    # which is a LOGIN but NON-INTERACTIVE shell. It reaches ~/.bashrc through
-    # ~/.profile, and stock Ubuntu ~/.bashrc returns immediately for
-    # non-interactive shells:
-    #
-    #     case $- in *i*) ;; *) return;; esac
-    #
-    # So anything appended to the BOTTOM is never seen by a pane, while still
-    # being visible to an interactive ssh — it would look installed and do
-    # nothing. Verified on aorus8: TEAM_DIR (defined below the guard) reads
-    # empty under `bash -lc` and `bulls` under `bash -ic`. insertbefore puts the
-    # stanza above the guard, where nvm already sits for exactly this reason.
-    - name: Source the token from the login rc, above any interactive guard
-      ansible.builtin.blockinfile:
-        path: "{{ claude_rc }}"
-        marker: "# {mark} ANSIBLE MANAGED — claude fleet token"
-        insertbefore: "^# If not running interactively"
-        block: |
-          # Login-but-non-interactive shells (herdr panes: bash -lc) must reach
-          # this, so it lives above the interactive guard below.
-          [ -r "$HOME/.config/claude-fleet/env" ] && . "$HOME/.config/claude-fleet/env"
-        create: false
-
-    # The real check: not "did the file land" but "does a pane-shaped shell see
-    # it". Compares against the control node's value without printing either.
-    #
-    # Skipped under --check, and deliberately NOT `check_mode: false`. An earlier
-    # version ran it in check mode against a host where nothing had been written;
-    # it dutifully reported `ok`, the assert below skipped, and a dry run came out
-    # looking exactly like a successful deploy — three `changed:` lines, a diff,
-    # and no failures. Verification that runs when there is nothing to verify is
-    # worse than no verification.
-    - name: Verify a pane-shaped shell resolves the token
-      ansible.builtin.shell:
-        cmd: bash -lc 'printf "%s" "${CLAUDE_CODE_OAUTH_TOKEN:-}" | sha256sum | cut -c1-12'
-      register: claude_token_check
-      changed_when: false
-      when: not ansible_check_mode
-
-    - name: Fail if the pane-shaped shell resolved nothing or the wrong value
-      ansible.builtin.assert:
-        that:
-          - claude_token_check.stdout == (claude_token | hash('sha256'))[0:12]
-        fail_msg: >-
-          {{ inventory_hostname }}: `bash -lc` did not resolve the expected
-          CLAUDE_CODE_OAUTH_TOKEN. Check that the source stanza landed ABOVE the
-          `case $- in *i*)` guard in {{ claude_rc }} — below it, a login
-          non-interactive shell never reaches it.
-        success_msg: "{{ inventory_hostname }}: pane-shaped shell resolves the token"
-      when: not ansible_check_mode
-
-    # Says which of the two things just happened. The previous wording claimed
-    # "Token distributed" in both cases.
-    - name: What happened, and what to check next
-      ansible.builtin.debug:
-        msg: >-
-          {{
-            'DRY RUN — nothing was written and nothing was verified. Re-run without --check to deploy.'
-            if ansible_check_mode else
-            'Token distributed and verified in a pane-shaped shell. Confirm with `just auth-status`: hosts on the fleet token report `token`.'
-          }}
-      run_once: true
+    - ansible.builtin.include_tasks: tasks/fleet-env-secret.yml
+      vars:
+        secret_var: CLAUDE_CODE_OAUTH_TOKEN
+        secret_probe: "claude -p 'reply with just ok'"
+        secret_hint: >-
+          Mint one with `claude setup-token` on the control node and append it
+          to ~/.claude/.env as CLAUDE_CODE_OAUTH_TOKEN=<token>. See the header
+          of this playbook.
+        secret_done_hint: >-
+          Confirm with `just auth-status`: hosts on the fleet token report `token`.

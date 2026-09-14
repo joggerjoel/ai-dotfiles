@@ -646,6 +646,72 @@ fetch_skillspector_skill() {
   fi
 }
 
+# firecrawl — the live-web CLI (scrape, search, crawl, map, monitor) and the 28
+# `firecrawl-*` agent skills that drive it. `firecrawl init` writes the skills
+# to ~/.agents/skills and symlinks them into every agent skill dir it finds
+# (~/.claude/skills, ~/.codex/skills, ~/.gemini/skills, ~/.cursor/skills), so
+# one install covers four harnesses. It touches nothing else: no ~/.claude.json,
+# no MCP config.
+#
+# Auth is deliberately NOT done here. `firecrawl login` opens a browser, which a
+# setup run cannot drive and a headless fleet host does not have. This function
+# reports the auth state and stops. The key reaches the fleet as an env var via
+# `just fleet-firecrawl` (ansible-ai/provision-firecrawl.yml), because
+# `firecrawl config -k` does not persist when run non-interactively.
+#
+# credit-usage is the probe, not `--status`: --status exits 0 with a bad key.
+ensure_firecrawl() {
+  npm_install_global "firecrawl-cli" firecrawl "Firecrawl CLI"
+  command -v firecrawl &>/dev/null || return 0
+
+  # -y --skip-install --skip-auth is the non-interactive shape. Needs network
+  # (it shells out to npx) but no key, and reruns to a no-op.
+  if firecrawl init -y --skip-install --skip-auth >/dev/null 2>&1; then
+    ok "firecrawl skills installed (~/.agents/skills → claude/codex/gemini/cursor)"
+  else
+    warn "firecrawl skills install failed — firecrawl init -y --skip-install --skip-auth (non-fatal)"
+  fi
+
+  if firecrawl credit-usage >/dev/null 2>&1; then
+    ok "firecrawl authenticated"
+  else
+    warn 'firecrawl not authenticated — run: firecrawl login   (then: firecrawl env -f ~/.claude/.env so `just fleet-firecrawl` can distribute it)'
+  fi
+}
+
+# playwright-cli — Microsoft's token-efficient Playwright CLI plus the agent
+# skill that drives it. It is the CLI-over-MCP sibling of playwright-mcp: same
+# browser automation, but an agent spends a command and a page of output on it
+# rather than a resident MCP server and a tool schema in every context window.
+# Needs node 18+, which ensure_node has already settled. No API key.
+#
+# --global is load-bearing on BOTH install lines. Without it the command treats
+# the CURRENT DIRECTORY as the workspace to initialise and drops `.playwright/`
+# and `.claude/skills/` into it, so a setup run inside a repo would litter that
+# repo. With it, the skill lands in ~/.claude/skills (Claude) and
+# ~/.agents/skills (every other harness), and nothing else in $HOME is touched
+# beyond a one-time ffmpeg download into the playwright cache.
+#
+# Browsers are deliberately NOT installed here. The vps profile drops browser
+# tooling entirely, and the CLI and skill still earn their place on a headless
+# host: `--help` is readable, and any host that does have Chrome can drive it.
+ensure_playwright_cli() {
+  npm_install_global "@playwright/cli" playwright-cli "Playwright CLI"
+  command -v playwright-cli &>/dev/null || return 0
+
+  local failed=""
+  playwright-cli install --skills --global >/dev/null 2>&1 \
+    || failed="playwright-cli install --skills --global"
+  playwright-cli install --skills=agents --global >/dev/null 2>&1 \
+    || failed="${failed:+$failed, }playwright-cli install --skills=agents --global"
+
+  if [ -z "$failed" ]; then
+    ok "playwright-cli skill installed (~/.claude/skills + ~/.agents/skills)"
+  else
+    warn "playwright-cli skill install failed — $failed (non-fatal)"
+  fi
+}
+
 ensure_just() {
   command -v just &>/dev/null && { ok "just present"; return 0; }
   if [ "$PKG_MANAGER" = "brew" ]; then
@@ -805,6 +871,8 @@ ensure_dependencies() {
   ensure_beads   # agent issue tracking + dependency memory (npm, all hosts)
   ensure_cass    # search this host's coding-agent session history (brew or installer)
   ensure_skillspector  # scan agent skills for malicious patterns before install (uv tool)
+  ensure_firecrawl  # live-web CLI + its 28 agent skills (npm; auth stays manual)
+  ensure_playwright_cli  # browser-automation CLI + skill (npm; no browsers installed)
   ensure_herdr   # firstmate session backend (macOS/brew only — no-ops on Linux)
   ensure_herdr_renderers  # bat/delta/glow — herdr-file-viewer content panes
   ensure_just    # fleet command runner (cross-platform: brew or install.sh)

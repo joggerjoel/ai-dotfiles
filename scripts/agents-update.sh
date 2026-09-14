@@ -10,8 +10,9 @@ set -uo pipefail
 #   skillspector (NVIDIA agent-skill security scanner).
 # Plus a COMPANION CLI section at the end of the registry: tools that are
 # not agents at all but belong to an installed plugin/skill — claude-mem's
-# repair CLI today. They ride here for reach, not because they are agents;
-# see that block for why, and who actually owns them.
+# repair CLI, firecrawl, playwright-cli. They ride here for reach, not
+# because they are agents; see that block for why, and who actually owns
+# them.
 # Also reports (but never updates) the 9router gateway — a Docker
 # service on the fleet, not a local CLI; see the block at the bottom.
 #
@@ -426,6 +427,22 @@ fi
 CLAUDE_MEM_INSTALL="npm install -g claude-mem@latest"
 register_cli "claude-mem" "claude-mem" "$CLAUDE_MEM_INSTALL" "$CLAUDE_MEM_INSTALL" "npm_latest claude-mem"
 
+# firecrawl — the live-web CLI behind the firecrawl-* skills. Only the BINARY is
+# this file's business. Its skills live under ~/.agents/skills and are refreshed
+# by ansible-ai/provision-firecrawl.yml on the fleet and by setup.sh locally,
+# both through `firecrawl init`, which this step must not duplicate.
+FIRECRAWL_INSTALL="npm install -g firecrawl-cli@latest"
+register_cli "firecrawl" "firecrawl" "$FIRECRAWL_INSTALL" "$FIRECRAWL_INSTALL" "npm_latest firecrawl-cli"
+
+# playwright-cli — Microsoft's browser-automation CLI. The skill ships inside
+# the package and is versioned with it, so install and upgrade both re-run the
+# two skill installs (~/.claude/skills and ~/.agents/skills). `--global` is
+# load-bearing: without it the command initialises the CURRENT DIRECTORY as a
+# workspace. Fleet hosts only ever run `setup.sh update`, which skips the
+# ensure_* functions, so this line is the only thing that puts the skill there.
+PLAYWRIGHT_CLI_INSTALL="npm install -g @playwright/cli@latest && playwright-cli install --skills --global && playwright-cli install --skills=agents --global"
+register_cli "playwright-cli" "playwright-cli" "$PLAYWRIGHT_CLI_INSTALL" "$PLAYWRIGHT_CLI_INSTALL" "npm_latest @playwright/cli"
+
 # ── Wave 1: survey (read-only) ───────────────────────────────────
 # Resolve and report every CLI before touching any of them.
 echo -e "${BOLD}Sibling agent CLIs & plugin companions${RESET}"
@@ -489,6 +506,60 @@ if [ "$NEED_ACTION" = "yes" ]; then
     apply_cli "$i"
   done
 fi
+
+# ── playwright-cli skill presence ────────────────────────────────
+# The chained install above drops the skill only when the binary is installed
+# or upgraded. A host whose binary is already current but whose skill dirs are
+# missing (installed by hand before the skill step existed) would otherwise
+# never get it. Both installs are idempotent; `--global` is load-bearing (see
+# the registration comment).
+if command -v playwright-cli >/dev/null 2>&1; then
+  if [ -f "$HOME/.claude/skills/playwright-cli/SKILL.md" ] \
+     && [ -f "$HOME/.agents/skills/playwright-cli/SKILL.md" ]; then
+    ok "playwright-cli: skill present"
+  elif $RUN_TIMEOUT playwright-cli install --skills --global >"$LOG" 2>&1 \
+       && $RUN_TIMEOUT playwright-cli install --skills=agents --global >"$LOG" 2>&1; then
+    ok "playwright-cli: skill installed (~/.claude/skills + ~/.agents/skills)"
+  else
+    warn "playwright-cli: skill install failed — last output:"
+    tail -n 5 "$LOG" | sed 's/^/      /'
+    FAILED="$FAILED playwright-cli-skill"
+  fi
+fi
+
+# ── claude-mem runtime self-heal ─────────────────────────────────
+# A marketplace update of the claude-mem PLUGIN swaps its tree in place
+# without reinstalling that tree's dependencies, so the plugin lands with
+# no node_modules and its UserPromptSubmit hook fails on every prompt.
+# That hit every fleet host at once (found 2026-09-13) and survived every
+# `just fleet-update`, because nothing in the update path ran the
+# plugin's own recovery. preflight already REPORTS the fault via
+# `claude-mem doctor` (lib/integrations.sh PLUGIN_ASSETS); the repair had
+# no home until now, and reporting a break nobody fixes is how it lasted.
+#
+# `claude-mem` here is the global CLI registered in the companion block
+# above, never `npx claude-mem`: npx stops to ask before downloading, and
+# an unattended host would sit on that prompt.
+#
+# Repair runs ONLY when doctor fails. It performs an npm install, so it
+# stays a fault-only path instead of a cost every update pays.
+CLAUDE_MEM_BIN="$(command -v claude-mem 2>/dev/null || true)"
+if [ -z "$CLAUDE_MEM_BIN" ]; then
+  skip "claude-mem not installed, runtime check skipped"
+elif $RUN_TIMEOUT claude-mem doctor >"$LOG" 2>&1; then
+  ok "claude-mem: doctor passes"
+else
+  warn "claude-mem: $(grep -F '✗' "$LOG" | head -1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  if $RUN_TIMEOUT claude-mem repair >"$LOG" 2>&1 \
+    && $RUN_TIMEOUT claude-mem doctor >"$LOG" 2>&1; then
+    ok "claude-mem: repaired (doctor now passes)"
+  else
+    warn "claude-mem: repair did not clear the doctor — last output:"
+    tail -n 5 "$LOG" | sed 's/^/      /'
+    FAILED="$FAILED claude-mem-runtime"
+  fi
+fi
+
 HEADROOM_BIN="$HOME/.local/bin/headroom"
 [ -x "$HEADROOM_BIN" ] || HEADROOM_BIN="$(command -v headroom 2>/dev/null || true)"
 if [ -n "$HEADROOM_BIN" ]; then

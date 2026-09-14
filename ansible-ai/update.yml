@@ -13,7 +13,7 @@
 #   5. Refresh the native headroom proxy   (imports deploy-headroom-proxy.yml
 #      — headroom_native_ai hosts only; restarts the systemd user unit when
 #      the running proxy lags the upgraded CLI. Skip with --skip-tags headroom)
-#   9. Verify every asset actually works   (imports check-fleet-preflight.yml —
+#  11. Verify every asset actually works   (imports check-fleet-preflight.yml —
 #      runs scripts/preflight.sh per host: MCP servers, mandated CLIs, plugin
 #      health, env vars, hooks, skills. Read-only, never quarantines, never
 #      fails the run. Skip with --skip-tags preflight)
@@ -78,7 +78,7 @@
     # Runs AFTER the repo refresh so the freshly-pulled script is used.
     # scripts/agents-update.sh is the single source of truth for the CLI
     # list — ./update.sh runs the same script locally.
-    - name: Upgrade the sibling agent CLIs (codex, cursor, cortex, opencode, gemini, pi, grok, kimi, headroom, skillspector; reports 9router)
+    - name: Upgrade the sibling agent CLIs (codex, cursor, cortex, opencode, gemini, pi, grok, kimi, headroom, skillspector, firecrawl, playwright-cli; reports 9router)
       ansible.builtin.command: bash scripts/agents-update.sh
       args:
         chdir: "{{ dotfiles_dir }}"
@@ -170,7 +170,17 @@
 - import_playbook: deploy-claude-token.yml
   tags: [claude-token]
 
-# ── 9. Fleet observability (ai_all + observability_ai) ──────────────────────
+# ── 9. Firecrawl CLI, skills and key (aorus_ai) ─────────────────────────────
+# Installs the `firecrawl` CLI where absent, refreshes the 28 firecrawl-* agent
+# skills under ~/.agents/skills, and re-asserts FIRECRAWL_API_KEY into the same
+# ~/.config/claude-fleet/env file the token play writes.
+# The key is optional: a control node without FIRECRAWL_API_KEY in ~/.claude/.env
+# still gets the CLI and the skills, and the play ends with a note, not a failure.
+# Skip with:  ansible-playbook update.yml --skip-tags firecrawl
+- import_playbook: provision-firecrawl.yml
+  tags: [firecrawl]
+
+# ── 10. Fleet observability (ai_all + observability_ai) ─────────────────────
 # Converges node_exporter and the listening-port collector on every host, then
 # renders the grafana/prometheus/loki stack on the observability_ai host. All
 # versions, ports, images and retention windows come from observability.yml.
@@ -188,7 +198,7 @@
 - import_playbook: deploy-observability.yml
   tags: [observability]
 
-# ── 10. Asset health (ai_all) ───────────────────────────────────────────────
+# ── 11. Asset health (ai_all) ───────────────────────────────────────────────
 # LAST on purpose: it reports the state every play above just produced, so a
 # CLI installed in step 3 or a token asserted in step 8 is already in place
 # when it probes. Runs scripts/preflight.sh — MCP servers, mandated CLIs,

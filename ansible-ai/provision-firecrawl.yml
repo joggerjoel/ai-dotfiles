@@ -1,0 +1,174 @@
+---
+# Install the Firecrawl CLI, its agent skills and its API key on the fleet.
+#
+# Three things land on each host:
+#   1. `firecrawl` itself, an npm global (firecrawl-cli).
+#   2. 28 `firecrawl-*` skills under ~/.agents/skills, symlinked into every
+#      agent skill dir present (~/.claude/skills, ~/.codex/skills,
+#      ~/.gemini/skills, ~/.cursor/skills). `firecrawl init` does this and
+#      touches nothing else: no ~/.claude.json, no MCP config.
+#   3. FIRECRAWL_API_KEY, through tasks/fleet-env-secret.yml.
+#
+# Why the env var rather than `firecrawl config -k`: config -k does not persist
+# when it is run non-interactively, so a remote write is silently lost. The CLI
+# reads FIRECRAWL_API_KEY from the environment, which is the only path that
+# survives an ansible run.
+#
+# Why `firecrawl credit-usage` is the probe and not `firecrawl --status`:
+# --status exits 0 with a bad key and merely prints how it would authenticate.
+# credit-usage exits 1 on "Unauthorized: Invalid token".
+#
+# Scope is aorus_ai, NOT ai_all, for the same reason as deploy-claude-token.yml:
+# the control node logged in through the browser and holds the CLI credential
+# store, so pushing an env var there would shadow a working credential with a
+# copy of itself.
+#
+# The key is OPTIONAL here. A control node without one still gets the CLI and
+# the skills, and the play ends with a note instead of a failure.
+#
+# First-install only. Ongoing CLI upgrades ride scripts/agents-update.sh, which
+# both ./update.sh and update.yml run.
+#
+# Idempotent: a converged host skips the install, reruns `firecrawl init` to a
+# no-op, and rewrites the same export line.
+#
+#   ansible-playbook provision-firecrawl.yml
+#   ansible-playbook provision-firecrawl.yml --limit aorus4
+#   just fleet-firecrawl
+#   just fleet-firecrawl aorus4
+- name: Install the Firecrawl CLI, skills and key on the fleet
+  hosts: aorus_ai
+  gather_facts: true
+  ignore_unreachable: true
+  vars:
+    firecrawl_path: "$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+    firecrawl_lock: "{{ ansible_facts.env.HOME }}/.agents/.skill-lock.json"
+  tasks:
+    - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
+      vars: { unreachable_note: "firecrawl was not installed here" }
+
+    - name: Is the Firecrawl CLI present? (npm global lives under nvm)
+      ansible.builtin.shell: |
+        export NVM_DIR="$HOME/.nvm"
+        [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+        export PATH="{{ firecrawl_path }}"
+        command -v firecrawl
+      args:
+        executable: /bin/bash
+      register: firecrawl_check
+      # A shell task is skipped under --check, so this var would have no .rc and
+      # the install task it gates would skip for the wrong reason -- a dry run
+      # reporting convergence it never checked.
+      check_mode: false
+      changed_when: false
+      failed_when: false
+
+    - name: Install the Firecrawl CLI (npm global, via nvm)
+      ansible.builtin.shell: |
+        set -o pipefail
+        export NVM_DIR="$HOME/.nvm"
+        [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+        npm install -g firecrawl-cli@latest
+      args:
+        executable: /bin/bash
+      when: firecrawl_check.rc | default(1) != 0
+
+    # `firecrawl init` reports nothing useful about what it changed, so the
+    # skill lock file is the evidence. It rewrites every `updatedAt` on each
+    # run, so the whole-file checksum moves even when nothing did; the set of
+    # skillFolderHash values is what changes only when a skill is added,
+    # removed or updated. Absent on first run, which also reads as changed.
+    - name: Fingerprint the skill lock before installing skills
+      ansible.builtin.shell: |
+        grep -E '"skillFolderHash"' "{{ firecrawl_lock }}" 2>/dev/null | sort | sha256sum | cut -c1-12
+      args:
+        executable: /bin/bash
+      register: firecrawl_lock_before
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    # -y --skip-install --skip-auth is the non-interactive shape. It needs
+    # network (it shells out to npx) but no API key, and reruns cleanly.
+    - name: Install or refresh the firecrawl agent skills
+      ansible.builtin.shell: |
+        export NVM_DIR="$HOME/.nvm"
+        [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+        export PATH="{{ firecrawl_path }}"
+        firecrawl init -y --skip-install --skip-auth
+      args:
+        executable: /bin/bash
+      register: firecrawl_init
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Fingerprint the skill lock after installing skills
+      ansible.builtin.shell: |
+        grep -E '"skillFolderHash"' "{{ firecrawl_lock }}" 2>/dev/null | sort | sha256sum | cut -c1-12
+      args:
+        executable: /bin/bash
+      register: firecrawl_lock_after
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Report whether the skill set moved
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: firecrawl skills
+          {{ 'updated' if firecrawl_skills_changed | bool else 'already current' }}
+      changed_when: firecrawl_skills_changed | bool
+      vars:
+        firecrawl_skills_changed: >-
+          {{ (firecrawl_lock_after.stdout | default('') | trim)
+             != (firecrawl_lock_before.stdout | default('') | trim) }}
+      when: not ansible_check_mode
+
+    - ansible.builtin.include_tasks: tasks/fleet-env-secret.yml
+      vars:
+        secret_var: FIRECRAWL_API_KEY
+        secret_probe: "firecrawl credit-usage"
+        secret_optional: true
+        secret_hint: >-
+          run `firecrawl login` then `firecrawl env -f ~/.claude/.env` on the
+          control node
+        secret_done_hint: >-
+          Every host can now scrape, search and crawl from the CLI and its skills.
+
+    # The end-to-end proof: a login shell picks the key out of the fleet env
+    # file and the CLI accepts it. Anything short of this passes on a host whose
+    # rc stanza landed in the wrong place. nvm is sourced inside the login
+    # shell because the Macs keep npm globals under nvm too, but only their
+    # zsh rc loads it; the Linux hosts load it from .bashrc already.
+    - name: Prove the CLI authenticates in a login shell on this host
+      ansible.builtin.shell: |
+        bash -lc 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; export PATH="{{ firecrawl_path }}"; firecrawl credit-usage'
+      args:
+        executable: /bin/bash
+      register: firecrawl_proof
+      changed_when: false
+      failed_when: firecrawl_proof.rc != 0
+      when: not ansible_check_mode
+
+    - name: Collect the version and the skill count
+      ansible.builtin.shell: |
+        export NVM_DIR="$HOME/.nvm"
+        [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+        export PATH="{{ firecrawl_path }}"
+        printf '%s %s' "$(firecrawl --version 2>/dev/null | head -1)" \
+          "$(ls "$HOME/.agents/skills" 2>/dev/null | grep -c '^firecrawl' || true)"
+      args:
+        executable: /bin/bash
+      register: firecrawl_report
+      changed_when: false
+      failed_when: false
+      when: not ansible_check_mode
+
+    - name: Report what this host ended up with
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: firecrawl
+          {{ (firecrawl_report.stdout | default('') | trim).split(' ') | first | default('n/a', true) }},
+          {{ (firecrawl_report.stdout | default('') | trim).split(' ') | last | default('0', true) }} skills,
+          key verified
+      when: not ansible_check_mode
