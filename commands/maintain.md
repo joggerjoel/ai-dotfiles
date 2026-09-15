@@ -47,8 +47,7 @@ restarts, file edits). Read-only checks never need confirmation.
   **Solution:** an unreachable host has no facts/registers — guard with
   `| default(...)` / `is defined`, never let a down box read as a playbook bug.
 - **Problem:** herdr lab/e2e checks flaky when run back-to-back.
-  **Solution:** known upstream test contention (see
-  firstmate-integration/herdr-e2e-flakiness-report.md); run individually before
+  **Solution:** known upstream test contention; run individually before
   calling anything broken.
 - **Problem:** `herdr server stop` seems ignored (server right back up).
   **Solution:** that is launchd KeepAlive doing its job; use

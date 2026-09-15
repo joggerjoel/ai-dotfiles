@@ -242,13 +242,13 @@ if [ "$RUN_AGENTS" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/agents-update.sh" ];
   "$DOTFILES_DIR/scripts/agents-update.sh" || warn "Some agent CLI upgrades failed (non-fatal)."
 fi
 
-# ── 3b. herdr (firstmate session backend, macOS/brew only) ───────
+# ── 3b. herdr (node session backend, macOS/brew only) ────────────
 # Local-only by design: this lives in update.sh (control-node orchestrator),
 # NOT agents-update.sh — so the ansible fleet never upgrades it. The Mac
-# control nodes that run firstmate keep it current; the Linux aorus hosts
+# control nodes that run the session keep it current; the Linux aorus hosts
 # never see it. brew-gated, so it also no-ops on a non-brew mac.
 if [ "$RUN_AGENTS" = "yes" ] && command -v brew &>/dev/null && command -v herdr &>/dev/null; then
-  header "herdr (firstmate backend)"
+  header "herdr (node session backend)"
   before_herdr="$(herdr --version 2>/dev/null | awk '{print $NF}')"
   if brew upgrade herdr >/dev/null 2>&1; then
     after_herdr="$(herdr --version 2>/dev/null | awk '{print $NF}')"

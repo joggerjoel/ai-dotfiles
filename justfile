@@ -2,7 +2,7 @@
 #   just            → list every recipe (this menu)
 #   just <recipe>   → run it
 #
-# Recipes are grouped: [herdr] the node session backend · [captain] firstmate ·
+# Recipes are grouped: [herdr] the node session backend ·
 # [lifecycle] install/maintain · [fleet] ansible over all hosts · [local] this
 # machine. Node-targeting recipes are ROLE-AWARE: set FLEET_ROLE=node in the
 # node's own .env and they run locally there instead of ssh-ing to themselves;
@@ -107,6 +107,11 @@ fleet-temporal-check host: _control
 fleet-just: _control
     set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook provision-just.yml 2>&1 | cat
 
+# Macs only; Linux hosts report "not macOS" and end. Upgrades ride fleet-update.
+# [fleet] install Orca (agent-orchestration IDE + CLI) on every fleet Mac
+fleet-orca limit="ai_all": _control
+    set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook provision-orca.yml --limit {{quote(limit)}} 2>&1 | cat
+
 # Guard: the playbook treats a missing key as an optional skip, which is right
 # for `just fleet-update` but wrong for a recipe whose whole point is the key.
 # Fail here instead of running a full fleet pass that quietly distributes nothing.
@@ -141,10 +146,6 @@ fleet-push: _control
 # [fleet] install/repair missing tooling on every fleet host
 fleet-converge: _control
     set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook provision-ai.yml --skip-tags claude-token 2>&1 | cat
-
-# [fleet] provision the always-on node as the firstmate node
-provision-node: _control
-    set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook provision-firstmate.yml 2>&1 | cat
 
 # [fleet] ad-hoc: reachability check across the fleet
 ping: _control

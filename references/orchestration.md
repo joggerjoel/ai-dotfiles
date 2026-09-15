@@ -7,7 +7,7 @@ runs on, and where state actually lives.
 Every hostname below (`macstudio`, `aorus…`) is an example from one fleet. Yours
 comes from `.env` and your gitignored `ansible-ai/inventory.local.yml`.
 
-## The six layers
+## The five layers
 
 ```
   operator          you, at a terminal
@@ -18,21 +18,18 @@ comes from `.env` and your gitignored `ansible-ai/inventory.local.yml`.
        │
   session           herdr — survives your laptop closing
        │
-  crew              firstmate — one agent supervising many
-       │
   models            frontier · bulk (9router) · local (ollama)
 ```
 
 Each layer only knows the one beneath it. That is the point: you can run the
-top three and stop — a single laptop with no node, no crew, and no gateway is a
+top three and stop — a single laptop with no node and no gateway is a
 valid install. The lower layers are scale, not entry requirements.
 
 | Layer | Owns | Does **not** own |
 |---|---|---|
 | **launchpad** (`just`) | dispatch, role awareness | any work of its own |
 | **provisioning** | what is installed, on which host, at which version | anything at runtime |
-| **session** (herdr) | process lifetime, panes, attach/detach | what the agents do |
-| **crew** (firstmate) | spawning and supervising agents | how a model is reached |
+| **session** (herdr) | process lifetime, panes, attach/detach | what the agents do, or how a model is reached |
 | **models** | inference | everything above |
 
 ## Machine roles
@@ -42,9 +39,9 @@ runs the same `ai-dotfiles`.
 
 | Role | `FLEET_ROLE` | What it is | State |
 |---|---|---|---|
-| **Node** | `node` | The always-on box. Runs the herdr session and, if you use one, the crew. | All session state lives here |
+| **Node** | `node` | The always-on box. Runs the herdr session your agents live in. | All session state lives here |
 | **HUD** | `hud` (default) | Your laptop. A viewport that attaches to the node. | **None** — close it, lose nothing |
-| **Worker** | `worker` | Extra capacity the crew can dispatch to. | Per-task only |
+| **Worker** | `worker` | Extra capacity agents can dispatch work to over SSH. | Per-task only |
 | **Gateway** | — | Runs 9router and the headroom proxy. Membership is inventory group `ninerouter_ai`, not a role. | Model routing config |
 
 The HUD holding no state is the load-bearing property. It is why closing a
@@ -60,7 +57,7 @@ resumes the same session.
    `herdr-remote` (in ~/Developer/herdr), which SSHes to `FLEET_NODE`.
 3. **herdr** on the node has been running since it was provisioned. The session,
    its panes, and every agent in them are already alive.
-4. You are attached. Anything the crew started while the laptop was shut is
+4. You are attached. Anything the agents started while the laptop was shut is
    still running, mid-scroll.
 
 Detach and the node keeps going. That branch — the same recipe behaving
@@ -84,8 +81,8 @@ Playbooks are targeted by inventory group, not by hostname:
 | Playbook | Group | Purpose |
 |---|---|---|
 | `provision-ai.yml` | `aorus_ai` | first-time install of base + harnesses |
-| `provision-firstmate.yml` | `firstmate_ai` | the crew manager, node only |
-| `provision-firstmate-worker.yml` | `firstmate_worker_ai` | attachable worker sessions |
+| `provision-herdr.yml` | `ai_all` | the session backend, where its server is idle |
+| `provision-orca.yml` | `ai_all` (Macs only) | Orca and its agent skills |
 | `deploy-9router.yml` | `ninerouter_ai` | the model gateway |
 | `update.yml` | `aorus_ai` | pull latest and reassemble everywhere |
 | `verify-config.yml` | `aorus_ai` | prove a deploy landed |

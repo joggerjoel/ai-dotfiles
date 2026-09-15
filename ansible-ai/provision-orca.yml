@@ -1,0 +1,82 @@
+---
+# Install Orca (Stably AI's IDE for orchestrating coding agents across terminals
+# and worktrees) on the fleet's Macs. It ships only as a Homebrew cask, so the
+# Linux aorus hosts are reported and ended, not failed.
+#
+# The cask bundles the `orca` CLI, which is what a headless Mac needs: `orca
+# serve` runs the runtime without the window, and `orca account add` manages
+# the Claude/Codex accounts it drives. The in-app "Install CLI" button cannot
+# be pressed over ssh; the cask's `binary` stanza links the CLI at install time.
+#
+# The install is scripts/install-orca.sh, shipped from the control node's
+# checkout and run over ssh (the script module), so it does not depend on the
+# host's ai-dotfiles checkout being current. It also installs Orca's bundled
+# agent skills (orca-cli, orchestration, computer-use, ...) into
+# ~/.agents/skills and links them into every harness on the host; that step
+# needs npx, which the script finds through nvm. The script's header explains why
+# a plain `brew install --cask` is the wrong converge here (Homebrew 7 tap
+# trust, existing DMG installs, and --adopt recording the wrong version for an
+# auto-updating cask). Ongoing upgrades ride scripts/agents-update.sh, which
+# runs the same script; this play is the targeted first-install converge.
+#
+# Idempotent: a converged Mac skips the install. Offline hosts are reported
+# unreachable and skipped (ignore_unreachable).
+#
+#   ansible-playbook provision-orca.yml
+#   ansible-playbook provision-orca.yml --limit macstudio
+#   just fleet-orca
+- name: Install Orca on the fleet's Macs
+  hosts: ai_all
+  gather_facts: true
+  ignore_unreachable: true
+  vars:
+    brew_path: "/opt/homebrew/bin:/usr/local/bin:$PATH"
+  tasks:
+    - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
+      vars: { unreachable_note: "orca was not installed here" }
+
+    - name: Say plainly that a Linux host has no Orca to install
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: not macOS — Orca is a Homebrew cask, nothing to do"
+      when: ansible_facts.system | default('') != "Darwin"
+
+    - name: Stop cleanly on non-macOS hosts
+      ansible.builtin.meta: end_host
+      when: ansible_facts.system | default('') != "Darwin"
+
+    - name: Converge Orca (trust the tap, install, adopt or reinstall as needed)
+      ansible.builtin.script: ../scripts/install-orca.sh
+      args:
+        executable: /bin/bash
+      register: orca_run
+      changed_when: orca_run.stdout is search('installed|adopted|reinstalled|replaced')
+      failed_when: orca_run.rc | default(1) != 0
+      when: not ansible_check_mode
+
+    - name: Report the state without changing it (check mode)
+      ansible.builtin.script: ../scripts/install-orca.sh --check
+      args:
+        executable: /bin/bash
+      register: orca_check
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: ansible_check_mode
+
+    - name: Verify the CLI answers and report the version
+      ansible.builtin.shell: |
+        export PATH="{{ brew_path }}"
+        orca --version
+      args:
+        executable: /bin/bash
+      register: orca_ver
+      changed_when: false
+      failed_when: orca_ver.rc | default(0) != 0
+      when: not ansible_check_mode
+
+    - name: Report what this host ended up with
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          {{ (orca_check.stdout | trim) if ansible_check_mode
+             else (orca_run.stdout | trim) ~ '; CLI reports ' ~ (orca_ver.stdout_lines | first | default('nothing')) }}

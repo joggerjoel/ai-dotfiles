@@ -35,7 +35,7 @@ This repository provisions but does not contain:
 
 | Software    | Role here                                                                                      | Source                                                            |
 | ----------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `firstmate` | optional crew manager                                                                          | [kunchenguid/firstmate](https://github.com/kunchenguid/firstmate) |
+| `orca`      | agent-orchestration IDE (macOS)                                                                | https://onorca.dev                                                |
 | `herdr`     | terminal workspace manager                                                                     | https://herdr.dev                                                 |
 | `9router`   | model gateway                                                                                  | https://9router.com                                               |
 | `mel`       | agentic terminal harness                                                                       | https://openmel.dev                                               |

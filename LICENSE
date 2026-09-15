@@ -37,6 +37,6 @@ This grant covers the work authored in this repository since the fork point
 2. Vendored third-party skills. Skills copied from other projects retain
    their original licenses. See NOTICE.md for the inventory.
 
-3. Third-party software this repository installs or configures (firstmate,
-   herdr, 9router, and the agent CLIs). Those carry their own licenses and
+3. Third-party software this repository installs or configures (herdr,
+   orca, 9router, and the agent CLIs). Those carry their own licenses and
    are not redistributed here.

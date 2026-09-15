@@ -10,8 +10,8 @@ set -uo pipefail
 #   skillspector (NVIDIA agent-skill security scanner).
 # Plus a COMPANION CLI section at the end of the registry: tools that are
 # not agents at all but belong to an installed plugin/skill — claude-mem's
-# repair CLI, firecrawl, playwright-cli. They ride here for reach, not
-# because they are agents; see that block for why, and who actually owns
+# repair CLI, firecrawl, playwright-cli, orca (macOS cask). They ride here
+# for reach, not because they are agents; see that block for why, and who actually owns
 # them.
 # Also reports (but never updates) the 9router gateway — a Docker
 # service on the fleet, not a local CLI; see the block at the bottom.
@@ -121,6 +121,10 @@ npm_latest() { command -v npm >/dev/null 2>&1 && npm view "$1" version 2>/dev/nu
 brew_latest() {
   command -v brew >/dev/null 2>&1 || return 0
   brew info "$1" 2>/dev/null | head -1 | grep -oE '[0-9]+(\.[0-9]+)+' | head -1
+}
+brew_cask_latest() {
+  command -v brew >/dev/null 2>&1 || return 0
+  brew info --cask "$1" 2>/dev/null | head -1 | grep -oE '[0-9]+(\.[0-9]+)+' | head -1
 }
 
 # ── Wave structure ───────────────────────────────────────────────
@@ -286,9 +290,8 @@ register_cli "agy" "$HOME/.local/bin/agy" "\"%BIN%\" update" "$AGY_INSTALL"
 PI_INSTALL="npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
 register_cli "pi" "pi" "\"%BIN%\" update self || $PI_INSTALL" "$PI_INSTALL" "npm_latest @earendil-works/pi-coding-agent"
 
-# grok (official xAI Grok CLI) — npm global. The @xai-official/grok package
-# is the one firstmate's grok harness targets (grok --always-approve); the
-# many third-party grok-cli packages are NOT interchangeable.
+# grok (official xAI Grok CLI) — npm global. @xai-official/grok is the vendor
+# package; the many third-party grok-cli packages are NOT interchangeable.
 GROK_INSTALL="npm install -g @xai-official/grok@latest"
 register_cli "grok" "grok" "$GROK_INSTALL" "$GROK_INSTALL" "npm_latest @xai-official/grok"
 
@@ -409,8 +412,8 @@ fi
 # ── Companion CLIs (NOT agents) ──────────────────────────────────
 # Tools that belong to an installed plugin or skill, not to a harness. They are
 # registered in this file for one reason — reach: it is the only step that runs
-# on every host (./update.sh locally, ansible-ai/update.yml on the fleet,
-# provision-firstmate-worker.sh on a fresh worker), so a CLI absent from here
+# on every host (./update.sh locally, ansible-ai/update.yml on the fleet), so
+# a CLI absent from here
 # never converges. Registration is NOT ownership: the asset is still classified
 # as a plugin everywhere it matters — bootstrap-plugins.sh installs it from its
 # marketplace, and lib/integrations.sh's PLUGIN_ASSETS is what probes whether it
@@ -442,6 +445,20 @@ register_cli "firecrawl" "firecrawl" "$FIRECRAWL_INSTALL" "$FIRECRAWL_INSTALL" "
 # ensure_* functions, so this line is the only thing that puts the skill there.
 PLAYWRIGHT_CLI_INSTALL="npm install -g @playwright/cli@latest && playwright-cli install --skills --global && playwright-cli install --skills=agents --global"
 register_cli "playwright-cli" "playwright-cli" "$PLAYWRIGHT_CLI_INSTALL" "$PLAYWRIGHT_CLI_INSTALL" "npm_latest @playwright/cli"
+
+# orca — Stably AI's agent-orchestration IDE, a macOS cask with an `orca` CLI.
+# Registered only where a brew cask can exist: the Linux fleet has nothing to
+# report, and a "skipped" line on every Linux host would be noise about a tool
+# that can never be there. Install and upgrade are the same converge script,
+# as with mel: `brew upgrade` cannot be the upgrade here because the cask is
+# marked auto_updates, which makes brew's receipt lie about the installed
+# version (install-orca.sh's header has the incident). The survey's "latest"
+# is the cask version; an `orca --version` that does not contain it (an older
+# CLI prints usage instead) reads as outdated and runs the script.
+if command -v brew >/dev/null 2>&1 && [ "$(uname -s)" = "Darwin" ]; then
+  ORCA_INSTALL="$SCRIPT_DIR/install-orca.sh"
+  register_cli "orca" "orca" "$ORCA_INSTALL" "$ORCA_INSTALL" "brew_cask_latest stablyai/orca/orca"
+fi
 
 # ── Wave 1: survey (read-only) ───────────────────────────────────
 # Resolve and report every CLI before touching any of them.
@@ -505,6 +522,23 @@ if [ "$NEED_ACTION" = "yes" ]; then
   for i in "${!CLI_NAME[@]}"; do
     apply_cli "$i"
   done
+fi
+
+# ── orca skills presence (Macs with a brew-managed Orca) ─────────
+# The roster runs install-orca.sh only when the survey finds the CLI outdated
+# or missing. A Mac whose binary is current but whose skill dirs are empty
+# (Orca installed before the skill step existed) would otherwise never get
+# them, which is the playwright-cli gap below in another coat. Gated on brew
+# ownership so an interactive "no" to installing Orca is respected.
+if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1 \
+   && brew list --cask stablyai/orca/orca >/dev/null 2>&1; then
+  if orca_out="$($RUN_TIMEOUT bash "$SCRIPT_DIR/install-orca.sh" 2>"$LOG")"; then
+    ok "$orca_out"
+  else
+    warn "${orca_out:-orca: install-orca.sh failed} — last output:"
+    tail -n 5 "$LOG" | sed 's/^/      /'
+    FAILED="$FAILED orca-skills"
+  fi
 fi
 
 # ── playwright-cli skill presence ────────────────────────────────

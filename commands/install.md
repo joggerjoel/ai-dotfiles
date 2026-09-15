@@ -25,7 +25,7 @@ and only stop for genuinely blocking decisions.
    gh bun uv herdr tmux): list them, install only if the user wants them (interactive)
    or skip with a note (one-shot).
 4. **Interactive mode only:** ask (AskUserQuestion, batches of ≤4):
-   - machine role: HUD/laptop · node (always-on, firstmate) · fleet worker?
+   - machine role: HUD/laptop · node (always-on, herdr session) · fleet worker?
    - **their node's ssh alias** (the repo's `macstudio`/`mac` names are examples,
      not requirements) — then write a repo-root `.env` from the fleet section of
      `.env.example` with their `FLEET_NODE` / `HERDR_REMOTE_SSH` /
@@ -50,7 +50,7 @@ and only stop for genuinely blocking decisions.
   text, gitstatus errors).
   **Solution:** malformed `pyenv init` lines in `~/.zshrc` — the invocation must be
   `eval "$(pyenv init - zsh)"` (a SHELL name, never a home path). Back up before edit.
-- **Problem:** crewmate/subagent file reads blocked by a `scout-block` hook error.
+- **Problem:** subagent file reads blocked by a `scout-block` hook error.
   **Solution:** ensure `AR_DISABLE_SCOUT_BLOCK=1` is exported in `~/.zshenv` (covers
   every zsh invocation).
 - **Problem:** `Permission denied` writing to `~/Downloads` or similar.

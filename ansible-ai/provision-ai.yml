@@ -363,7 +363,7 @@
         executable: /bin/bash
         creates: "{{ ansible_facts.env.HOME }}/.local/bin/agy"
 
-    # pi (Earendil Pi coding agent) — npm global; a firstmate co-primary harness.
+    # pi (Earendil Pi coding agent) — npm global.
     - name: Is the Pi CLI present? (npm global lives under nvm)
       ansible.builtin.shell: |
         export NVM_DIR="$HOME/.nvm"
@@ -389,9 +389,8 @@
         executable: /bin/bash
       when: pi_check.rc != 0
 
-    # grok (official xAI Grok CLI) — npm global; a firstmate co-primary harness.
-    # @xai-official/grok is the package firstmate targets; third-party grok-cli
-    # packages are NOT interchangeable.
+    # grok (official xAI Grok CLI) — npm global. @xai-official/grok is the vendor
+    # package; third-party grok-cli packages are NOT interchangeable.
     - name: Is the Grok CLI present? (npm global lives under nvm)
       ansible.builtin.shell: |
         export NVM_DIR="$HOME/.nvm"

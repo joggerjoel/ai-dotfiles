@@ -105,6 +105,12 @@ Resolved, not stranded:
 
 ### Not started — from kunchenguid/firstmate
 
+**Resolved 2026-09-15: the deployment was removed.** The audit's "either wire it up or
+stop provisioning it" was taken the second way: `provision-firstmate*.yml`, the two
+provisioning scripts and the setup.sh entry points are gone, and Orca (`provision-orca.yml`)
+now fills the orchestration slot on the Macs. The P1 command-policy gap below stays open as a
+design to copy; firstmate remains a reference, not a deployment.
+
 Audited 2026-09-11 (run 2). Independently verified: 5,543 stars, 1,721 forks, 1,271 open
 issues, Shell, MIT, pushed the same day. An "agent distro" — a portable directory of
 instructions, skills and tooling that turns any harness into a crew orchestrator. Active

@@ -5,7 +5,7 @@
 > specialized engineering team. Talk to one agent; it does the work.
 
 <p align="center">
-  <img src="assets/ai-tooling-overview.png" alt="ai-dotfiles at a glance: the pass (just — one menu that fires every order), firstmate the optional crew manager on top, the base kitchen — 76 skills, three model tiers, 11 harnesses — and the supply line underneath: ansible + setup.sh + agents-update keeping a chain of 8 machines provisioned, restocked, and health-checked" width="100%" />
+  <img src="assets/ai-tooling-overview.png" alt="ai-dotfiles at a glance: the pass (just — one menu that fires every order), the base kitchen — 76 skills, three model tiers, 11 harnesses — and the supply line underneath: ansible + setup.sh + agents-update keeping a chain of 8 machines provisioned, restocked, and health-checked" width="100%" />
 </p>
 
 It started as dotfiles. It's now the **config + provisioning + orchestration** layer for running an
@@ -13,8 +13,7 @@ AI workforce across a fleet of machines. The name stuck; the scope didn't.
 
 > **Lineage:** forked from **[iamnolanhu/claude-dotfiles](https://github.com/iamnolanhu/claude-dotfiles)**
 > (Nolan Hu / Sigma Synapses) — kept its clean one-command provisioning core, then grew a
-> model-routing gateway, a multi-agent review pipeline, a node/HUD/worker fleet, and optional crew
-> orchestration. Credit + link at the bottom.
+> model-routing gateway, a multi-agent review pipeline, and a node/HUD/worker fleet. Credit + link at the bottom.
 
 > **New here?** Run `./setup.sh`, then open Claude Code and say **`help me get started`** — it walks
 > you through building and shipping. Or read **[GETTING-STARTED.md](GETTING-STARTED.md)** first.
@@ -27,30 +26,27 @@ AI workforce across a fleet of machines. The name stuck; the scope didn't.
 > the node/HUD/worker split is optional scale, not an entry requirement. Your real hosts, IPs, and
 > tokens live only in gitignored files (`.env`, `inventory.local.yml`).
 
-## What this is (the two layers)
+## What this is
 
-- **The base — `ai-dotfiles` (required).** Stocks every machine and gives you a working AI toolkit
-  that runs on its own: **76 skills**, **three model tiers**, **11 harnesses**, guardrails, memory,
-  and ansible fleet ops. This is the whole system for most work.
-- **The crew manager — `firstmate` (optional, on top).** One agent that spawns and supervises many
-  agents in parallel, provisioned onto your always-on node by ai-dotfiles. Add it only when
-  juggling many jobs at once is the real bottleneck.
+**`ai-dotfiles`** stocks every machine and gives you a working AI toolkit that runs on its own:
+**76 skills**, **three model tiers**, **11 harnesses**, guardrails, memory, and ansible fleet ops.
+On Macs it also installs [Orca](https://onorca.dev/), Stably AI's IDE for orchestrating agents
+across terminals and worktrees, with its agent skills, when many parallel jobs are the bottleneck.
 
-The overview image above is the map: base at the bottom, crew manager on top. For the **runtime
-view** — the six-layer stack (operator → `just` → provisioning → herdr session → crew → models),
-machine roles, and how a typed command flows through it — see
+For the **runtime view** — the five-layer stack (operator → `just` → provisioning → herdr session
+→ models), machine roles, and how a typed command flows through it — see
 **[references/orchestration.md](references/orchestration.md)**.
 
 ## What you get
 
-- **One menu for everything** — `just` lists every workflow (herdr, fleet, firstmate, lifecycle).
+- **One menu for everything** — `just` lists every workflow (herdr, fleet, lifecycle).
   Recipes are **role-aware**: node-targeting ones ssh to your node from anywhere else and run
   locally on the node itself (`FLEET_ROLE=node` in its `.env`); fleet recipes fail fast with a
   pointer unless the machine holds your inventory. Local recipes run wherever you are.
 - **One-command provisioning** of any machine — CLIs, skills, MCP servers, tokens, safety rails —
   and an **agentic install/maintain lifecycle**: a Setup-hook census plus `/install` and
   `/maintain` prompts that read the logs, close gaps, and carry the known-issues playbook.
-- **Persistent sessions on an always-on node** — herdr keeps the crew running when your laptop
+- **Persistent sessions on an always-on node** — herdr keeps your agents running when your laptop
   closes; attach from anywhere on the mesh (`just attach`).
 - **On-demand multi-agent power commands** — `/fusion`, `/council`, `isolate`, plus the SHIPIT
   review loop — and a 76-skill library (review, plan, design, write, web, dev).
@@ -62,7 +58,6 @@ machine roles, and how a typed command flows through it — see
   session's cache lapses, and can (opt-in) block a huge prompt into a cold session
   (`./setup.sh cache` to configure). It observes Anthropic's cache; it can't extend it.
 - **A multi-machine fleet** — node / HUD / workers, driven by ansible, pull-based and reproducible.
-- **Optional crew orchestration** — talk to one agent (`firstmate`) that runs the rest.
 
 ## Power commands — the review pipeline
 
@@ -109,15 +104,14 @@ MCP. Or open Claude Code in the folder and say **"set this up for me."** Drop to
 
 ## The launchpad — type `just`
 
-Every workflow in this repo — herdr, fleet ansible, firstmate, install/maintain — is indexed in the
+Every workflow in this repo — herdr, fleet ansible, install/maintain — is indexed in the
 [`justfile`](justfile). How the layers fit together (operator → launchpad → provisioning → session →
-crew → models) and how one command flows through them:
+models) and how one command flows through them:
 **[references/orchestration.md](references/orchestration.md)** — the high-level map. The menu itself:
 
 ```bash
 just                # list every recipe (setup.sh installs `just`; fleet-wide: `just fleet-just`)
 just attach         # laptop → the node's herdr session
-just captain        # firstmate on the node — you're the captain
 just fleet-update   # ansible update across every host
 just install-hil    # agentic, human-in-the-loop machine onboarding
 ```
@@ -145,9 +139,9 @@ start with one machine playing every role and split out roles as you grow:
 
 | Role                  | Machine (example) | Runs                                                     |
 | --------------------- | ----------------- | -------------------------------------------------------- |
-| **Node** (always-on)  | macstudio         | `firstmate` + crew + herdr session; the cockpit host     |
+| **Node** (always-on)  | macstudio         | the herdr session your agents live in; the cockpit host  |
 | **HUD** (ephemeral)   | MacBook           | an SSH viewport into the node's session — holds no state |
-| **Workers** (servers) | aorus fleet       | where server programs run; reached by crewmates over SSH |
+| **Workers** (servers) | aorus fleet       | where server programs run; reached by agents over SSH    |
 | **Gateways**          | aorus4 / aorus8   | 9router + headroom                                       |
 
 Deployment is **pull-based and reproducible**: hosts run `git pull` against this repo, so the flow
@@ -175,16 +169,9 @@ Scoped ansible playbooks (in `ansible-ai/`, each targeting its own inventory gro
 | `provision-ai.yml`                      | a new host            | first-time install of the base + harnesses                        |
 | `deploy-9router.yml`                    | `ninerouter_ai`       | the 9router Docker stack (aorus4/aorus8)                          |
 | `deploy-headroom-proxy.yml`             | `headroom_native_ai`  | the headroom proxy (systemd user unit)                            |
-| `provision-firstmate.yml`               | `firstmate_ai`        | stand up the always-on **node** (herdr + toolchain + firstmate)   |
-| `provision-firstmate-worker.yml`        | `firstmate_worker_ai` | a **worker**: herdr + harnesses for attachable server sessions    |
+| `provision-herdr.yml`                   | `ai_all`              | install/converge herdr where its server is idle                   |
+| `provision-orca.yml`                    | `ai_all` (Macs)       | Orca + its agent skills on every fleet Mac                        |
 | `push-config.yml` / `verify-config.yml` | fleet                 | rsync uncommitted config for testing / prove a deploy landed      |
-
-Opt-in, per-machine (never part of a fleet-wide `update`):
-
-```bash
-./setup.sh provision-firstmate          # make THIS machine the firstmate node
-./setup.sh provision-firstmate-worker   # make THIS machine a firstmate worker
-```
 
 Hands-off: `./scripts/fleet-cron-setup.sh` schedules a daily fleet update from the control node.
 Full dry-run / per-host detail: **[ansible-ai/README.md](ansible-ai/README.md)**.
@@ -192,15 +179,6 @@ Full dry-run / per-host detail: **[ansible-ai/README.md](ansible-ai/README.md)**
 **Two things never deploy, by design:** the gitignored personal layer (`.local/`,
 `ansible-ai/inventory.local.yml`, `~/.claude/.env`) stays machine-local, and interactive setup
 choices travel only if reflected in tracked files — each host replays its own saved answers.
-
-## firstmate — the optional crew manager
-
-[firstmate](https://github.com/kunchenguid/firstmate) is a separate agent distro (a crew
-orchestrator). ai-dotfiles doesn't replace it — it **provisions** it: `provision-firstmate.yml`
-builds its toolchain (herdr, treehouse, no-mistakes, the axi tools) and clones it onto your node,
-and the base's `isolate`/`fusion`/`council` commands become crew skills. You talk to one agent; it
-runs the fleet. Integration plan and topology: kept in a sibling
-`firstmate-integration` repo. It's genuinely optional — the base is a complete system without it.
 
 ## Under the hood — profiles & config assembly
 
@@ -234,7 +212,7 @@ Forked from **[iamnolanhu/claude-dotfiles](https://github.com/iamnolanhu/claude-
 **Nolan Hu / [Sigma Synapses](https://sigmasynapses.com)** — the one-command provisioning core,
 the profile/`CLAUDE.md` assembly system, and 18 of the skills are his. This fork adds the
 `ansible-ai/` fleet layer, the model-routing gateway, the multi-agent review pipeline, the
-node/HUD/worker topology, and the firstmate integration. Full breakdown in
+and the node/HUD/worker topology. Full breakdown in
 [NOTICE.md](NOTICE.md). If the upstream helped you, star it.
 
 ## Contributing

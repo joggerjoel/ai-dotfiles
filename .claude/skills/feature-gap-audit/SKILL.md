@@ -11,7 +11,7 @@ description: Project-specific config for auditing ai-dotfiles against reference 
 
 - `yc-software/qm` — hosted multiplayer agent harness; source of portable security/policy patterns
 - `iamnolanhu/claude-dotfiles` — upstream fork source (confirmed via `gh api repos/joggerjoel/ai-dotfiles`)
-- `kunchenguid/firstmate` — the crew orchestrator this repo provisions
+- `kunchenguid/firstmate` — a crew orchestrator this repo provisioned until 2026-09-15 (kept as a design reference)
 
 ### Branches to always survey
 

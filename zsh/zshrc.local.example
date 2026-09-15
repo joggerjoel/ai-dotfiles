@@ -16,7 +16,7 @@
 #   export GITHUB_MCP_PAT="$(gh auth token 2>/dev/null)"
 # fi
 
-# --- firstmate crewmates run `claude` inside herdr panes and inherit this
-# shell's env. The autoresearch plugin's scout-block hook can block
-# crewmate reads mid-task; disable it here if you hit that.
+# --- agents running `claude` inside herdr panes inherit this shell's env.
+# The autoresearch plugin's scout-block hook can block their file reads
+# mid-task; disable it here if you hit that.
 # export AR_DISABLE_SCOUT_BLOCK=1

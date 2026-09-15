@@ -75,7 +75,7 @@ Known, tracked, not news:
 
 ## Scope
 
-This installs and configures third-party software (`herdr`, `firstmate`,
+This installs and configures third-party software (`herdr`, `orca`,
 `9router`, the agent CLIs). Bugs in those belong in their trackers — see
 [NOTICE.md](NOTICE.md) for where. Bugs in how *this* installs or wires them
 belong here.

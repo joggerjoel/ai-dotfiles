@@ -422,19 +422,40 @@ ensure_beads() {
   npm_install_global "@beads/bd" bd "Beads (bd)"
 }
 
-# herdr — agent-aware terminal session manager, the firstmate session backend
-# (better than cmux: verified secondmate liveness probes). macOS/brew ONLY by
-# design: firstmate runs on the Mac control nodes (macstudio/this laptop), not
-# the Linux aorus fleet — so this is deliberately absent from the ansible CLI
-# roster and provisioner. On Linux it no-ops (see herdr.dev/docs/install for the
+# herdr — agent-aware terminal session manager: the persistent session on the
+# always-on node that a laptop attaches to. macOS/brew ONLY by design: the
+# session lives on the Mac control nodes (macstudio/this laptop), not the Linux
+# aorus fleet — so this is deliberately absent from the ansible CLI roster and
+# provisioner. On Linux it no-ops (see herdr.dev/docs/install for the
 # curl installer if a Linux host ever needs it).
 ensure_herdr() {
-  [ "$PKG_MANAGER" = "brew" ] || { skip "herdr skipped (macOS/brew only — firstmate backend)"; return 0; }
+  [ "$PKG_MANAGER" = "brew" ] || { skip "herdr skipped (macOS/brew only — node session backend)"; return 0; }
   command -v herdr &>/dev/null && { ok "herdr present"; return 0; }
-  warn "herdr missing — installing via brew (firstmate session backend)..."
+  warn "herdr missing — installing via brew (node session backend)..."
   brew install herdr >/dev/null 2>&1 \
     && ok "herdr installed" \
     || warn "herdr install failed — brew install herdr (non-fatal)"
+}
+
+# orca — Stably AI's Orca, an Electron IDE that orchestrates coding agents
+# across terminals and git worktrees, with a bundled `orca` CLI (`orca serve`
+# runs a headless runtime, `orca account add` manages Claude/Codex accounts).
+# macOS only: it ships as a Homebrew cask and nothing exists for Linux, so
+# like ensure_herdr this no-ops off brew.
+#
+# The install itself lives in scripts/install-orca.sh, shared with the update
+# roster and the fleet playbook, because a plain `brew install --cask` is the
+# wrong converge for this cask in three separate ways (Homebrew 7 tap trust,
+# an existing DMG install, and --adopt recording the wrong version for an
+# auto-updating app). The script's header carries the decision table.
+ensure_orca() {
+  local out
+  [ "$PKG_MANAGER" = "brew" ] || { skip "orca skipped (macOS/brew only — cask)"; return 0; }
+  if out="$(bash "$DOTFILES_DIR/scripts/install-orca.sh" 2>&1)"; then
+    ok "$out"
+  else
+    warn "${out:-orca install failed} (non-fatal; see scripts/install-orca.sh)"
+  fi
 }
 
 # Charm's apt repo — glow is absent from Ubuntu's archives, so it needs the
@@ -873,7 +894,8 @@ ensure_dependencies() {
   ensure_skillspector  # scan agent skills for malicious patterns before install (uv tool)
   ensure_firecrawl  # live-web CLI + its 28 agent skills (npm; auth stays manual)
   ensure_playwright_cli  # browser-automation CLI + skill (npm; no browsers installed)
-  ensure_herdr   # firstmate session backend (macOS/brew only — no-ops on Linux)
+  ensure_herdr   # node session backend (macOS/brew only — no-ops on Linux)
+  ensure_orca    # agent-orchestration IDE + CLI (macOS/brew cask only — no-ops on Linux)
   ensure_herdr_renderers  # bat/delta/glow — herdr-file-viewer content panes
   ensure_just    # fleet command runner (cross-platform: brew or install.sh)
   ensure_repo_tools  # fzf (herdr launcher pickers) + shellcheck (just lint)
@@ -2210,12 +2232,6 @@ case "${1:-}" in
   # not a prompt, so one set here also holds on unattended upgrade runs
   # (ansible-ai/update.yml, cron) — configure them before those run.
   pin)      exec bash "$DOTFILES_DIR/scripts/pin.sh" "${2:-}" "${3:-}" ;;
-  # Opt-in: stand up THIS machine as a firstmate node (herdr + source toolchain
-  # + firstmate clone). Never part of `setup.sh` or `setup.sh update`.
-  provision-firstmate) exec bash "$DOTFILES_DIR/scripts/provision-firstmate.sh" ;;
-  # Opt-in: make THIS machine a firstmate worker (herdr + harnesses; persistent
-  # attachable sessions). Lighter than a node — no orchestrator toolchain.
-  provision-firstmate-worker) exec bash "$DOTFILES_DIR/scripts/provision-firstmate-worker.sh" ;;
   help|--help|-h)
     echo "Claude Code Dotfiles Setup"
     echo ""

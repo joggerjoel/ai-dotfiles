@@ -42,7 +42,7 @@ agentic-plugin-stack opt-in. Both CLIs are inert until a project runs `init`, so
 the cost of having them present is one npm package each.
 
 **Cross-platform, unlike `ensure_herdr`.** herdr is deliberately macOS-only
-(firstmate runs on the Mac control nodes). These two are useful on any host, so
+(the herdr session lives on the Mac control nodes). These two are useful on any host, so
 they follow the `ensure_herdr_renderers` precedent instead and run wherever
 `setup.sh` runs.
 

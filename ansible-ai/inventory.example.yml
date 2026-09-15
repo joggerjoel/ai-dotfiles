@@ -45,22 +45,6 @@ headroom_native_ai:
   hosts:
     server2:
 
-# ── firstmate node — provision-firstmate.yml targets ONLY this ─────
-# The one always-on box that runs first mate + crew (herdr session,
-# treehouse worktrees, the source-built toolchain). A subset of the
-# fleet (list the host in aorus_ai too for connection vars). A laptop
-# HUD just SSH-attaches to this node's session — it is never a node.
-firstmate_ai:
-  hosts:
-    server1:
-
-# ── firstmate worker(s) — provision-firstmate-worker.yml targets this ─
-# Hosts for persistent, attachable agent sessions (herdr + harnesses),
-# reached by a crewmate over SSH. NOT nodes (no orchestrator toolchain).
-firstmate_worker_ai:
-  hosts:
-    server2:
-
 # ── Local control node (the machine you run ansible from) ────────
 # `ansible_connection: local` runs tasks here directly — no SSH.
 local_ai:
