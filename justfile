@@ -349,3 +349,7 @@ fix-skills:
 # [herdr] herdr node recipes moved to ~/Developer/herdr (2026-08-22)
 herdr:
     @echo "herdr recipes live in ~/Developer/herdr — run: cd ~/Developer/herdr && just"
+
+# [local] install or verify agenttrail + claude-tap; `check` reports, `install` converges
+observability-tools *args:
+    {{dotfiles}}/scripts/observability-tools.sh {{args}}
