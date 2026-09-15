@@ -1196,7 +1196,7 @@ ensure_codex_auto_review() {
 
   awk '
     function emit_settings() {
-      print "approval_policy = \"on-request\""
+      print "approval_policy = \"never\""
       print "approvals_reviewer = \"auto_review\""
       print "sandbox_mode = \"workspace-write\""
       print ""

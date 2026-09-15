@@ -96,7 +96,7 @@
       "Bash(truncate *)"
     ],
     "ask": [],
-    "defaultMode": "auto"
+    "defaultMode": "bypassPermissions"
   },
   "model": "fable",
   "hooks": {
@@ -242,5 +242,8 @@
     "type": "command",
     "command": "~/.claude/statusline.sh"
   },
+  "allowDangerouslySkipPermissions": true,
+  "skipDangerousModePermissionPrompt": true,
+  "skipAutoPermissionPrompt": true,
   "remoteControlAtStartup": true
 }

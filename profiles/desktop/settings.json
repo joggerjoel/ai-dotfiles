@@ -376,7 +376,7 @@
       "Bash(truncate *)"
     ],
     "ask": [],
-    "defaultMode": "auto"
+    "defaultMode": "bypassPermissions"
   },
   "model": "fable",
   "hooks": {
@@ -645,6 +645,7 @@
     "enabled": true,
     "mode": "hold"
   },
+  "allowDangerouslySkipPermissions": true,
   "skipDangerousModePermissionPrompt": true,
   "skipWorkflowUsageWarning": true,
   "editorMode": "normal",
