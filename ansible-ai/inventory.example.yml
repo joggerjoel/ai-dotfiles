@@ -4,11 +4,27 @@
 #
 #   cp inventory.example.yml inventory.local.yml
 #
-# The IPs below are documentation placeholders (RFC 5737 TEST-NET).
+# The IPs below are documentation placeholders (RFC 5737 TEST-NET). Values
+# written as <angle-brackets> are placeholders too — replace them with the real
+# address in your copy, which is gitignored.
 aorus_ai:
   hosts:
     server1: { ansible_host: 192.0.2.10 }
     server2: { ansible_host: 192.0.2.11 }
+    # The Ollama host itself: it reaches its own daemon over loopback, so it
+    # must override the group's LAN address rather than route back to itself.
+    macstudio:
+      {
+        ansible_host: 192.0.2.12,
+        claude_mem_ollama_base_url: "http://127.0.0.1:11434/v1",
+      }
+    # A laptop that roams off the LAN — only the Tailscale address is reachable
+    # from wherever it happens to be.
+    macbookair:
+      {
+        ansible_host: 192.0.2.13,
+        claude_mem_ollama_base_url: "http://<macstudio-tailscale-ip>:11434/v1",
+      }
   vars:
     ansible_user: youruser
     # ProxyJump is optional — drop the line if you reach hosts directly.
@@ -25,6 +41,13 @@ aorus_ai:
     dotfiles_dir: "{{ ansible_facts.env.HOME }}/ai-dotfiles"
     dotfiles_github_user: "youruser"
     dotfiles_hide_ai: "y"
+    # claude-mem observer -> Ollama (deploy-claude-mem-observer.yml). These
+    # boxes are LAN-only, so the Ollama host's LAN address is the group default;
+    # hosts that reach it another way override it above. No fleet-wide default
+    # exists in the playbook — a host without this variable fails the assert
+    # rather than being pointed somewhere plausible and wrong.
+    # Fill in the real address in inventory.local.yml, never here.
+    claude_mem_ollama_base_url: "http://<macstudio-lan-ip>:11434/v1"
 
 # ── 9router gateway host(s) — deploy-9router.yml targets ONLY this ─
 # A subset of aorus_ai (list the host in both groups so it inherits the
@@ -58,6 +81,8 @@ local_ai:
     # wrong, update.yml silently reports "dotfiles: not installed" for
     # localhost on every run.
     dotfiles_dir: "{{ ansible_facts.env.HOME }}/ai-dotfiles"
+    # The control node roams off the LAN too, so it reaches Ollama over Tailscale.
+    claude_mem_ollama_base_url: "http://<macstudio-tailscale-ip>:11434/v1"
 
 # ── The everyday update target: fleet + control node ─────────────
 ai_all:

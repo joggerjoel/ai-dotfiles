@@ -27,6 +27,9 @@ set -euo pipefail
 
 AI_3RDPARTY_ROOT="${AI_3RDPARTY_ROOT:-$HOME/Developer/3rdparty}"
 
+# shellcheck source=../lib/checkout.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/checkout.sh"
+
 AGENTTRAIL_URL="https://github.com/sodiumsun/agenttrail.git"
 CLAUDE_TAP_URL="https://github.com/liaohch3/claude-tap.git"
 AGENTTRAIL_DIR="$AI_3RDPARTY_ROOT/agenttrail"
@@ -83,23 +86,6 @@ uv_install_cmd() {
 }
 
 # ── install ──────────────────────────────────────────────────────
-
-clone_or_pull() {
-  local url="$1" dir="$2" name="$3"
-  if [ -d "$dir/.git" ]; then
-    # --ff-only so a checkout someone is working in fails loudly instead of
-    # being merged or rewritten under them.
-    if git -C "$dir" pull --ff-only --quiet; then
-      ok "$name up to date at $(git -C "$dir" rev-parse --short HEAD)"
-    else
-      warn "$name could not fast-forward; leaving $(git -C "$dir" rev-parse --short HEAD) alone"
-    fi
-  else
-    mkdir -p "$(dirname "$dir")"
-    git clone --quiet "$url" "$dir"
-    ok "$name cloned to $dir"
-  fi
-}
 
 cmd_install() {
   need git || exit 1

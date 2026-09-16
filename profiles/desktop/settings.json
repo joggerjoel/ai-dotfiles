@@ -12,7 +12,8 @@
     "TURBO_TELEMETRY_DISABLED": "1",
     "VERCEL_TELEMETRY_DISABLED": "1",
     "CAVEMAN_DEFAULT_MODE": "off",
-    "AR_DISABLE_SIMPLIFY_GATE": "1"
+    "AR_DISABLE_SIMPLIFY_GATE": "1",
+    "CLAUDE_MEM_LLM_TIMEOUT_MS": "120000"
   },
   "includeCoAuthoredBy": false,
   "permissions": {
@@ -545,6 +546,15 @@
           {
             "type": "command",
             "command": "$HOME/.claude/hooks/herdr-transcript-spool.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.claude/hooks/herdr-inbox-notice.sh"
           }
         ]
       },

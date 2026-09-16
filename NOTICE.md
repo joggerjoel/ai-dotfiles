@@ -37,6 +37,7 @@ This repository provisions but does not contain:
 | ----------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | `orca`      | agent-orchestration IDE (macOS)                                                                | https://onorca.dev                                                |
 | `herdr`     | terminal workspace manager                                                                     | https://herdr.dev                                                 |
+| `gastown`   | multi-agent workspace manager (`gt`), built from the checkout under `~/Developer/3rdparty`    | https://github.com/gastownhall/gastown                            |
 | `9router`   | model gateway                                                                                  | https://9router.com                                               |
 | `mel`       | agentic terminal harness                                                                       | https://openmel.dev                                               |
 | agent CLIs  | `claude`, `codex`, `cursor-agent`, `cortex`, `opencode`, `gemini`, `agy`, `pi`, `grok`, `kimi` | respective vendors                                                |

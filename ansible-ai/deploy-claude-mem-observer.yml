@@ -1,0 +1,181 @@
+---
+# Point every host's claude-mem memory observer at the Mac Studio's Ollama
+# instead of the shared Claude subscription.
+#
+# Why this exists: claude-mem summarises every session through an LLM. Left on
+# its default provider that work is billed against the same Claude subscription
+# the fleet's agents run on, so the observer competes with the agents for the
+# quota they exist to spend. The Mac Studio already runs Ollama and is idle
+# most of the day; a local 20B model is enough to write an observation.
+#
+# claude-mem 13.24.23 has no Ollama provider, so this rides the OpenRouter one.
+# That provider appends `/chat/completions` to CLAUDE_MEM_OPENROUTER_BASE_URL
+# and sends `Authorization: Bearer <key>`; Ollama's OpenAI-compatible endpoint
+# (http://<host>:11434/v1) accepts that shape and ignores the key, but
+# claude-mem refuses an EMPTY key — hence the literal `ollama` below. Verified
+# end to end against gpt-oss:20b on 2026-09-15: clean content, reasoning in its
+# own field.
+#
+# The base URL is per host and lives in the inventory, because the route to the
+# Studio is not the same from every box: the aorus fleet is LAN-only, the Macs
+# reach it over Tailscale, and the Studio itself is 127.0.0.1. There is no
+# fleet-wide default worth guessing, so a host without the variable fails the
+# assert instead of being pointed somewhere plausible and wrong.
+#
+# ── Why the endpoint is probed before anything is written ─────────────────────
+# A settings file pointing at a dead endpoint does not raise an error anyone
+# sees. The worker keeps accepting sessions and silently stops producing
+# observations — memory capture just stops, and the first symptom is an empty
+# timeline weeks later. Failing the host here, before the write, is the point of
+# the probe, not a nicety.
+#
+# ── Why the handler stops and starts rather than restarting ───────────────────
+# CLAUDE_MEM_LLM_TIMEOUT_MS is the per-attempt model deadline. claude-mem reads
+# it from process.env ONLY, once, at worker start (upstream issue #4065): the
+# settings.json entry written below is inert today and kept for the version that
+# honours it. The worker's own `restart` subcommand has the old worker respawn
+# ITSELF, inheriting its OLD environment, so it cannot apply a new deadline.
+# scripts/recover-claude-mem.sh --restart stops the validated worker and starts
+# a fresh one from this play's shell, which is why the value is exported on the
+# handler's command line. The Studio's cold model load is about 20s, so the
+# 30000 default times out on the first call of the day; 120000 is the value that
+# does not.
+#
+# Hook-spawned workers inherit Claude Code's environment instead, which is why
+# profiles/*/settings.json carry the same variable in their `env` block. If no
+# worker is listening the handler writes nothing and says so: the next hook
+# spawn picks the value up from the profile.
+#
+#   Normal use:      just fleet-claude-mem-observer [limit]
+#   One host:        ansible-playbook deploy-claude-mem-observer.yml --limit macstudio
+#   Dry run:         ansible-playbook deploy-claude-mem-observer.yml --check --diff
+#   Skip in update:  ansible-playbook update.yml --skip-tags claude-mem
+- name: Point the claude-mem observer at Ollama
+  hosts: ai_all
+  gather_facts: true
+  ignore_unreachable: true
+  vars:
+    claude_mem_provider: openrouter
+    claude_mem_observer_model: "gpt-oss:20b"
+    # Ollama ignores the key; claude-mem refuses an empty one. Not a secret.
+    claude_mem_observer_api_key: ollama
+    claude_mem_llm_timeout_ms: "120000"
+    claude_mem_settings_path: "{{ ansible_env.HOME }}/.claude-mem/settings.json"
+    # claude-mem stores every setting as a string, so these are quoted.
+    claude_mem_desired:
+      CLAUDE_MEM_PROVIDER: "{{ claude_mem_provider }}"
+      CLAUDE_MEM_OPENROUTER_BASE_URL: "{{ claude_mem_ollama_base_url }}"
+      CLAUDE_MEM_OPENROUTER_API_KEY: "{{ claude_mem_observer_api_key }}"
+      CLAUDE_MEM_OPENROUTER_MODEL: "{{ claude_mem_observer_model }}"
+      CLAUDE_MEM_LLM_TIMEOUT_MS: "{{ claude_mem_llm_timeout_ms }}"
+
+  tasks:
+    - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
+      vars: { unreachable_note: "the observer was left on its old provider" }
+
+    - name: Require a route to Ollama for this host
+      ansible.builtin.assert:
+        that: claude_mem_ollama_base_url is defined
+        fail_msg: >-
+          {{ inventory_hostname }} has no claude_mem_ollama_base_url. Add one in
+          inventory.local.yml — the route to the Studio's Ollama differs per
+          host (LAN, Tailscale, or loopback on the Studio itself), so there is
+          no safe default. inventory.example.yml shows all four placements.
+        quiet: true
+
+    - name: Is claude-mem installed here?
+      ansible.builtin.stat:
+        path: "{{ claude_mem_settings_path }}"
+      register: claude_mem_settings_stat
+
+    - name: Say plainly that a host has no claude-mem to configure
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: claude-mem not installed here; nothing written"
+      when: not claude_mem_settings_stat.stat.exists
+
+    - name: Stop cleanly on hosts without claude-mem
+      ansible.builtin.meta: end_host
+      when: not claude_mem_settings_stat.stat.exists
+
+    # Read-only, so it runs under --check too: a dry run that skipped the probe
+    # would report a clean plan for a host that cannot reach the model at all.
+    - name: Ask the Ollama endpoint which models it serves
+      ansible.builtin.uri:
+        url: "{{ claude_mem_ollama_base_url }}/models"
+        return_content: true
+        timeout: 10
+      register: claude_mem_probe
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Fail when this host cannot reach Ollama
+      ansible.builtin.fail:
+        msg: >-
+          {{ inventory_hostname }} cannot reach {{ claude_mem_ollama_base_url }}
+          ({{ claude_mem_probe.msg | default('status ' ~ (claude_mem_probe.status | default('unknown'))) }}).
+          Writing the config anyway would stop memory capture silently, so
+          nothing was changed here.
+      when: claude_mem_probe.status | default(0) != 200
+
+    - name: Fail when Ollama does not serve the observer model
+      ansible.builtin.fail:
+        msg: >-
+          {{ claude_mem_ollama_base_url }} is up but does not serve
+          {{ claude_mem_observer_model }}. It offers:
+          {{ claude_mem_probe.json.data | default([]) | map(attribute='id') | join(', ') | default('nothing', true) }}.
+          Pull the model on the Ollama host, or override
+          claude_mem_observer_model.
+      when: >-
+        claude_mem_observer_model not in
+        (claude_mem_probe.json.data | default([]) | map(attribute='id') | list)
+
+    - name: Read the current claude-mem settings
+      ansible.builtin.slurp:
+        src: "{{ claude_mem_settings_path }}"
+      register: claude_mem_raw
+
+    # Merged, never replaced: the file also holds machine-specific keys
+    # (CLAUDE_MEM_WORKER_PORT, the data dir, the queue prefix) that only this
+    # host knows. sort_keys is off so the diff shows the five keys that changed
+    # rather than an alphabetised rewrite of all eighty.
+    - name: Work out the merged settings
+      ansible.builtin.set_fact:
+        claude_mem_current: "{{ claude_mem_raw.content | b64decode | from_json }}"
+
+    - name: Point the observer at Ollama
+      ansible.builtin.copy:
+        content: "{{ claude_mem_current | combine(claude_mem_desired) | to_nice_json(indent=2, sort_keys=false) }}\n"
+        dest: "{{ claude_mem_settings_path }}"
+        backup: true
+        mode: "0644"
+      when: claude_mem_current | combine(claude_mem_desired) != claude_mem_current
+      register: claude_mem_write
+      notify:
+        - Restart claude-mem worker
+        - Report the claude-mem restart
+
+    - name: Report per-host result
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          {{ 'changed' if (claude_mem_write.changed | default(false)) else 'unchanged' }} |
+          model: {{ claude_mem_observer_model }} |
+          base_url: {{ claude_mem_ollama_base_url }}
+
+  handlers:
+    # Stop-then-start, not `claude-mem restart`: see the header. Skipped in
+    # --check, which is correct — a dry run should not bounce a live worker.
+    - name: Restart claude-mem worker
+      ansible.builtin.shell: |
+        set -o pipefail
+        CLAUDE_MEM_LLM_TIMEOUT_MS={{ claude_mem_llm_timeout_ms }} \
+          bash {{ dotfiles_dir }}/scripts/recover-claude-mem.sh --restart
+      args:
+        executable: /bin/bash
+      register: claude_mem_restart
+      changed_when: true
+
+    - name: Report the claude-mem restart
+      ansible.builtin.debug:
+        msg: "{{ [inventory_hostname ~ ':'] + (claude_mem_restart.stdout_lines | default([]))[-3:] }}"

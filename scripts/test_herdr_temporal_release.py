@@ -26,6 +26,9 @@ class ReleaseTests(unittest.TestCase):
             (self.source / name).write_text("template\n")
         (self.source / "herdr_master/temporal_cli.py").write_text("print('worker help')\n")
         (self.source / "herdr_master/cli.py").write_text("print('master help')\n")
+        template = self.source / "skills/amnesiac-workers/references/task-packet.md"
+        template.parent.mkdir(parents=True)
+        template.write_text("template\n")
         self.prefix = self.root / "installed"
         self.artifact = self.root / "worker.tar.gz"
         binaries = self.root / "bin"
@@ -69,7 +72,8 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(self.build(), first)
         with tarfile.open(self.artifact) as archive:
             self.assertEqual(sorted(archive.getnames()), ["MACHINE.template.md", "herdr-temporal",
-                             "herdr_master/cli.py", "herdr_master/temporal_cli.py", "herdr_unblocker.py", "requirements-temporal.txt"])
+                             "herdr_master/cli.py", "herdr_master/temporal_cli.py", "herdr_unblocker.py", "requirements-temporal.txt",
+                             "skills/amnesiac-workers/references/task-packet.md"])
 
     def test_source_symlink_rejected(self):
         (self.source / "herdr_master/helper.py").symlink_to(self.source / "MACHINE.template.md")
@@ -161,7 +165,7 @@ class ReleaseTests(unittest.TestCase):
             for member in archive:
                 self.assertTrue(member.isfile())
                 target = extracted / member.name
-                target.parent.mkdir(exist_ok=True)
+                target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(archive.extractfile(member).read())
         result = subprocess.run([sys.executable, "-B", "-c",
                                  "import sys; sys.path.insert(0, sys.argv[1]); import lifecycle; print(lifecycle.Result.VERIFIED.value)",

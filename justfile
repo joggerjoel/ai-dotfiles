@@ -136,6 +136,10 @@ fleet-harnesses: _control
 fleet-push: _control
     set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook push-config.yml 2>&1 | cat
 
+# [fleet] point every host's claude-mem observer at the Mac Studio's Ollama
+fleet-claude-mem-observer limit="ai_all": _control
+    set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook deploy-claude-mem-observer.yml --limit {{limit}} 2>&1 | cat
+
 # provision-ai.yml is the fleet's dependency installer and is safe to re-run:
 # every task gates on the tool already being present, so a converged host skips
 # 19-20 of them. Ansible owns dependency convergence because it branches on
@@ -353,3 +357,7 @@ herdr:
 # [local] install or verify agenttrail + claude-tap; `check` reports, `install` converges
 observability-tools *args:
     {{dotfiles}}/scripts/observability-tools.sh {{args}}
+
+# [local] build Gas Town (gt) from the 3rdparty checkout; `check` reports, `install` converges
+gastown *args:
+    {{dotfiles}}/scripts/gastown.sh {{args}}

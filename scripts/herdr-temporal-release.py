@@ -17,7 +17,13 @@ import tarfile
 import tempfile
 import uuid
 
-ROOT_FILES = {"herdr-temporal", "herdr_unblocker.py", "requirements-temporal.txt", "MACHINE.template.md"}
+# packet.py reads its eight-slot task-packet template at import time, from this
+# path relative to the extracted root. A bundle without it makes every worker
+# die on `import lifecycle` before it can do anything, which the release test
+# proves by importing from a bare extraction.
+PACKET_TEMPLATE = "skills/amnesiac-workers/references/task-packet.md"
+ROOT_FILES = {"herdr-temporal", "herdr_unblocker.py", "requirements-temporal.txt", "MACHINE.template.md",
+              PACKET_TEMPLATE}
 REQUIRED_FILES = ROOT_FILES | {"herdr_master/temporal_cli.py", "herdr_master/cli.py"}
 MAX_BYTES = 32 * 1024 * 1024
 
@@ -134,7 +140,7 @@ def install(artifact, sha256, prefix, dotfiles):
             release.mkdir(mode=0o700)
             for name, contents in members.items():
                 path = release / name
-                path.parent.mkdir(exist_ok=True)
+                path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(contents)
                 path.chmod(0o755 if name == "herdr-temporal" else 0o644)
             subprocess.run(["uv", "venv", "--python", "3.11", str(release / ".venv")],

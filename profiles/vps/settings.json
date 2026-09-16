@@ -1,5 +1,6 @@
 {
   "env": {
+    "CLAUDE_MEM_LLM_TIMEOUT_MS": "120000",
     "INJECTION_GUARD_MODE": "enforce",
     "ENABLE_TOOL_SEARCH": "true"
   },

@@ -170,6 +170,16 @@
 - import_playbook: deploy-claude-token.yml
   tags: [claude-token]
 
+# ── 8b. claude-mem observer -> Ollama (ai_all) ──────────────────────────────
+# Re-asserts the observer's provider on every update, because a claude-mem
+# upgrade rewrites ~/.claude-mem/settings.json and puts the memory summariser
+# back on the Claude subscription the fleet's agents are meant to be spending.
+# Probes the endpoint before writing: a config pointing at a dead Ollama stops
+# memory capture with no error anyone sees.
+# Skip with:  ansible-playbook update.yml --skip-tags claude-mem
+- import_playbook: deploy-claude-mem-observer.yml
+  tags: [claude-mem]
+
 # ── 9. Firecrawl CLI, skills and key (aorus_ai) ─────────────────────────────
 # Installs the `firecrawl` CLI where absent, refreshes the 28 firecrawl-* agent
 # skills under ~/.agents/skills, and re-asserts FIRECRAWL_API_KEY into the same
