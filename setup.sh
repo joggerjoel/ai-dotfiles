@@ -76,6 +76,11 @@ mcp_json_for() {
     crawl4ai)
       local url="${extra_val:-https://REPLACE-ME.invalid/mcp/sse}"
       echo "{\"type\":\"sse\",\"url\":\"${url}\",\"headers\":{\"Authorization\":\"Bearer ${key_val}\"}}";;
+    ui-skills)
+      # The URL is fixed here rather than read from extra_val, unlike the two
+      # rows above. cmd_add only prompts for extra_vars inside its needs_key
+      # branch, so a keyless row has no way to collect one.
+      echo '{"type":"http","url":"https://www.ui-skills.com/mcp"}';;
     playwright)
       echo '{"command":"npx","args":["@playwright/mcp@latest"]}';;
     browser-tools)
