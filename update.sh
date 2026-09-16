@@ -537,6 +537,34 @@ if [ "$RUN_AGENTS" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/vendor-unlazy-skill.
   fi
 fi
 
+# ── 6b. Table-driven third-party skills (vendor-agent-skills.sh) ──
+# The table covers mattpocock/skills, vercel-labs/agent-skills,
+# anthropics/skills and ibelick/ui-skills. Until now this script had no caller
+# anywhere in the repo, so its skills were only ever refreshed by hand while
+# the 9router and unlazy blocks above re-vendored on every update; the six
+# pre-existing entries could sit months behind upstream with nothing saying so.
+#
+# Reports from the script's own per-skill output rather than a git porcelain
+# check: the table spans four upstreams and thirteen directories, and there is
+# no single path glob that names them without going stale as the table grows.
+if [ "$RUN_AGENTS" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/vendor-agent-skills.sh" ]; then
+  header "third-party agent skills"
+  if ! command -v git &>/dev/null; then
+    skip "git not available — skills not re-vendored"
+  elif vendor_out=$("$DOTFILES_DIR/scripts/vendor-agent-skills.sh" --deploy 2>&1); then
+    moved=$(printf '%s\n' "$vendor_out" | grep -c 'upstream moved' || true)
+    if [ "$moved" -gt 0 ]; then
+      ok "Re-vendored $moved skill(s) → ~/.claude/skills"
+      printf '%s\n' "$vendor_out" | grep 'upstream moved' | sed 's/^/    /'
+      warn "skills/ has uncommitted changes — commit + push so the fleet picks them up"
+    else
+      ok "Already current (deployed to ~/.claude/skills)"
+    fi
+  else
+    warn "third-party skill re-vendor failed (non-fatal — check network)"
+  fi
+fi
+
 # ── 7. Prune old backups ─────────────────────────────────────────
 if [ "$RUN_PRUNE" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/backup-prune.sh" ]; then
   echo
