@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "context7": { "command": "npx", "args": ["-y", "@upstash/context7-mcp"] },
+    "firecrawl-mcp": {
+      "command": "npx",
+      "args": ["-y", "firecrawl-mcp"],
+      "env": { "FIRECRAWL_API_KEY": "PLACEHOLDER" }
+    }
+  }
+}
