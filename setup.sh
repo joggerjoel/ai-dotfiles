@@ -941,6 +941,75 @@ remove_mcp_server() {
   echo "$tmp" > "$CLAUDE_JSON"
 }
 
+# Value of a variable in ~/.claude/.env; empty when the file or the key is
+# absent. Mirrors preflight.sh's env_var_set, which answers "is it set" — this
+# answers "what is it", which is what a re-sync needs.
+env_file_key() {
+  local var="$1" env_file="$CLAUDE_DIR/.env"
+  [ -f "$env_file" ] || return 0
+  grep -E "^[[:space:]]*(export[[:space:]]+)?${var}=" "$env_file" 2>/dev/null \
+    | tail -1 | sed -E 's/^[^=]*=//' | tr -d "\"' "
+}
+
+# Re-assert every ~/.claude/.env secret into its ~/.claude.json MCP block.
+#
+# Keys used to be snapshotted into ~/.claude.json at the instant they were
+# typed, and nothing ever refreshed them. Answering the setup prompt with a
+# blank line baked the literal string PLACEHOLDER (see the needs_key branch in
+# cmd_setup); adding the real key to ~/.claude/.env afterwards left the MCP
+# server still launching with PLACEHOLDER, so every call returned 401 while the
+# env file looked perfectly correct. Two stores for one secret, one of them
+# never maintained.
+#
+# This makes ~/.claude.json a derived artifact: the env file wins, always.
+# Idempotent by construction, since it writes only when the baked value
+# differs — a converged host prints nothing and running it twice is one write.
+#
+# `disabled` is cleared only for integrations the registry does not disable by
+# default. github/openrouter/apify/digitalocean are opt-in whether or not a key
+# exists, and supplying one must not silently switch them on.
+sync_mcp_keys() {
+  [ -f "$CLAUDE_JSON" ] || return 0
+  local entry name needs_key key_var disabled_default mcp_key val baked enable tmp
+
+  for entry in "${INTEGRATIONS[@]}"; do
+    name=$(get_field "$entry" 1)
+    needs_key=$(get_field "$entry" 3)
+    key_var=$(get_field "$entry" 4)
+    disabled_default=$(get_field "$entry" 5)
+    [ "$needs_key" = "yes" ] || continue
+    [ -n "$key_var" ] || continue
+
+    mcp_key=$(mcp_key_for "$name")
+    jq -e --arg k "$mcp_key" '(.mcpServers // {}) | has($k)' \
+      "$CLAUDE_JSON" >/dev/null 2>&1 || continue
+
+    val=$(env_file_key "$key_var")
+    [ -n "$val" ] || continue
+
+    baked=$(jq -r --arg k "$mcp_key" --arg v "$key_var" \
+      '.mcpServers[$k].env[$v] // empty' "$CLAUDE_JSON" 2>/dev/null)
+    # http/sse servers carry the secret in an Authorization header instead of
+    # env. Those have their own configure path; guessing at a header shape here
+    # would corrupt a working block.
+    [ -n "$baked" ] || continue
+    [ "$baked" = "$val" ] && continue
+
+    if [ "$disabled_default" = "yes" ]; then enable=false; else enable=true; fi
+
+    if ! tmp=$(jq --arg k "$mcp_key" --arg v "$key_var" --arg val "$val" \
+                  --argjson enable "$enable" \
+          '.mcpServers[$k].env[$v] = $val
+           | if $enable then .mcpServers[$k] |= del(.disabled) else . end' \
+          "$CLAUDE_JSON"); then
+      warn "Could not re-sync ${key_var} into ~/.claude.json"
+      continue
+    fi
+    echo "$tmp" > "$CLAUDE_JSON"
+    ok "${name}: ${key_var} re-synced from ~/.claude/.env"
+  done
+}
+
 # ── MCP integration picker ───────────────────────────────────────
 # Menu numbering and name lookup must agree on which integrations exist for a
 # profile, so both read this one list rather than each filtering for itself.
@@ -1756,6 +1825,16 @@ cmd_setup() {
         echo -ne "  ${BOLD}${name}${RESET} - ${key_var}: "
         read -r key_val || key_val=""
 
+        # A bare Enter is not the same as "no key". ~/.claude/.env may already
+        # hold one from an earlier run or a fleet sync, and baking PLACEHOLDER
+        # over a working key is exactly how the firecrawl 401 happened.
+        if [ -z "$key_val" ]; then
+          key_val=$(env_file_key "$key_var")
+          if [ -n "$key_val" ]; then
+            ok "${key_var} taken from ~/.claude/.env"
+          fi
+        fi
+
         if [ -z "$key_val" ]; then
           # No key provided - install disabled
           should_disable="true"
@@ -1874,6 +1953,13 @@ cmd_add() {
     echo -ne "${BOLD}${name}${RESET} - ${desc}\n"
     echo -ne "  ${key_var}: "
     read -r key_val || key_val=""
+
+    if [ -z "$key_val" ]; then
+      key_val=$(env_file_key "$key_var")
+      if [ -n "$key_val" ]; then
+        ok "${key_var} taken from ~/.claude/.env"
+      fi
+    fi
 
     if [ -z "$key_val" ]; then
       fail "API key required for $name"
@@ -2119,6 +2205,10 @@ cmd_update() {
   if [ -f "$DOTFILES_DIR/.local/.supabase-mode" ]; then
     configure_supabase "$(cat "$DOTFILES_DIR/.local/.supabase-mode")"
   fi
+
+  # Pull every MCP secret back from ~/.claude/.env, the one place they are
+  # maintained. Runs last so it also repairs blocks the steps above rewrote.
+  sync_mcp_keys
 
   ok "Update complete (profile: $profile)"
 }
