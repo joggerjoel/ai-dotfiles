@@ -705,6 +705,33 @@ ensure_firecrawl() {
   fi
 }
 
+# grok-bot-cli (`gbot`) — CLI for Cursor's Grok Bot: manage bots/groups, send
+# messages, and bridge replies into a Codex thread. github.com/ScriptedAlchemy/
+# grok-bot-cli, published by Zack Jackson (Module Federation) via GitHub Actions
+# OIDC; installed here as an ordinary npm global.
+#
+# No fleet playbook, unlike firecrawl. Firecrawl authenticates with a portable
+# API key this repo can push to every host via ~/.claude/.env. gbot has no such
+# key: it reads its session from the Grok Bot DESKTOP APP's encrypted local
+# storage (macOS Keychain / Linux libsecret / Windows DPAPI) after a human signs
+# in once in that app, on that machine. There is nothing to copy or distribute —
+# a headless fleet host with no desktop app open can never authenticate, so
+# don't add "gbot" to scripts/agents-update.sh's CLI roster: AGENTS_AUTO_INSTALL=1
+# would silently land a permanently-unauthenticated binary on every Linux box.
+#
+# `bots list` is the probe: it fails fast when the desktop app isn't open and
+# signed in, same shape as firecrawl's credit-usage check.
+ensure_grok_bot_cli() {
+  npm_install_global "grok-bot-cli" gbot "Grok Bot CLI"
+  command -v gbot &>/dev/null || return 0
+
+  if gbot bots list >/dev/null 2>&1; then
+    ok "gbot authenticated (Grok Bot desktop app signed in)"
+  else
+    warn "gbot not authenticated — open the Grok Bot desktop app and sign in, then: gbot bots list"
+  fi
+}
+
 # playwright-cli — Microsoft's token-efficient Playwright CLI plus the agent
 # skill that drives it. It is the CLI-over-MCP sibling of playwright-mcp: same
 # browser automation, but an agent spends a command and a page of output on it
@@ -898,6 +925,7 @@ ensure_dependencies() {
   ensure_cass    # search this host's coding-agent session history (brew or installer)
   ensure_skillspector  # scan agent skills for malicious patterns before install (uv tool)
   ensure_firecrawl  # live-web CLI + its 28 agent skills (npm; auth stays manual)
+  ensure_grok_bot_cli  # gbot: Cursor's Grok Bot CLI (npm; needs the desktop app signed in, no fleet playbook)
   ensure_playwright_cli  # browser-automation CLI + skill (npm; no browsers installed)
   ensure_herdr   # node session backend (macOS/brew only — no-ops on Linux)
   ensure_orca    # agent-orchestration IDE + CLI (macOS/brew cask only — no-ops on Linux)
