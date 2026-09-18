@@ -79,9 +79,13 @@ fleet-update: _control
 # re-apply, skipping the CLI upgrades, the gateway deploys, and the token
 # distribution — that last play asserts a token exists and fails the whole run
 # on a fleet that has none, which reads as a broken sync when nothing is broken.
-# [fleet] git-sync every host to origin/main, nothing else
-fleet-sync: _control
-    set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook update.yml --tags sync 2>&1 | cat
+# The limit exists so a newly vendored skill can be proven on one box before
+# it reaches the fleet: `just fleet-sync aorus4`. Vendored skills need no
+# recipe of their own — git carries them and setup.sh's install_skills ships
+# them — so scoping the sync is the whole of "push this to one host".
+# [fleet] git-sync every host (or one) to origin/main, nothing else
+fleet-sync limit="ai_all": _control
+    set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook update.yml --tags sync --limit {{quote(limit)}} 2>&1 | cat
 
 # Build a state-free, checksummed source bundle. Output is an explicit local path.
 herdr-temporal-bundle source output:
@@ -306,7 +310,7 @@ vendor-skills:
     # pstack is not in this list: it is no longer vendored into skills/. It is
     # installed at runtime (Claude Code plugin + ~/.agents/skills links) by
     # scripts/sync-pstack.sh, which update.sh and setup.sh already call.
-    for s in vendor-9router-skills.sh vendor-unlazy-skill.sh; do
+    for s in vendor-9router-skills.sh vendor-unlazy-skill.sh vendor-agent-skills.sh; do
       echo "── $s"
       bash "scripts/$s"
     done

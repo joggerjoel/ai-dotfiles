@@ -23,6 +23,11 @@ INTEGRATIONS=(
   "playwright|Browser automation & testing|no||yes||yes"
   "browser-tools|Advanced browser tools|no||yes||yes"
   "magic|UI component generation|no||yes||yes"
+  # The first row that needs no key and runs no local process, so nothing about
+  # provisioning it gates on this host. What it serves is third-party markdown
+  # the agent then follows as instructions, and that is the reason it is off by
+  # default: each host opts in deliberately rather than inheriting it.
+  "ui-skills|Design-engineering skill registry (hosted HTTP)|no||yes||no"
 )
 
 # CLIs the CLAUDE.md tool-priority tables name as required. Declared here rather

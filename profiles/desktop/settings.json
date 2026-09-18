@@ -379,7 +379,7 @@
     "ask": [],
     "defaultMode": "bypassPermissions"
   },
-  "model": "fable",
+  "model": "sonnet",
   "hooks": {
     "PreToolUse": [
       {
@@ -856,7 +856,6 @@
   },
   "alwaysThinkingEnabled": true,
   "effortLevel": "high",
-  "fastMode": true,
   "tui": "fullscreen",
   "voice": {
     "enabled": true,

@@ -26,6 +26,13 @@ SKILLS=(
   "vercel-labs/agent-skills|skills/react-best-practices|vercel-react-best-practices"
   "vercel-labs/agent-skills|skills/composition-patterns|vercel-composition-patterns"
   "anthropics/skills|skills/webapp-testing|webapp-testing"
+  "ibelick/ui-skills|skills/baseline-ui|baseline-ui"
+  "ibelick/ui-skills|skills/create-design-md|create-design-md"
+  "ibelick/ui-skills|skills/fixing-accessibility|fixing-accessibility"
+  "ibelick/ui-skills|skills/fixing-metadata|fixing-metadata"
+  "ibelick/ui-skills|skills/fixing-motion-performance|fixing-motion-performance"
+  "ibelick/ui-skills|skills/improve-ui|improve-ui"
+  "ibelick/ui-skills|skills/ui-skills-root|ui-skills-root"
 )
 
 DOT="$(cd "$(dirname "$0")/.." && pwd)"
