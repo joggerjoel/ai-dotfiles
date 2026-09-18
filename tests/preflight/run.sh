@@ -109,6 +109,34 @@ for unconfigured in apify digitalocean n8n crawl4ai; do
   fi
 done
 
+# --- stale baked key: the firecrawl 401 of 2026-09-17 -----------------------
+# The key an MCP server actually launches with lives in claude.json, not the
+# env file. setup.sh used to snapshot it there once and never refresh it, so a
+# host whose env file held a perfectly good key ran the server on the literal
+# string PLACEHOLDER and 401'd on every call. probe_env passed it, because it
+# only ever asked whether the env file had *something*. Comparing the two is
+# the difference between checking configuration and checking behaviour.
+out=$(run_preflight stale-key 2>&1); rc=$?
+if [ "$rc" -eq 1 ]; then
+  report pass "stale-key fixture exits 1"
+else
+  report fail "stale-key fixture exits 1" "got rc=$rc, output: $out"
+fi
+
+if grep -q 'differs from' <<<"$out"; then
+  report pass "stale-key fixture reports the baked key as drifted"
+else
+  report fail "stale-key fixture reports the baked key as drifted" "$out"
+fi
+
+# The env file DOES hold the key, so the old "unset:" wording would be wrong
+# and would send someone off to re-add a key that is already there.
+if ! grep -q 'unset: FIRECRAWL_API_KEY' <<<"$out"; then
+  report pass "stale-key drift is not misreported as an unset key"
+else
+  report fail "stale-key drift is not misreported as an unset key" "$out"
+fi
+
 # --- regression corpus: the four real failures of 2026-07-26 ----------------
 out=$(run_preflight regression 2>&1); rc=$?
 if [ "$rc" -eq 1 ]; then

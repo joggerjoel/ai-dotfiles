@@ -245,14 +245,20 @@ probe_clis() {
   done
 }
 
-# Is a variable set to a non-empty value in the env file or the environment?
-env_var_set() {
+# Value of a variable from the env file, falling back to the environment.
+# Empty when neither holds it.
+env_var_value() {
   local var="$1" val=""
   if [ -f "$ENV_FILE" ]; then
     val=$(grep -E "^[[:space:]]*(export[[:space:]]+)?${var}=" "$ENV_FILE" 2>/dev/null | tail -1 | sed -E 's/^[^=]*=//' | tr -d '"'"'"' ')
   fi
   [ -z "$val" ] && val="${!var:-}"
-  [ -n "$val" ]
+  printf '%s' "$val"
+}
+
+# Is a variable set to a non-empty value in the env file or the environment?
+env_var_set() {
+  [ -n "$(env_var_value "$1")" ]
 }
 
 # Is the given $CLAUDE_JSON mcpServers key present? A missing or malformed
@@ -268,7 +274,7 @@ integration_configured() {
 # integration that was deliberately never wired up (or removed) has nothing
 # to report on, and flagging it forever produces a checker nobody trusts.
 probe_env() {
-  local entry name needs_key key_var extra_vars missing key
+  local entry name needs_key key_var extra_vars missing key baked
   for entry in "${INTEGRATIONS[@]}"; do
     IFS='|' read -r name _ needs_key key_var _ extra_vars _ <<<"$entry"
     [ "$needs_key" = "yes" ] || continue
@@ -284,8 +290,19 @@ probe_env() {
       missing="${missing:+$missing, }$extra_vars"
     fi
 
+    # A stdio MCP server launches with the key baked into ~/.claude.json, not
+    # the one in ~/.claude/.env. Those two drift: setup.sh used to snapshot the
+    # key at prompt time and never refresh it, so a host could show a perfectly
+    # valid key here while every call came back 401. Compare what actually
+    # ships. http/sse servers keep the secret in a header and are left alone.
+    baked=$(jq -r --arg k "$key" --arg v "$key_var" \
+      '.mcpServers[$k].env[$v] // empty' "$CLAUDE_JSON" 2>/dev/null)
+
     if [ -n "$missing" ]; then
       add_finding env "$name" fail "unset: $missing" no
+    elif [ -n "$baked" ] && [ "$baked" != "$(env_var_value "$key_var")" ]; then
+      add_finding env "$name" fail \
+        "${key_var} in ~/.claude.json differs from ~/.claude/.env — run ./setup.sh update" no
     else
       add_finding env "$name" pass "configured" no
     fi
