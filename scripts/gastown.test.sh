@@ -76,5 +76,54 @@ printf '%s' "$out" | grep -q 'gt is not on PATH' && ok "check reports the missin
 printf '%s' "$out" | grep -q 'dolt is not on PATH' && ok "check reports a missing host tool" || ko "check reports a missing host tool"
 printf '%s' "$out" | grep -q '10 problem' && ok "check counts every problem" || ko "check counts every problem" "$(printf '%s' "$out" | tail -1)"
 
+# --- the pin to the fix branch ------------------------------------------------
+# A throwaway repository stands in for the checkout: main, plus a fix branch
+# carrying two commits that play the required fixes.
+
+repo="$TMP/pin"
+git init --quiet -b main "$repo"
+gc() { git -C "$repo" -c user.name=t -c user.email=t@t "$@"; }
+gc commit --quiet --allow-empty -m base
+gc checkout --quiet -b fix/dashboard-local-time
+gc commit --quiet --allow-empty -m "local time"
+fix1=$(git -C "$repo" rev-parse --short HEAD)
+gc commit --quiet --allow-empty -m "trust dialog"
+fix2=$(git -C "$repo" rev-parse --short HEAD)
+gc checkout --quiet main
+GASTOWN_REQUIRED_COMMITS="$fix1 $fix2"
+
+eq "main lacks both fixes" "$fix1 $fix2 " "$(missing_fixes "$repo" | tr '\n' ' ')"
+eq "an unknown commit counts as missing" "deadbeef" \
+   "$(GASTOWN_REQUIRED_COMMITS=deadbeef missing_fixes "$repo")"
+
+out=$(converge_checkout "$repo" 2>&1); rc=$?
+eq "converge switches a clean checkout to the pinned branch" "0" "$rc"
+eq "the checkout is now on the fix branch" "fix/dashboard-local-time" \
+   "$(git -C "$repo" rev-parse --abbrev-ref HEAD)"
+eq "the fix branch carries both fixes" "" "$(missing_fixes "$repo")"
+
+gc checkout --quiet main
+touch "$repo/dirty"
+out=$(converge_checkout "$repo" 2>&1); rc=$?
+eq "a dirty checkout is not switched" "1" "$rc"
+eq "and stays where it was" "main" "$(git -C "$repo" rev-parse --abbrev-ref HEAD)"
+rm "$repo/dirty"
+
+out=$(GASTOWN_BRANCH=no-such-branch converge_checkout "$repo" 2>&1); rc=$?
+eq "an absent fix branch fails" "1" "$rc"
+printf '%s' "$out" | grep -q 'not upstream' && ok "and says why" || ko "and says why" "$out"
+
+gc checkout --quiet -b fix-without-trust "$fix1"
+out=$(GASTOWN_BRANCH=fix-without-trust converge_checkout "$repo" 2>&1); rc=$?
+eq "a pinned branch missing a required commit fails" "1" "$rc"
+printf '%s' "$out" | grep -q "$fix2" && ok "and names the missing commit" || ko "and names the missing commit" "$out"
+
+GASTOWN_DIR="$repo"
+out=$(with_path "$(fake_tools pinbare):$(dirname "$(command -v git)")" cmd_check 2>&1)
+printf '%s' "$out" | grep -q 'not the pinned fix/dashboard-local-time' \
+  && ok "check reports a checkout off the pinned branch" || ko "check reports a checkout off the pinned branch"
+printf '%s' "$out" | grep -q "lacks required commit $fix2" \
+  && ok "check reports a missing required commit" || ko "check reports a missing required commit"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
