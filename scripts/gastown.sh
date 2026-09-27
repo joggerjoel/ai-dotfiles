@@ -18,6 +18,16 @@ set -euo pipefail
 # it restarts the gt daemon and syncs the plugin directory, both of which drift
 # silently when skipped.
 #
+# Pinned to the fix branch. Upstream main is not enough: the checkout must be on
+# GASTOWN_BRANCH (fix/dashboard-local-time) and carry every commit in
+# GASTOWN_REQUIRED_COMMITS. 609fe5c8 is the dashboard local-time fix and
+# b217d193 accepts Claude's trust dialog when it pre-selects "No, exit"; without
+# b217d193 every polecat under the current Claude build quits at startup. Neither
+# is upstream yet, so `install` converges an existing checkout to that branch and
+# refuses to build without both commits, and `check` fails the same way. Unpin
+# by opening both upstream (gastownhall/gastown) and clearing the list once the
+# merge is on main (herdr-orchestrator gastown-herdr-merge-plan.md §7.1).
+#
 # The herdr side lives in herdr-orchestrator at ops/gastown/gt-herdr.sh. That
 # launcher puts a town's agents in herdr's sidebar; this script only makes it
 # possible.
@@ -25,6 +35,7 @@ set -euo pipefail
 # Environment:
 #   AI_3RDPARTY_ROOT   where the checkout lives (default ~/Developer/3rdparty)
 #   GT_INSTALL_DIR     where the Makefile puts gt (default ~/.local/bin, its own)
+#   GASTOWN_BRANCH     the branch the checkout is pinned to
 # ─────────────────────────────────────────────────────────────────
 
 AI_3RDPARTY_ROOT="${AI_3RDPARTY_ROOT:-$HOME/Developer/3rdparty}"
@@ -32,6 +43,8 @@ GT_INSTALL_DIR="${GT_INSTALL_DIR:-$HOME/.local/bin}"
 
 GASTOWN_URL="https://github.com/gastownhall/gastown.git"
 GASTOWN_DIR="$AI_3RDPARTY_ROOT/gastown"
+GASTOWN_BRANCH="${GASTOWN_BRANCH:-fix/dashboard-local-time}"
+GASTOWN_REQUIRED_COMMITS="609fe5c8 b217d193"
 BEADS_MODULE="github.com/steveyegge/beads/cmd/bd@latest"
 
 # shellcheck source=../lib/checkout.sh
@@ -90,6 +103,43 @@ installed_gt_commit() {
   parse_gt_commit "$(gt version --verbose 2>/dev/null || true)"
 }
 
+# The required commits HEAD does not contain, one per line. A commit the
+# checkout has never seen counts as missing.
+missing_fixes() {
+  local dir="$1" commit
+  for commit in $GASTOWN_REQUIRED_COMMITS; do
+    git -C "$dir" merge-base --is-ancestor "$commit" HEAD 2>/dev/null \
+      || printf '%s\n' "$commit"
+  done
+}
+
+# Put an existing checkout on the pinned branch. The branch is local (its
+# commits are not upstream), so it is checked out, never pulled or rebased; a
+# dirty tree or an absent branch is a failure, not something to repair.
+converge_checkout() {
+  local dir="$1" current
+  current="$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+  if [ "$current" != "$GASTOWN_BRANCH" ]; then
+    if ! git -C "$dir" rev-parse --verify --quiet "refs/heads/$GASTOWN_BRANCH" >/dev/null; then
+      fail "$GASTOWN_BRANCH is not in $dir; its commits ($GASTOWN_REQUIRED_COMMITS) are not upstream"
+      return 1
+    fi
+    if [ -n "$(git -C "$dir" status --porcelain)" ]; then
+      fail "$dir has uncommitted changes on $current; not switching to $GASTOWN_BRANCH"
+      return 1
+    fi
+    git -C "$dir" checkout --quiet "$GASTOWN_BRANCH" || { fail "checkout of $GASTOWN_BRANCH failed"; return 1; }
+    ok "switched $dir from $current to $GASTOWN_BRANCH"
+  fi
+  local missing
+  missing="$(missing_fixes "$dir" | tr '\n' ' ')"
+  if [ -n "$missing" ]; then
+    fail "$GASTOWN_BRANCH lacks required commit(s): $missing"
+    return 1
+  fi
+  ok "gastown pinned to $GASTOWN_BRANCH at $(git -C "$dir" rev-parse --short HEAD)"
+}
+
 # ── install ──────────────────────────────────────────────────────
 
 install_tools() {
@@ -120,12 +170,17 @@ install_tools() {
 cmd_install() {
   header "Checkout"
   command -v git >/dev/null 2>&1 || { fail "git is not on PATH"; exit 1; }
-  clone_or_pull "$GASTOWN_URL" "$GASTOWN_DIR" gastown
+  if [ -d "$GASTOWN_DIR/.git" ]; then
+    git -C "$GASTOWN_DIR" fetch --quiet origin || warn "fetch from origin failed; using what is local"
+  else
+    clone_or_pull "$GASTOWN_URL" "$GASTOWN_DIR" gastown
+  fi
   # A shallow clone has no tags, so the Makefile stamps the binary with a bare
   # commit and its forward-only check cannot walk history. Deepen it once.
   if [ -f "$GASTOWN_DIR/.git/shallow" ]; then
     git -C "$GASTOWN_DIR" fetch --unshallow --tags --quiet && ok "history deepened for version stamping"
   fi
+  converge_checkout "$GASTOWN_DIR" || exit 1
 
   header "Host tools"
   local missing
@@ -166,12 +221,21 @@ same_commit() {
 }
 
 cmd_check() {
-  local problems=0 missing=0 head="" binary name
+  local problems=0 missing=0 head="" binary name branch fix
 
   header "Checkout"
   if [ -d "$GASTOWN_DIR/.git" ]; then
     head="$(git -C "$GASTOWN_DIR" rev-parse --short HEAD)"
-    ok "gastown $head on $(git -C "$GASTOWN_DIR" rev-parse --abbrev-ref HEAD)"
+    branch="$(git -C "$GASTOWN_DIR" rev-parse --abbrev-ref HEAD)"
+    ok "gastown $head on $branch"
+    if [ "$branch" != "$GASTOWN_BRANCH" ]; then
+      fail "the checkout is on $branch, not the pinned $GASTOWN_BRANCH"
+      problems=$((problems + 1))
+    fi
+    for fix in $(missing_fixes "$GASTOWN_DIR"); do
+      fail "the checkout lacks required commit $fix"
+      problems=$((problems + 1))
+    done
   else
     fail "gastown is not checked out at $GASTOWN_DIR"
     problems=$((problems + 1))
