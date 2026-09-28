@@ -76,7 +76,7 @@ Full write-up: **[FUSE.md](FUSE.md)** (why isolation finds what authors miss) an
 ## Models & harnesses
 
 **Harnesses** are how you talk to a model; the **model** is the brain. ai-dotfiles installs and
-keeps current 11 harnesses (`claude`, `codex`, `cursor-agent`, `cortex`, `opencode`, `gemini`,
+keeps current 10 harnesses (`claude`, `codex`, `cursor-agent`, `cortex`, `opencode`,
 `agy`, `pi`, `grok`, `kimi`, `mel`)
 and routes across three model tiers:
 
@@ -157,8 +157,9 @@ is always **commit → push → playbook**. Nothing reaches a host that isn't on
 ```bash
 ./deploy.sh -m "feat: my change"   # commit, push, and update every target in one shot
 ./update.sh                        # this machine: Claude Code + sibling CLIs (codex, cursor,
-                                   #   cortex, opencode, gemini, pi, grok, headroom) + config
+                                   #   cortex, opencode, agy, pi, grok, headroom) + config
 ./update.sh --all                  # …then propagate to the fleet via ansible
+just fleet-waves                   # deploy committed WAVES skills without CLI upgrades
 ```
 
 Scoped ansible playbooks (in `ansible-ai/`, each targeting its own inventory group):

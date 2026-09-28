@@ -81,7 +81,7 @@ ansible-playbook update.yml --limit local_ai  # this Mac only
 local control node** (`local_ai` → `localhost` via `ansible_connection: local`). The
 Mac gets the same treatment as a server — `claude update`, then `setup.sh update`
 (plugins/skills + its saved **desktop** profile), then the sibling model-CLI
-upgrades (codex/cursor/cortex/opencode/gemini via `scripts/agents-update.sh` from
+upgrades (codex/cursor/cortex/opencode/agy via `scripts/agents-update.sh` from
 the freshly-pulled repo — the same script `./update.sh` runs locally). No SSH is
 used for the Mac, so it works regardless
 of which network you're on. `provision-ai.yml` stays servers-only — the control node

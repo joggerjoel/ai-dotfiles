@@ -223,5 +223,34 @@ else
     || ko "an unattended fleet run selects at least one MCP server" "selected nothing"
 fi
 
+# --- --clean removes only remembered answers, then starts setup ------------
+ANSWER_ROOT="$TMP/answers"
+mkdir -p "$ANSWER_ROOT/.local"
+for f in .profile .github-user .hide-ai .remote-control .mcp-selection .supabase-mode .plugin-stack .plugin-selection; do
+  printf 'saved\n' > "$ANSWER_ROOT/.local/$f"
+done
+printf 'keep\n' > "$ANSWER_ROOT/.local/CLAUDE.md"
+
+clean_out=$(cd "$ROOT" && bash -c '
+  source "$1" >/dev/null 2>&1
+  DOTFILES_DIR="$2"
+  cmd_setup() { printf "SETUP_CALLED\n"; }
+  cmd_clean_setup
+' _ "$TMP/defs.sh" "$ANSWER_ROOT" 2>&1)
+
+left=$(find "$ANSWER_ROOT/.local" -maxdepth 1 -name '.*' -type f | wc -l | tr -d ' ')
+[ "$left" = "0" ] \
+  && ok "--clean removes every remembered answer" \
+  || ko "--clean removes every remembered answer" "hidden answer files left: $left"
+
+[ -f "$ANSWER_ROOT/.local/CLAUDE.md" ] \
+  && ok "--clean preserves unrelated local configuration" \
+  || ko "--clean preserves unrelated local configuration" "CLAUDE.md was removed"
+
+case "$clean_out" in
+  *SETUP_CALLED*) ok "--clean immediately restarts interactive setup" ;;
+  *) ko "--clean immediately restarts interactive setup" "output: [$clean_out]" ;;
+esac
+
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

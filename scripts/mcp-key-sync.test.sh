@@ -166,5 +166,27 @@ for probe in "PLAIN abc" "SINGLE ghi" "EXPORTED jkl" "MISSING "; do
     || ko "env_file_key reads $var" "want '$want', got '$got'"
 done
 
+# ── 7: cmd_add consumes an existing env-file key without prompting ──
+H="$TMP/h5"
+make_home "$H" '{"mcpServers":{}}' 'FIRECRAWL_API_KEY=fc-existing'
+out=$(cd "$ROOT" && bash -c '
+  set -uo pipefail
+  source "$1"
+  CLAUDE_DIR="$2/.claude"
+  CLAUDE_JSON="$2/claude.json"
+  cmd_add firecrawl </dev/null
+' _ "$TMP/defs.sh" "$H" 2>&1)
+
+got=$(baked_key "$H" firecrawl-mcp FIRECRAWL_API_KEY)
+[ "$got" = "fc-existing" ] \
+  && ok "cmd_add uses an existing ~/.claude/.env key" \
+  || ko "cmd_add uses an existing ~/.claude/.env key" "got '$got'"
+
+if grep -q 'FIRECRAWL_API_KEY (required)' <<<"$out"; then
+  ko "cmd_add skips the key prompt when ~/.claude/.env is configured" "output: $out"
+else
+  ok "cmd_add skips the key prompt when ~/.claude/.env is configured"
+fi
+
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

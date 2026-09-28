@@ -37,7 +37,7 @@ PREFLIGHT_LINK_DIRS="${PREFLIGHT_LINK_DIRS-$HOME/.claude/scripts:$HOME/.claude/h
 # Non-symlinks are skipped by probe_links (it only probes paths that are
 # `-L`), so a stripped-copy settings.json (the Remote Control case — see
 # install_settings in setup.sh) is harmless here.
-PREFLIGHT_LINK_FILES="${PREFLIGHT_LINK_FILES-$HOME/.claude/statusline.sh:$HOME/.claude/settings.json:$HOME/AGENTS.md:$HOME/.codex/AGENTS.md:$HOME/.config/opencode/AGENTS.md:$HOME/.gemini/GEMINI.md}"
+PREFLIGHT_LINK_FILES="${PREFLIGHT_LINK_FILES-$HOME/.claude/statusline.sh:$HOME/.claude/settings.json:$HOME/AGENTS.md:$HOME/.codex/AGENTS.md:$HOME/.config/opencode/AGENTS.md}"
 PREFLIGHT_DOTFILES_DIR="${PREFLIGHT_DOTFILES_DIR:-$DOTFILES_DIR}"
 
 OPT_JSON=0

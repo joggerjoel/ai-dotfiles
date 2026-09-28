@@ -1,4 +1,23 @@
 #!/bin/bash
+
+# Bash reads scripts incrementally. Run from a private snapshot so an editor or
+# repository update cannot change the file underneath an in-progress setup.
+if [ "${AI_DOTFILES_SETUP_SNAPSHOT:-}" != "1" ] && [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  setup_source="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  setup_snapshot=$(mktemp "${TMPDIR:-/tmp}/ai-dotfiles-setup.XXXXXX")
+  cp "$setup_source" "$setup_snapshot"
+  AI_DOTFILES_SETUP_SNAPSHOT=1 \
+    AI_DOTFILES_SETUP_SOURCE="$setup_source" \
+    AI_DOTFILES_SETUP_SNAPSHOT_PATH="$setup_snapshot" \
+    exec /bin/bash "$setup_snapshot" "$@"
+fi
+
+# The running shell already has the snapshot open, so unlink it immediately.
+# Commands that need the repository continue to use AI_DOTFILES_SETUP_SOURCE.
+if [ -n "${AI_DOTFILES_SETUP_SNAPSHOT_PATH:-}" ]; then
+  rm -f "$AI_DOTFILES_SETUP_SNAPSHOT_PATH"
+fi
+
 set -euo pipefail
 
 # ── Colors & formatting ──────────────────────────────────────────
@@ -16,7 +35,7 @@ warn() { echo -e "  ${YELLOW}!${RESET} $1"; }
 fail() { echo -e "  ${RED}✗${RESET} $1"; }
 header() { echo -e "\n${BOLD}$1${RESET}"; }
 
-DOTFILES_DIR="$(cd "$(dirname "$0")" && pwd)"
+DOTFILES_DIR="$(cd "$(dirname "${AI_DOTFILES_SETUP_SOURCE:-$0}")" && pwd)"
 CLAUDE_DIR="$HOME/.claude"
 CLAUDE_JSON="$HOME/.claude.json"
 SERENA_CONFIG="$HOME/.serena/serena_config.yml"
@@ -679,29 +698,38 @@ fetch_skillspector_skill() {
 # one install covers four harnesses. It touches nothing else: no ~/.claude.json,
 # no MCP config.
 #
-# Auth is deliberately NOT done here. `firecrawl login` opens a browser, which a
-# setup run cannot drive and a headless fleet host does not have. This function
-# reports the auth state and stops. The key reaches the fleet as an env var via
-# `just fleet-firecrawl` (ansible-ai/provision-firecrawl.yml), because
-# `firecrawl config -k` does not persist when run non-interactively.
+# When ~/.claude/.env has a key, `firecrawl login -k` stores it non-interactively
+# in Firecrawl's 0600 credential file. It never starts browser auth, and future
+# standalone CLI calls work without requiring the shell to source Claude's env.
 #
 # credit-usage is the probe, not `--status`: --status exits 0 with a bad key.
 ensure_firecrawl() {
   npm_install_global "firecrawl-cli" firecrawl "Firecrawl CLI"
   command -v firecrawl &>/dev/null || return 0
 
-  # -y --skip-install --skip-auth is the non-interactive shape. Needs network
-  # (it shells out to npx) but no key, and reruns to a no-op.
-  if firecrawl init -y --skip-install --skip-auth >/dev/null 2>&1; then
+  # Firecrawl does not load ~/.claude/.env itself.
+  local firecrawl_key="${FIRECRAWL_API_KEY:-}"
+  [ -n "$firecrawl_key" ] || firecrawl_key=$(env_file_key FIRECRAWL_API_KEY)
+
+  if [ -n "$firecrawl_key" ]; then
+    if ! firecrawl login -k "$firecrawl_key" >/dev/null 2>&1; then
+      warn "firecrawl could not store the ~/.claude/.env key (continuing with process-scoped auth)"
+    fi
+  fi
+
+  # -y --skip-install --skip-auth is the non-interactive shape. It needs
+  # network (it shells out to npx), and reruns are a no-op.
+  if FIRECRAWL_API_KEY="$firecrawl_key" firecrawl init -y --skip-install --skip-auth >/dev/null 2>&1; then
     ok "firecrawl skills installed (~/.agents/skills → claude/codex/gemini/cursor)"
   else
     warn "firecrawl skills install failed — firecrawl init -y --skip-install --skip-auth (non-fatal)"
   fi
 
-  if firecrawl credit-usage >/dev/null 2>&1; then
+  if [ -n "$firecrawl_key" ] && \
+      FIRECRAWL_API_KEY="$firecrawl_key" firecrawl credit-usage >/dev/null 2>&1; then
     ok "firecrawl authenticated"
   else
-    warn 'firecrawl not authenticated — run: firecrawl login   (then: firecrawl env -f ~/.claude/.env so `just fleet-firecrawl` can distribute it)'
+    warn 'firecrawl key missing or rejected — set FIRECRAWL_API_KEY in ~/.claude/.env'
   fi
 }
 
@@ -730,6 +758,17 @@ ensure_grok_bot_cli() {
   else
     warn "gbot not authenticated — open the Grok Bot desktop app and sign in, then: gbot bots list"
   fi
+}
+
+# pen.dev/cli (bins: pen, pencil) — the pen.dev design tool's CLI, which runs
+# an embedded coding-agent SDK to manipulate .pen design files. Same "no fleet
+# playbook" shape as gbot above: it's a design tool (sharp/svgo image
+# processing, 51 MB unpacked), not something a headless VPS node ever touches.
+# ensure_dependencies only runs on a manual `./setup.sh` pass, never on
+# `setup.sh update` or the ansible fleet playbooks, so this never lands on the
+# fleet unattended.
+ensure_pen_dev_cli() {
+  npm_install_global "@pen.dev/cli" pen "pen.dev/cli"
 }
 
 # playwright-cli — Microsoft's token-efficient Playwright CLI plus the agent
@@ -926,6 +965,7 @@ ensure_dependencies() {
   ensure_skillspector  # scan agent skills for malicious patterns before install (uv tool)
   ensure_firecrawl  # live-web CLI + its 28 agent skills (npm; auth stays manual)
   ensure_grok_bot_cli  # gbot: Cursor's Grok Bot CLI (npm; needs the desktop app signed in, no fleet playbook)
+  ensure_pen_dev_cli  # pen/pencil: pen.dev design tool CLI (npm; desktop-only, no fleet playbook)
   ensure_playwright_cli  # browser-automation CLI + skill (npm; no browsers installed)
   ensure_herdr   # node session backend (macOS/brew only — no-ops on Linux)
   ensure_orca    # agent-orchestration IDE + CLI (macOS/brew cask only — no-ops on Linux)
@@ -1232,6 +1272,7 @@ ensure_unlazy_payload() {
 CODEX_SKILLS=(
   unlazy
   council
+  waves-codex
   explore-plan-code-test
   first-principles
   humanizer
@@ -1457,8 +1498,8 @@ POLICY
   ok "CLAUDE.md assembled (base + $profile$([ -f "$local_md" ] && echo " + local"))"
 }
 
-# pstack for the shared-skills runtimes (Codex, Prime Agent, opencode, Gemini
-# CLI): clones michael-denyer/pstack-claude and links its 52 skills into
+# pstack for the shared-skills runtimes (Codex, Prime Agent, opencode): clones
+# michael-denyer/pstack-claude and links its 52 skills into
 # ~/.agents/skills plus its 31 Codex slash-command stubs into ~/.codex/prompts,
 # and enables codex multi_agent. Lives here rather than in install_skills
 # because nothing lands in ~/.claude/skills — Claude Code gets pstack as a
@@ -1647,54 +1688,95 @@ cmd_setup() {
   # Ensure prerequisites & assumed tooling are installed (OS-aware).
   ensure_dependencies
 
-  # ── Profile selection ──
-  header "Machine type"
-  echo -e "  ${BOLD}1${RESET}) Desktop (macOS / Linux GUI)"
-  echo -e "  ${BOLD}2${RESET}) VPS / headless server"
-  echo -n "  > "
-  read -r profile_choice || profile_choice=""
+  mkdir -p "$DOTFILES_DIR/.local"
 
-  local profile
-  case "${profile_choice:-1}" in
-    2) profile="vps" ;;
-    *) profile="desktop" ;;
+  # ── Profile selection ──
+  local profile="${DOTFILES_PROFILE:-}"
+  if [ -z "$profile" ] && [ -s "$DOTFILES_DIR/.local/.profile" ]; then
+    profile=$(cat "$DOTFILES_DIR/.local/.profile")
+  fi
+
+  case "$profile" in
+    desktop|vps)
+      ok "Profile: $profile (saved)"
+      ;;
+    *)
+      header "Machine type"
+      echo -e "  ${BOLD}1${RESET}) Desktop (macOS / Linux GUI)"
+      echo -e "  ${BOLD}2${RESET}) VPS / headless server"
+      echo -n "  > "
+      read -r profile_choice || profile_choice=""
+      case "${profile_choice:-1}" in
+        2) profile="vps" ;;
+        *) profile="desktop" ;;
+      esac
+      ok "Profile: $profile"
+      ;;
   esac
-  ok "Profile: $profile"
+  printf '%s\n' "$profile" > "$DOTFILES_DIR/.local/.profile"
 
   # ── Personalization ──
   header "Personalization"
 
-  echo -ne "  GitHub username (for commit policy, or Enter to skip): "
-  read -r github_user || github_user=""
-
-  local hide_ai="no"
+  local github_user="${DOTFILES_GITHUB_USER:-}" github_saved="false"
   if [ -n "$github_user" ]; then
-    ok "GitHub: @$github_user"
-    echo -ne "  Hide AI attribution in commits? (y/N): "
-    read -r hide_ai_choice || hide_ai_choice=""
-    case "${hide_ai_choice:-n}" in
-      y|Y|yes) hide_ai="yes"; ok "AI attribution will be hidden" ;;
-      *) hide_ai="no"; skip "Standard commit messages" ;;
+    github_saved="true"
+  elif [ -f "$DOTFILES_DIR/.local/.github-user" ]; then
+    github_user=$(cat "$DOTFILES_DIR/.local/.github-user")
+    github_saved="true"
+  else
+    echo -ne "  GitHub username (for commit policy, or Enter to skip): "
+    read -r github_user || github_user=""
+    printf '%s\n' "$github_user" > "$DOTFILES_DIR/.local/.github-user"
+  fi
+
+  local hide_ai="${DOTFILES_HIDE_AI:-}"
+  if [ -n "$github_user" ]; then
+    [ "$github_saved" = "true" ] && ok "GitHub: @$github_user (saved)" || ok "GitHub: @$github_user"
+    [ -n "$hide_ai" ] || { [ ! -f "$DOTFILES_DIR/.local/.hide-ai" ] || hide_ai=$(cat "$DOTFILES_DIR/.local/.hide-ai"); }
+    case "$hide_ai" in
+      yes) ok "AI attribution hidden (saved)" ;;
+      no) skip "Standard commit messages (saved)" ;;
+      *)
+        echo -ne "  Hide AI attribution in commits? (y/N): "
+        read -r hide_ai_choice || hide_ai_choice=""
+        case "${hide_ai_choice:-n}" in
+          y|Y|yes) hide_ai="yes"; ok "AI attribution will be hidden" ;;
+          *) hide_ai="no"; skip "Standard commit messages" ;;
+        esac
+        ;;
     esac
   else
-    skip "GitHub username skipped"
+    hide_ai="no"
+    [ "$github_saved" = "true" ] && skip "GitHub username skipped (saved)" || skip "GitHub username skipped"
   fi
+  printf '%s\n' "$hide_ai" > "$DOTFILES_DIR/.local/.hide-ai"
 
   # ── Remote Control vs telemetry opt-out (desktop profile only) ──
-  local remote_control="no"
+  local remote_control="${DOTFILES_REMOTE_CONTROL:-}"
   if [ "$profile" = "desktop" ]; then
-    header "Remote Control"
-    echo -e "  The desktop profile disables Claude Code telemetry (DISABLE_TELEMETRY,"
-    echo -e "  DO_NOT_TRACK, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC). Claude Code also"
-    echo -e "  gates feature-flag reads behind these vars, which silently disables"
-    echo -e "  Remote Control (/rc) and other flag-gated features. ${DIM}Details in README.${RESET}"
-    echo -ne "  Do you use Remote Control? Strips the opt-out vars (y/N): "
-    read -r rc_choice || rc_choice=""
-    case "${rc_choice:-n}" in
-      y|Y|yes) remote_control="yes"; ok "Remote Control enabled (telemetry opt-out will be stripped)" ;;
-      *) skip "Keeping telemetry opt-out (Remote Control stays unavailable)" ;;
+    [ -n "$remote_control" ] || { [ ! -f "$DOTFILES_DIR/.local/.remote-control" ] || remote_control=$(cat "$DOTFILES_DIR/.local/.remote-control"); }
+    case "$remote_control" in
+      yes) ok "Remote Control enabled (saved)" ;;
+      no) skip "Remote Control disabled (saved)" ;;
+      *)
+        header "Remote Control"
+        echo -e "  The desktop profile disables Claude Code telemetry (DISABLE_TELEMETRY,"
+        echo -e "  DO_NOT_TRACK, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC). Claude Code also"
+        echo -e "  gates feature-flag reads behind these vars, which silently disables"
+        echo -e "  Remote Control (/rc) and other flag-gated features. ${DIM}Details in README.${RESET}"
+        echo -ne "  Do you use Remote Control? Strips the opt-out vars (y/N): "
+        read -r rc_choice || rc_choice=""
+        case "${rc_choice:-n}" in
+          y|Y|yes) remote_control="yes"; ok "Remote Control enabled (telemetry opt-out will be stripped)" ;;
+          *) remote_control="no"; skip "Keeping telemetry opt-out (Remote Control stays unavailable)" ;;
+        esac
+        ;;
     esac
+  else
+    remote_control="no"
   fi
+  printf '%s\n' "$remote_control" > "$DOTFILES_DIR/.local/.remote-control"
 
   # ── Link portable files ──
   header "Linking configuration files..."
@@ -1772,6 +1854,12 @@ cmd_setup() {
   fi
 
   # ── MCP Integration selection ──
+  local selection="" selection_saved="false"
+  if [ -z "${DOTFILES_MCP:-}" ] && [ -f "$DOTFILES_DIR/.local/.mcp-selection" ]; then
+    selection=$(cat "$DOTFILES_DIR/.local/.mcp-selection")
+    selection_saved="true"
+    ok "MCP selection: ${selection:-none} (saved)"
+  else
   header "MCP Integrations"
   echo -e "  These extend Claude Code with external tools."
   echo -e "  ${DIM}Press Enter to skip all, or pick by number.${RESET}"
@@ -1792,11 +1880,12 @@ cmd_setup() {
       tag="${GREEN}[ready]${RESET}"
     fi
 
-    printf "  ${BOLD}%2d${RESET}) %-20s %s %s\n" "$i" "$name" "$desc" "$tag"
+    printf "  ${BOLD}%2d${RESET}) %-20s %s %b\n" "$i" "$name" "$desc" "$tag"
     i=$((i+1))
   done
 
   echo ""
+  fi
   # An unattended run (ansible pipes a fixed set of answers into this script)
   # reaches this prompt with stdin already at EOF. `read` then yields "", and
   # "" means skip-all — which is how every fleet host ended up with
@@ -1806,14 +1895,15 @@ cmd_setup() {
   # It takes NAMES, not menu numbers. Numbers shift whenever INTEGRATIONS gains
   # a row, and a playbook that quietly installs a different server after an
   # unrelated registry edit is the same class of silent-drift bug this fixes.
-  local selection
-  if [ -n "${DOTFILES_MCP:-}" ]; then
-    selection="$DOTFILES_MCP"
-    echo -e "  ${DIM}DOTFILES_MCP=${selection}${RESET}"
-  else
-    echo -e "  ${DIM}Examples: 1,2,3  |  1-5  |  all  |  none  |  Enter to skip${RESET}"
-    echo -n "  > "
-    read -r selection || selection=""
+  if [ "$selection_saved" = "false" ]; then
+    if [ -n "${DOTFILES_MCP:-}" ]; then
+      selection="$DOTFILES_MCP"
+      echo -e "  ${DIM}DOTFILES_MCP=${selection}${RESET}"
+    else
+      echo -e "  ${DIM}Examples: 1,2,3  |  1-5  |  all  |  none  |  Enter to skip${RESET}"
+      echo -n "  > "
+      read -r selection || selection=""
+    fi
   fi
 
   # ── Parse selection ──
@@ -1829,6 +1919,29 @@ cmd_setup() {
   while IFS= read -r sel_idx; do
     [ -n "$sel_idx" ] && selected+=("$sel_idx")
   done <<< "$selection_out"
+
+  local saved_selection="" saved_idx saved_name
+  for saved_idx in "${selected[@]}"; do
+    saved_name=$(get_field "${INTEGRATIONS[$saved_idx]}" 1)
+    saved_selection="${saved_selection}${saved_selection:+,}${saved_name}"
+  done
+  [ -n "$saved_selection" ] || saved_selection="none"
+
+  if [ -n "${DOTFILES_PREVIOUS_MCP_SELECTION:-}" ]; then
+    local previous_mcp_names=() previous_mcp_name
+    IFS=',' read -ra previous_mcp_names <<< "$DOTFILES_PREVIOUS_MCP_SELECTION"
+    for previous_mcp_name in "${previous_mcp_names[@]}"; do
+      [ "$previous_mcp_name" = "none" ] && continue
+      case ",$saved_selection," in
+        *",$previous_mcp_name,"*) ;;
+        *)
+          remove_mcp_server "$previous_mcp_name"
+          ok "${previous_mcp_name} deselected and removed from MCP config"
+          ;;
+      esac
+    done
+  fi
+  printf '%s\n' "$saved_selection" > "$DOTFILES_DIR/.local/.mcp-selection"
 
   if [ ${#selected[@]} -eq 0 ]; then
     skip "Skipped integrations (run './setup.sh add <name>' later)"
@@ -1854,18 +1967,22 @@ cmd_setup() {
 
       local key_val="" extra_val="" should_disable="false"
 
-      if [ "$needs_key" = "yes" ]; then
-        echo -ne "  ${BOLD}${name}${RESET} - ${key_var}: "
-        read -r key_val || key_val=""
+      if [ "$selection_saved" = "true" ]; then
+        local saved_mcp_key
+        saved_mcp_key=$(mcp_key_for "$name")
+        if jq -e --arg k "$saved_mcp_key" '(.mcpServers // {}) | has($k)' "$CLAUDE_JSON" >/dev/null 2>&1; then
+          skip "${name} already configured (saved)"
+          continue
+        fi
+      fi
 
-        # A bare Enter is not the same as "no key". ~/.claude/.env may already
-        # hold one from an earlier run or a fleet sync, and baking PLACEHOLDER
-        # over a working key is exactly how the firecrawl 401 happened.
-        if [ -z "$key_val" ]; then
-          key_val=$(env_file_key "$key_var")
-          if [ -n "$key_val" ]; then
-            ok "${key_var} taken from ~/.claude/.env"
-          fi
+      if [ "$needs_key" = "yes" ]; then
+        key_val=$(env_file_key "$key_var")
+        if [ -n "$key_val" ]; then
+          ok "${key_var} taken from ~/.claude/.env"
+        elif [ "$selection_saved" = "false" ]; then
+          echo -ne "  ${BOLD}${name}${RESET} - ${key_var} (Enter to skip): "
+          read -r key_val || key_val=""
         fi
 
         if [ -z "$key_val" ]; then
@@ -1880,8 +1997,11 @@ cmd_setup() {
 
         # Check for extra vars (URL etc)
         if [ -n "$extra_vars" ]; then
-          echo -ne "  ${BOLD}${name}${RESET} - ${extra_vars}: "
-          read -r extra_val || extra_val=""
+          extra_val=$(env_file_key "$extra_vars")
+          if [ -z "$extra_val" ] && [ "$selection_saved" = "false" ]; then
+            echo -ne "  ${BOLD}${name}${RESET} - ${extra_vars}: "
+            read -r extra_val || extra_val=""
+          fi
 
           if [ -z "$extra_val" ]; then
             # No URL provided - install disabled rather than enabled against
@@ -1912,16 +2032,30 @@ cmd_setup() {
     ok "${enabled_count} integration(s) active. Others added as disabled."
   fi
 
+  # Existing selected servers may still contain PLACEHOLDER from an earlier
+  # run. Keep ~/.claude/.env as the source of truth without exposing keys.
+  sync_mcp_keys
+
   # ── Supabase: Cloud vs internal ──
-  configure_supabase ""
+  local supabase_mode="${DOTFILES_SUPABASE_MODE:-}"
+  [ -n "$supabase_mode" ] || { [ ! -f "$DOTFILES_DIR/.local/.supabase-mode" ] || supabase_mode=$(cat "$DOTFILES_DIR/.local/.supabase-mode"); }
+  configure_supabase "$supabase_mode"
 
   # ── Plugin stack ──
   header "Agentic plugin stack"
   echo -e "  Installs the plugins that power the workflow (superpowers, ui-ux-pro-max,"
   echo -e "  feature-dev, code-review, claude-mem, agent-browser, codex, and more)."
   echo -e "  ${DIM}Core auto-installs; optional plugins are opt-in. Reversible anytime.${RESET}"
-  echo -ne "  Install the plugin stack now? (Y/n): "
-  read -r plugins_choice || plugins_choice=""
+  local plugins_choice="${DOTFILES_PLUGIN_STACK:-}"
+  [ -n "$plugins_choice" ] || { [ ! -f "$DOTFILES_DIR/.local/.plugin-stack" ] || plugins_choice=$(cat "$DOTFILES_DIR/.local/.plugin-stack"); }
+  if [ -z "$plugins_choice" ]; then
+    echo -ne "  Install the plugin stack now? (Y/n): "
+    read -r plugins_choice || plugins_choice=""
+    plugins_choice="${plugins_choice:-y}"
+    printf '%s\n' "$plugins_choice" > "$DOTFILES_DIR/.local/.plugin-stack"
+  else
+    skip "Plugin stack choice: $plugins_choice (saved)"
+  fi
   case "${plugins_choice:-y}" in
     n|N|no) skip "Skipped (run ./scripts/bootstrap-plugins.sh later)" ;;
     *) "$DOTFILES_DIR/scripts/bootstrap-plugins.sh" || warn "Plugin bootstrap had issues — re-run ./scripts/bootstrap-plugins.sh" ;;
@@ -1984,14 +2118,12 @@ cmd_add() {
 
   if [ "$needs_key" = "yes" ]; then
     echo -ne "${BOLD}${name}${RESET} - ${desc}\n"
-    echo -ne "  ${key_var}: "
-    read -r key_val || key_val=""
-
-    if [ -z "$key_val" ]; then
-      key_val=$(env_file_key "$key_var")
-      if [ -n "$key_val" ]; then
-        ok "${key_var} taken from ~/.claude/.env"
-      fi
+    key_val=$(env_file_key "$key_var")
+    if [ -n "$key_val" ]; then
+      ok "${key_var} taken from ~/.claude/.env"
+    else
+      echo -ne "  ${key_var} (required): "
+      read -r key_val || key_val=""
     fi
 
     if [ -z "$key_val" ]; then
@@ -2338,6 +2470,29 @@ cmd_cache() {
   sed 's/^/    /' "$pf"
 }
 
+cmd_clean_setup() {
+  local answer_file
+  export DOTFILES_PREVIOUS_MCP_SELECTION=""
+  export DOTFILES_PREVIOUS_PLUGIN_SELECTION=""
+  [ ! -f "$DOTFILES_DIR/.local/.mcp-selection" ] || \
+    DOTFILES_PREVIOUS_MCP_SELECTION=$(cat "$DOTFILES_DIR/.local/.mcp-selection")
+  [ ! -f "$DOTFILES_DIR/.local/.plugin-selection" ] || \
+    DOTFILES_PREVIOUS_PLUGIN_SELECTION=$(cat "$DOTFILES_DIR/.local/.plugin-selection")
+  for answer_file in \
+    "$DOTFILES_DIR/.local/.profile" \
+    "$DOTFILES_DIR/.local/.github-user" \
+    "$DOTFILES_DIR/.local/.hide-ai" \
+    "$DOTFILES_DIR/.local/.remote-control" \
+    "$DOTFILES_DIR/.local/.mcp-selection" \
+    "$DOTFILES_DIR/.local/.supabase-mode" \
+    "$DOTFILES_DIR/.local/.plugin-stack" \
+    "$DOTFILES_DIR/.local/.plugin-selection"; do
+    [ ! -e "$answer_file" ] || rm -f "$answer_file"
+  done
+  ok "Cleared remembered setup answers (secrets and configured integrations kept)"
+  cmd_setup
+}
+
 # ── Main ──────────────────────────────────────────────────────────
 case "${1:-}" in
     provision-herdr-temporal) shift; exec bash "$DOTFILES_DIR/scripts/provision-herdr-temporal.sh" "$@" ;;
@@ -2355,11 +2510,13 @@ case "${1:-}" in
   # not a prompt, so one set here also holds on unattended upgrade runs
   # (ansible-ai/update.yml, cron) — configure them before those run.
   pin)      exec bash "$DOTFILES_DIR/scripts/pin.sh" "${2:-}" "${3:-}" ;;
+  --clean)  cmd_clean_setup ;;
   help|--help|-h)
     echo "Claude Code Dotfiles Setup"
     echo ""
     echo "Usage:"
     echo "  ./setup.sh              Initial setup (profile + integrations)"
+    echo "  ./setup.sh --clean      Forget saved answers and ask setup questions again"
     echo "  ./setup.sh add <name>   Add/enable a single MCP integration"
     echo "  ./setup.sh list         Show all integrations and their status"
     echo "  ./setup.sh provision-herdr-temporal --artifact FILE --sha256 HASH"

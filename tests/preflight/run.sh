@@ -1437,18 +1437,18 @@ links_case relink_reset _t_relink_reset
 # 11. AGENTS.md failures are counted, not erased by the reset. This was the
 # review's broadest finding: called BEFORE relink_all, they printed under
 # "0 failed". A success-only run can't exercise that claim, so force an
-# actual failure: $HOME/.gemini exists but is read-only, so link_file's
+# actual failure: $HOME/.config/opencode exists but is read-only, so link_file's
 # `ln -sfn` into it fails and increments LINK_FAILED. Assert the count is
 # non-zero AFTER relink_all returns (i.e. the reset didn't erase it) and
 # that a non-zero number is in the printed summary, not just the word
 # "failed" (which the summary contains even at zero).
 _t_agents_counted() {
   echo 'x' > "$CLAUDE_DIR/CLAUDE.md"
-  mkdir -p "$HOME/.gemini"
-  chmod 555 "$HOME/.gemini"
+  mkdir -p "$HOME/.config/opencode"
+  chmod 555 "$HOME/.config/opencode"
   LINKS_OUT=""
   relink_all
-  chmod 755 "$HOME/.gemini"
+  chmod 755 "$HOME/.config/opencode"
   if [ "$LINK_FAILED" -ge 1 ] \
      && printf '%s' "$LINKS_OUT" | grep -qE '[1-9][0-9]* failed' \
      && [ -L "$HOME/AGENTS.md" ]; then

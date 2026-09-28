@@ -35,6 +35,8 @@ fi
 
 # Non-interactive mode: install core only, skip all optional groups.
 AUTO="${1:-}"
+DOTFILES_ROOT="${AI_DOTFILES_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+PLUGIN_SELECTION_FILE="$DOTFILES_ROOT/.local/.plugin-selection"
 
 # ── Marketplaces (GitHub repos) ──────────────────────────────────
 # name|repo
@@ -111,6 +113,16 @@ OPT_SECURITY=(
   "static-analysis@trailofbits|CodeQL / Semgrep / SARIF static analysis (Trail of Bits)"
   "variant-analysis@trailofbits|Find variants of a known bug across a codebase (Trail of Bits)"
   "audit-context-building@trailofbits|Structured codebase understanding before an audit (Trail of Bits)"
+)
+
+ALL_PLUGINS=(
+  "${CORE[@]}"
+  "${OPT_BACKEND[@]}"
+  "${OPT_AUTOMATION[@]}"
+  "${OPT_INTEL[@]}"
+  "${OPT_AUTHORING[@]}"
+  "${OPT_WRITING[@]}"
+  "${OPT_SECURITY[@]}"
 )
 
 # ── Command runner ───────────────────────────────────────────────
@@ -220,40 +232,156 @@ install_core() {
   done
 }
 
-offer_group() {
+install_saved_core() {
+  local saved_selection="$1" entry spec
+  header "Core stack (saved selection)"
+  for entry in "${CORE[@]}"; do
+    spec="${entry%%|*}"
+    if contains_spec "$saved_selection" "$spec"; then
+      install_plugin "$spec" "${entry##*|}"
+    else
+      skip "$spec (deselected)"
+    fi
+  done
+}
+
+contains_spec() {
+  case ",$1," in *",$2,"*) return 0 ;; *) return 1 ;; esac
+}
+
+append_spec() {
+  contains_spec "$SELECTED_PLUGINS" "$1" || \
+    SELECTED_PLUGINS="${SELECTED_PLUGINS}${SELECTED_PLUGINS:+,}$1"
+}
+
+installed_plugins() {
+  claude plugin list 2>/dev/null \
+    | sed -n 's/^[[:space:]]*❯[[:space:]]*\([^[:space:]]*\).*/\1/p' \
+    | paste -sd, -
+}
+
+select_group_plugins() {
   local title="$1"; shift
-  local group=("$@")
+  local group=("$@") defaults="" entry spec marker i=1 answer token start end n old_ifs
+
   echo ""
   echo -e "  ${BOLD}${title}${RESET}"
   for entry in "${group[@]}"; do
-    printf "      ${DIM}%-32s${RESET} %s\n" "${entry%%|*}" "${entry##*|}"
+    spec="${entry%%|*}"
+    marker="[ ]"
+    if contains_spec "$BASELINE_PLUGINS" "$spec"; then
+      marker="[installed]"
+      defaults="${defaults}${defaults:+,}${i}"
+    fi
+    printf "    %2d) %-11s %-36s %s\n" "$i" "$marker" "$spec" "${entry##*|}"
+    i=$((i+1))
   done
-  echo -ne "  Install this group? (y/N): "
-  read -r ans || ans=""
-  case "${ans:-n}" in
-    y|Y|yes)
-      for entry in "${group[@]}"; do install_plugin "${entry%%|*}" "${entry##*|}"; done ;;
-    *) skip "Skipped (add later with: claude plugin install <plugin>@<marketplace>)" ;;
-  esac
+
+  echo -ne "  Select plugins (1,3-5 | all | none | Enter keeps installed): "
+  read -r answer || answer=""
+  [ -n "$answer" ] || answer="$defaults"
+  answer=$(printf '%s' "$answer" | tr -d ' ')
+  [ "$answer" = "none" ] && return 0
+
+  if [ "$answer" = "all" ]; then
+    for entry in "${group[@]}"; do append_spec "${entry%%|*}"; done
+    return 0
+  fi
+
+  old_ifs="$IFS"; IFS=','
+  for token in $answer; do
+    case "$token" in
+      *-*) start="${token%-*}"; end="${token#*-}" ;;
+      *) start="$token"; end="$token" ;;
+    esac
+    case "$start:$end" in
+      *[!0-9:]*|:*) warn "Ignoring invalid selection '$token'"; continue ;;
+    esac
+    [ "$start" -le "$end" ] 2>/dev/null || { warn "Ignoring invalid range '$token'"; continue; }
+    n="$start"
+    while [ "$n" -le "$end" ]; do
+      if [ "$n" -ge 1 ] && [ "$n" -le "${#group[@]}" ]; then
+        entry="${group[$((n-1))]}"
+        append_spec "${entry%%|*}"
+      else
+        warn "Ignoring out-of-range choice '$n'"
+      fi
+      n=$((n+1))
+    done
+  done
+  IFS="$old_ifs"
+}
+
+description_for() {
+  local want="$1" entry
+  for entry in "${ALL_PLUGINS[@]}"; do
+    [ "${entry%%|*}" = "$want" ] && { printf '%s' "${entry##*|}"; return 0; }
+  done
+  return 1
+}
+
+uninstall_plugin() {
+  local spec="$1" name="${1%%@*}"
+  if run_retry claude plugin uninstall --keep-data "$name"; then
+    ok "$spec deselected and uninstalled"
+  else
+    warn "$spec — uninstall failed: $(last_line "$RUN_OUT")"
+    FAILED_PLUGINS+=("uninstall $name")
+  fi
 }
 
 # ── Run ──────────────────────────────────────────────────────────
 add_marketplaces
 refresh_marketplaces
-install_core
 
 if [ "$AUTO" = "--core-only" ] || [ "$AUTO" = "-y" ]; then
+  if [ -f "$PLUGIN_SELECTION_FILE" ]; then
+    saved_plugins=$(cat "$PLUGIN_SELECTION_FILE")
+    [ "$saved_plugins" = "none" ] && saved_plugins=""
+    install_saved_core "$saved_plugins"
+  else
+    install_core
+  fi
   echo ""
-  ok "Core installed. Optional groups skipped (--core-only)."
+  ok "Saved core selection reconciled. Optional groups skipped (--core-only)."
   echo -e "  ${DIM}See optional plugins: open scripts/bootstrap-plugins.sh${RESET}"
 else
-  header "Optional plugins (opt-in — you can add/remove any of these anytime)"
-  offer_group "Backend & data"       "${OPT_BACKEND[@]}"
-  offer_group "Automation & research" "${OPT_AUTOMATION[@]}"
-  offer_group "Code intelligence"     "${OPT_INTEL[@]}"
-  offer_group "Authoring & meta"      "${OPT_AUTHORING[@]}"
-  offer_group "Writing & output"      "${OPT_WRITING[@]}"
-  offer_group "Security audit"       "${OPT_SECURITY[@]}"
+  INSTALLED_PLUGINS=$(installed_plugins)
+  BASELINE_PLUGINS="$INSTALLED_PLUGINS"
+  SELECTED_PLUGINS=""
+
+  if [ -f "$PLUGIN_SELECTION_FILE" ]; then
+    SELECTED_PLUGINS=$(cat "$PLUGIN_SELECTION_FILE")
+    [ "$SELECTED_PLUGINS" = "none" ] && SELECTED_PLUGINS=""
+    skip "Plugin selection loaded from .local/.plugin-selection"
+  else
+    header "Plugin selection"
+    echo -e "  ${DIM}Installed packages are preselected. Omit one to uninstall it.${RESET}"
+    select_group_plugins "Core stack"             "${CORE[@]}"
+    select_group_plugins "Backend & data"          "${OPT_BACKEND[@]}"
+    select_group_plugins "Automation & research"   "${OPT_AUTOMATION[@]}"
+    select_group_plugins "Code intelligence"       "${OPT_INTEL[@]}"
+    select_group_plugins "Authoring & meta"         "${OPT_AUTHORING[@]}"
+    select_group_plugins "Writing & output"         "${OPT_WRITING[@]}"
+    select_group_plugins "Security audit"           "${OPT_SECURITY[@]}"
+  fi
+
+  mkdir -p "$(dirname "$PLUGIN_SELECTION_FILE")"
+  printf '%s\n' "${SELECTED_PLUGINS:-none}" > "$PLUGIN_SELECTION_FILE"
+
+  old_ifs="$IFS"; IFS=','
+  for spec in $SELECTED_PLUGINS; do
+    [ -n "$spec" ] || continue
+    install_plugin "$spec" "$(description_for "$spec")"
+  done
+  IFS="$old_ifs"
+
+  for entry in "${ALL_PLUGINS[@]}"; do
+    spec="${entry%%|*}"
+    if contains_spec "$INSTALLED_PLUGINS" "$spec" && ! contains_spec "$SELECTED_PLUGINS" "$spec"; then
+      uninstall_plugin "$spec"
+    fi
+  done
 fi
 
 header "Plugins bootstrapped"

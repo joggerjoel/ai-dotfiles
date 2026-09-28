@@ -108,7 +108,7 @@
           and sudo access, then re-run. Skipping all installs for this host.
       when: prereq_check.rc != 0
 
-    # Node.js runtime for the npm-only CLIs (gemini, pi, grok). Not an OS
+    # Node.js runtime for the npm-only CLIs (pi, grok). Not an OS
     # package, so bootstrap nvm + Node LTS here — as part of the deploy — when
     # the runtime is missing or too old. Idempotent: skipped when it is fine.
     #
@@ -322,31 +322,6 @@
       args:
         executable: /bin/bash
       when: opencode_check.rc != 0
-
-    - name: Is the Gemini CLI present? (npm global lives under nvm)
-      ansible.builtin.shell: |
-        export NVM_DIR="$HOME/.nvm"
-        [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-        command -v gemini
-      args:
-        executable: /bin/bash
-      register: gemini_check
-      # A shell task is skipped under --check, so this var would have no .rc and
-      # the install task it gates would skip for the wrong reason -- a dry run
-      # reporting convergence it never checked.
-      check_mode: false
-      changed_when: false
-      failed_when: false
-
-    - name: Install Gemini CLI (npm global, via nvm)
-      ansible.builtin.shell: |
-        set -o pipefail
-        export NVM_DIR="$HOME/.nvm"
-        [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-        npm install -g @google/gemini-cli
-      args:
-        executable: /bin/bash
-      when: gemini_check.rc != 0
 
     # agy (Google Antigravity) — a flat native binary, not a package, so there
     # is no nvm/npm dance: the bootstrapper resolves a per-platform manifest,
@@ -579,12 +554,12 @@
         for p in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
           [ -x "$p" ] && { oc=present; break; }
         done
-        printf 'codex=%s cursor=%s cortex=%s opencode=%s gemini=%s pi=%s grok=%s headroom=%s' \
+        printf 'codex=%s cursor=%s cortex=%s opencode=%s agy=%s pi=%s grok=%s headroom=%s' \
           "$([ -x "$HOME/.local/bin/codex" ] && echo present || echo MISSING)" \
           "$([ -x "$HOME/.local/bin/cursor-agent" ] && echo present || echo MISSING)" \
           "$([ -x "$HOME/.local/bin/cortex" ] && echo present || echo MISSING)" \
           "$oc" \
-          "$(command -v gemini >/dev/null 2>&1 && echo present || echo MISSING)" \
+          "$([ -x "$HOME/.local/bin/agy" ] && echo present || echo MISSING)" \
           "$(command -v pi >/dev/null 2>&1 && echo present || echo MISSING)" \
           "$(command -v grok >/dev/null 2>&1 && echo present || echo MISSING)" \
           "$([ -x "$HOME/.local/bin/headroom" ] && echo present || echo MISSING)"

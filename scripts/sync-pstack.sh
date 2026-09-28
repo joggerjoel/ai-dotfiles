@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # sync-pstack.sh — install or refresh michael-denyer/pstack-claude for every
 # runtime that discovers Agent Skills from a shared directory: Codex, Prime
-# Agent, opencode, and Gemini CLI. Claude Code is NOT served here; it gets
+# Agent and opencode. Claude Code is NOT served here; it gets
 # pstack as a proper plugin (hooks/, agents/) via bootstrap-plugins.sh.
 #
 # Replaces vendor-pstack-skills.sh, which pulled the Cursor original from
@@ -49,7 +49,7 @@ command -v git >/dev/null || { warn "git not available — pstack not synced"; e
 # has no --timeout, and macOS ships no `timeout`, so this is the portable way
 # to keep a slow GitHub from wedging an unattended fleet update.
 STALL=(-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30)
-header "pstack-claude (Codex / Prime / opencode / Gemini)"
+header "pstack-claude (Codex / Prime / opencode)"
 if [ -d "$CLONE/.git" ]; then
   before="$(git -C "$CLONE" rev-parse --short HEAD 2>/dev/null)"
   if git -C "$CLONE" "${STALL[@]}" pull --ff-only --quiet 2>/dev/null; then
@@ -67,7 +67,7 @@ if [ -d "$CLONE/.git" ]; then
 elif git "${STALL[@]}" clone --quiet --depth 1 "$REPO" "$CLONE" 2>/dev/null; then
   ok "cloned → $CLONE ($(git -C "$CLONE" rev-parse --short HEAD))"
 else
-  warn "clone failed (network?) — pstack not installed for Codex/Prime/opencode/Gemini"
+  warn "clone failed (network?) — pstack not installed for Codex/Prime/opencode"
   exit 0
 fi
 

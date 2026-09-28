@@ -10,7 +10,7 @@ set -euo pipefail
 #   3. Upgrade Claude Code to latest (native `claude update`, or npm
 #      if that's how it was installed).
 #   4. Upgrade the sibling agent CLIs when present — codex,
-#      cursor-agent, cortex, opencode, gemini, agy, pi, grok, headroom,
+#      cursor-agent, cortex, opencode, agy, pi, grok, headroom,
 #      skillspector
 #      (scripts/agents-update.sh, the same script ansible-ai/update.yml
 #      runs on the fleet; also reports 9router gateway status).
@@ -22,16 +22,18 @@ set -euo pipefail
 #   5. Re-vendor the 9router skills from upstream and deploy them to
 #      ~/.claude/skills (scripts/vendor-9router-skills.sh --deploy).
 #   6. Refresh pstack (michael-denyer/pstack-claude) for Codex / Prime /
-#      opencode / Gemini: fast-forward the clone and relink ~/.agents/skills
+#      opencode: fast-forward the clone and relink ~/.agents/skills
 #      + ~/.codex/prompts (scripts/sync-pstack.sh). Claude Code's copy is a
 #      plugin and updates via the marketplace refresh in step 1.
 #   7. Re-vendor the unlazy skill from upstream and deploy it to both
 #      ~/.claude/skills and ~/.codex/skills (scripts/vendor-unlazy-skill.sh
 #      --deploy) — it is agent-agnostic, so Codex gets it too.
-#   8. Prune old backups (last 7 days + first-of-month snapshots).
-#   9. With --all: propagate to the fleet servers via
+#   8. Re-vendor RayFernando's WAVES skills and deploy them for Claude and
+#      Codex (scripts/vendor-rayfernando-skills.sh --deploy).
+#   9. Prune old backups (last 7 days + first-of-month snapshots).
+#  10. With --all: propagate to the fleet servers via
 #      ansible-ai/update.yml --limit aorus_ai (this machine was already
-#      updated by steps 1-8, so the playbook skips it). That playbook also
+#      updated by steps 1-9, so the playbook skips it). That playbook also
 #      re-asserts the Claude OAuth token on every server
 #      (ansible-ai/deploy-claude-token.yml) — the step that keeps the fleet
 #      authenticated, since a per-host claude login cannot be driven remotely.
@@ -83,7 +85,7 @@ for arg in "$@"; do
       echo "Optional worker release: set HERDR_TEMPORAL_ARTIFACT and HERDR_TEMPORAL_SHA256."
       echo "Usage: ./update.sh [--all] [--dry-run] [--claude-only] [--no-prune]"
       echo "  Backs up config to backup/<timestamp>/ then upgrades Claude Code"
-      echo "  and the sibling agent CLIs (codex, cursor-agent, cortex, opencode, gemini, agy, pi, grok, headroom, skillspector)."
+      echo "  and the sibling agent CLIs (codex, cursor-agent, cortex, opencode, agy, pi, grok, headroom, skillspector)."
       echo "  --all also runs ansible-ai/update.yml against the fleet servers afterward."
       exit 0 ;;
     *) warn "Unknown flag: $arg (ignored)" ;;
@@ -501,7 +503,7 @@ fi
 
 # ── 5. pstack (michael-denyer/pstack-claude) ─────────────────────
 # Refreshes the maintained Claude-Code/Codex port of poteto's pstack for the
-# shared-skills runtimes (Codex, Prime Agent, opencode, Gemini CLI): fast-
+# shared-skills runtimes (Codex, Prime Agent, opencode): fast-
 # forwards the clone and relinks ~/.agents/skills + ~/.codex/prompts. Claude
 # Code gets pstack as a plugin (bootstrap-plugins.sh, OPT_AUTOMATION) and
 # picks up updates via the marketplace refresh in step 1, not here.
@@ -562,6 +564,25 @@ if [ "$RUN_AGENTS" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/vendor-agent-skills.
     fi
   else
     warn "third-party skill re-vendor failed (non-fatal — check network)"
+  fi
+fi
+
+# ── 6c. WAVES skills (RayFernando1337/rayfernando-skills) ───────
+# The repo carries the exact upstream commit. Local updates refresh it and
+# deploy it now; fleet hosts receive that committed copy through setup.sh update.
+if [ "$RUN_AGENTS" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/vendor-rayfernando-skills.sh" ]; then
+  header "WAVES skills"
+  if ! command -v git &>/dev/null; then
+    skip "git not available — WAVES skills not re-vendored"
+  elif "$DOTFILES_DIR/scripts/vendor-rayfernando-skills.sh" --deploy >/dev/null 2>&1; then
+    if git -C "$DOTFILES_DIR" status --porcelain -- skills/waves skills/waves-codex skills-local/.upstream-rayfernando-waves 2>/dev/null | grep -q .; then
+      ok "Re-vendored RayFernando WAVES skills → Claude + Codex"
+      warn "WAVES skills changed — commit + push before running just fleet-update"
+    else
+      ok "WAVES skills already current (deployed to Claude + Codex)"
+    fi
+  else
+    warn "WAVES skill re-vendor failed (non-fatal — check network)"
   fi
 fi
 

@@ -12,8 +12,8 @@
 #   2. It runs `firecrawl init -y --skip-install --skip-auth` exactly once, and
 #      probes auth with `credit-usage` exactly once. `--status` exits 0 with a
 #      bad key, so using it as the probe would report every host authenticated.
-#   3. A failing probe is a report, not an error: setup.sh must never try to log
-#      in (firecrawl login needs a browser no fleet host has).
+#   3. A configured key uses `firecrawl login -k` and never browser auth. A
+#      failing probe is reported without aborting setup.
 #   4. Every playwright-cli install call carries --global. Without it the CLI
 #      initialises the CURRENT DIRECTORY as a workspace, so a setup run inside a
 #      repo would drop .playwright/ and .claude/skills/ into that repo.
@@ -57,6 +57,7 @@ for leaked in npm firecrawl playwright-cli; do
 done
 
 ARGV="$TMP/firecrawl.argv"
+FC_ENV="$TMP/firecrawl.env"
 PW_ARGV="$TMP/playwright.argv"
 
 # <exit code for credit-usage> — writes a firecrawl stub onto the sandbox PATH.
@@ -65,6 +66,7 @@ make_firecrawl_stub() {
   cat > "$TMP/bin/firecrawl" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$ARGV"
+[ -z "\${FIRECRAWL_API_KEY:-}" ] || printf '%s\n' "\$1" >> "$FC_ENV"
 case "\$1" in
   credit-usage) exit $credit_rc ;;
   *) exit 0 ;;
@@ -116,8 +118,11 @@ case "$got" in
 esac
 
 # --- 2. with firecrawl present: init once, credit-usage once ----------------
+mkdir -p "$TMP/home/.claude"
+printf 'FIRECRAWL_API_KEY=fc-test-key\n' > "$TMP/home/.claude/.env"
 make_firecrawl_stub 0
 : > "$ARGV"
+: > "$FC_ENV"
 got=$(run_setup 'ensure_firecrawl; printf "REACHED_END"')
 
 inits=$(grep -c -- '^init -y --skip-install --skip-auth$' "$ARGV" || true)
@@ -137,6 +142,14 @@ else
 fi
 
 # --status exits 0 with a bad key, so it can never be the probe.
+keyed=$(grep -cE '^(init|credit-usage)$' "$FC_ENV" || true)
+if [ "$keyed" = "2" ]; then
+  ok "ensure_firecrawl gives both CLI calls the ~/.claude/.env key"
+else
+  ko "ensure_firecrawl gives both CLI calls the ~/.claude/.env key" \
+    "key-bearing calls: [$(tr '\n' '|' < "$FC_ENV")]"
+fi
+
 if grep -q -- '^--status$' "$ARGV"; then
   ko "ensure_firecrawl does not use '--status' to judge auth" \
      "--status cannot distinguish a good key from a bad one"
@@ -144,11 +157,12 @@ else
   ok "ensure_firecrawl does not use '--status' to judge auth"
 fi
 
-# setup.sh must never open a browser flow.
-if grep -q -- '^login' "$ARGV"; then
-  ko "ensure_firecrawl never runs 'firecrawl login'" "a setup run cannot drive a browser"
+logins=$(grep -c -- '^login -k fc-test-key$' "$ARGV" || true)
+if [ "$logins" = "1" ]; then
+  ok "ensure_firecrawl stores the env key with non-interactive login"
 else
-  ok "ensure_firecrawl never runs 'firecrawl login'"
+  ko "ensure_firecrawl stores the env key with non-interactive login" \
+    "saw $logins, argv log: [$(tr '\n' '|' < "$ARGV")]"
 fi
 
 case "$got" in
@@ -168,12 +182,30 @@ case "$got" in
 esac
 
 case "$got" in
-  *"not authenticated"*) ok "ensure_firecrawl says the CLI is not authenticated" ;;
-  *) ko "ensure_firecrawl says the CLI is not authenticated" "output: [$got]" ;;
+  *"key missing or rejected"*) ok "ensure_firecrawl reports a rejected key" ;;
+  *) ko "ensure_firecrawl reports a rejected key" "output: [$got]" ;;
 esac
 
 
-# --- 4. playwright-cli: no npm and no binary, warn and continue -------------
+# --- 4. missing key never starts an auth flow -------------------------------
+: > "$TMP/home/.claude/.env"
+make_firecrawl_stub 0
+: > "$ARGV"
+: > "$FC_ENV"
+got=$(run_setup 'ensure_firecrawl; printf "REACHED_END"')
+
+credits=$(grep -c -- '^credit-usage$' "$ARGV" || true)
+[ "$credits" = "0" ] \
+  && ok "ensure_firecrawl does not probe auth without a key" \
+  || ko "ensure_firecrawl does not probe auth without a key" "argv log: [$(tr '\n' '|' < "$ARGV")]"
+
+if grep -q -- '^login' "$ARGV"; then
+  ko "ensure_firecrawl never opens browser auth when key is missing" "argv log: [$(tr '\n' '|' < "$ARGV")]"
+else
+  ok "ensure_firecrawl never opens browser auth when key is missing"
+fi
+
+# --- 5. playwright-cli: no npm and no binary, warn and continue -------------
 rm -f "$TMP/bin/playwright-cli" "$PW_ARGV"
 got=$(run_setup 'ensure_playwright_cli; printf "REACHED_END"')
 case "$got" in

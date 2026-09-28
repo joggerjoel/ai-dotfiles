@@ -75,6 +75,10 @@ _control:
 fleet-update: _control
     set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook update.yml 2>&1 | cat
 
+# [fleet] deploy the committed WAVES skills through the normal profile refresh
+fleet-waves limit="ai_all": _control
+    set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook update.yml --tags sync --limit {{quote(limit)}} 2>&1 | cat
+
 # Narrower than fleet-update on purpose. It runs only the git pull and profile
 # re-apply, skipping the CLI upgrades, the gateway deploys, and the token
 # distribution — that last play asserts a token exists and fails the whole run
@@ -310,7 +314,7 @@ vendor-skills:
     # pstack is not in this list: it is no longer vendored into skills/. It is
     # installed at runtime (Claude Code plugin + ~/.agents/skills links) by
     # scripts/sync-pstack.sh, which update.sh and setup.sh already call.
-    for s in vendor-9router-skills.sh vendor-unlazy-skill.sh vendor-agent-skills.sh; do
+    for s in vendor-9router-skills.sh vendor-unlazy-skill.sh vendor-agent-skills.sh vendor-rayfernando-skills.sh; do
       echo "── $s"
       bash "scripts/$s"
     done

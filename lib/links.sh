@@ -202,8 +202,8 @@ link_statusline() {
   return 0
 }
 
-# AGENTS.md/GEMINI.md all point at the assembled CLAUDE.md. The guard is
-# correct for these four links and gates ONLY them — the hook, bin, and
+# AGENTS.md points at the assembled CLAUDE.md. The guard is correct for these
+# three links and gates ONLY them — the hook, bin, and
 # codex linkers moved out to relink_all, so hook installation no longer
 # depends on a file unrelated to hooks.
 link_agent_instructions() {
@@ -211,7 +211,6 @@ link_agent_instructions() {
   [ -f "$canonical" ] || { warn "CLAUDE.md not found; skipping agent-instruction symlinks"; return 0; }
   link_file "$canonical" "$HOME/.codex/AGENTS.md"
   link_file "$canonical" "$HOME/.config/opencode/AGENTS.md"
-  link_file "$canonical" "$HOME/.gemini/GEMINI.md"
   link_file "$canonical" "$HOME/AGENTS.md"
   return 0
 }

@@ -1,9 +1,26 @@
 #!/bin/bash
+
+# Bash reads scripts incrementally. Run from a private snapshot so a repository
+# update cannot change this file underneath an in-progress updater.
+if [ "${AGENTS_UPDATE_SNAPSHOT:-}" != "1" ] && [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  agents_update_source="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+  agents_update_snapshot=$(mktemp "${TMPDIR:-/tmp}/agents-update.XXXXXX")
+  cp "$agents_update_source" "$agents_update_snapshot"
+  AGENTS_UPDATE_SNAPSHOT=1 \
+    AGENTS_UPDATE_SOURCE="$agents_update_source" \
+    AGENTS_UPDATE_SNAPSHOT_PATH="$agents_update_snapshot" \
+    exec /bin/bash "$agents_update_snapshot" "$@"
+fi
+
+if [ -n "${AGENTS_UPDATE_SNAPSHOT_PATH:-}" ]; then
+  rm -f "$AGENTS_UPDATE_SNAPSHOT_PATH"
+fi
+
 set -uo pipefail
 
 # ─────────────────────────────────────────────────────────────────
 # agents-update.sh — upgrade the sibling agent CLIs, when installed:
-#   codex (OpenAI), cursor-agent (Cursor), opencode, gemini (Google),
+#   codex (OpenAI), cursor-agent (Cursor), opencode,
 #   agy (Google Antigravity), pi (Earendil),
 #   grok (xAI), kimi (Moonshot Kimi Code),
 #   cortex (Snowflake Cortex Code), headroom (context-optimization proxy),
@@ -54,14 +71,14 @@ ok()   { echo -e "  ${GREEN}✓${RESET} $1"; }
 skip() { echo -e "  ${DIM}○ $1${RESET}"; }
 warn() { echo -e "  ${YELLOW}!${RESET} $1"; }
 
-# npm-installed CLIs (gemini) need node on PATH in non-login shells.
+# npm-installed companion CLIs need node on PATH in non-login shells.
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
 # Pin/unpin state (is_pinned/pin_cli/unpin_cli) lives in pin.sh, which
 # is also runnable standalone to set up pins ahead of an unattended
 # run — see pin.sh's header.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${AGENTS_UPDATE_SOURCE:-${BASH_SOURCE[0]}}")" && pwd)"
 . "$SCRIPT_DIR/pin.sh"
 
 CURL_RETRY="--retry 5 --retry-delay 2 --retry-connrefused"
@@ -247,21 +264,6 @@ done
 register_cli "opencode" "${OPENCODE_BIN:-opencode}" \
   "\"%BIN%\" upgrade || $OPENCODE_INSTALL" "$OPENCODE_INSTALL"
 
-# gemini is npm-installed on the fleet but may be brew-managed locally;
-# upgrading the wrong way would leave two copies fighting over PATH.
-# Fresh installs prefer brew when it exists, npm otherwise.
-GEMINI_UPGRADE="npm install -g @google/gemini-cli@latest"
-GEMINI_INSTALL="npm install -g @google/gemini-cli@latest"
-GEMINI_LATEST="npm_latest @google/gemini-cli"
-if command -v brew >/dev/null 2>&1; then
-  GEMINI_INSTALL="brew install gemini-cli"
-  if brew list --formula gemini-cli >/dev/null 2>&1; then
-    GEMINI_UPGRADE="brew upgrade gemini-cli"
-    GEMINI_LATEST="brew_latest gemini-cli"
-  fi
-fi
-register_cli "gemini" "gemini" "$GEMINI_UPGRADE" "$GEMINI_INSTALL" "$GEMINI_LATEST"
-
 # agy (Google Antigravity) — a flat native binary, not a package. The
 # bootstrapper resolves a per-platform manifest, verifies the payload's
 # published sha512 and drops the binary in ~/.local/bin/agy.
@@ -314,10 +316,10 @@ register_cli "kimi" "$HOME/.kimi-code/bin/kimi" "\"%BIN%\" upgrade || $KIMI_INST
 # every fleet pass would re-pull 27-45 MB per host for an unchanged build.
 # macOS is a .app bundle (symlinked onto PATH); Linux is x86_64 only and the
 # wrapper stops with a clear message on anything else.
-MEL_INSTALL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/install-mel.sh"
+MEL_INSTALL="$(cd "$(dirname "${AGENTS_UPDATE_SOURCE:-${BASH_SOURCE[0]}}")" && pwd)/install-mel.sh"
 register_cli "mel" "$HOME/.local/bin/mel" "$MEL_INSTALL" "$MEL_INSTALL"
 
-# just (command runner — the justfile launchpad). Same split as gemini:
+# just (command runner — the justfile launchpad).
 # brew-managed where brew manages it, otherwise the official installer,
 # which always fetches the latest prebuilt binary into ~/.local/bin — so
 # install and upgrade are the same command on the Linux fleet.
@@ -583,11 +585,12 @@ if [ -z "$CLAUDE_MEM_BIN" ]; then
 elif $RUN_TIMEOUT claude-mem doctor >"$LOG" 2>&1; then
   ok "claude-mem: doctor passes"
 else
-  warn "claude-mem: $(grep -F '✗' "$LOG" | head -1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  CLAUDE_MEM_DIAGNOSIS=$(grep -F '✗' "$LOG" | head -1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
   if $RUN_TIMEOUT claude-mem repair >"$LOG" 2>&1 \
     && $RUN_TIMEOUT claude-mem doctor >"$LOG" 2>&1; then
     ok "claude-mem: repaired (doctor now passes)"
   else
+    warn "claude-mem: ${CLAUDE_MEM_DIAGNOSIS:-doctor failed}"
     warn "claude-mem: repair did not clear the doctor — last output:"
     tail -n 5 "$LOG" | sed 's/^/      /'
     FAILED="$FAILED claude-mem-runtime"
