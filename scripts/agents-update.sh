@@ -81,6 +81,18 @@ export NVM_DIR="$HOME/.nvm"
 SCRIPT_DIR="$(cd "$(dirname "${AGENTS_UPDATE_SOURCE:-${BASH_SOURCE[0]}}")" && pwd)"
 . "$SCRIPT_DIR/pin.sh"
 
+FORCE=0
+for arg in "$@"; do
+    case "$arg" in
+        --force) FORCE=1 ;;
+        *) printf 'Unknown option: %s\n' "$arg" >&2; exit 2 ;;
+    esac
+done
+if [ "$FORCE" -eq 1 ]; then
+  AGENTS_AUTO_INSTALL=1
+  export CI=1 GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never
+fi
+
 CURL_RETRY="--retry 5 --retry-delay 2 --retry-connrefused"
 FAILED=""
 LOG="$(mktemp)"
@@ -91,12 +103,18 @@ trap 'rm -f "$LOG"' EXIT
 # AGENTS_AUTO_INSTALL=1, which the fleet playbook sets so the CLI
 # roster converges on hosts provisioned before a CLI was added).
 INTERACTIVE="no"
-[ -t 0 ] && [ -e /dev/tty ] && INTERACTIVE="yes"
+[ "$FORCE" -eq 0 ] && [ -t 0 ] && [ -e /dev/tty ] && INTERACTIVE="yes"
 
 # A hung vendor updater must not stall the whole fleet play.
 RUN_TIMEOUT=""
-if command -v timeout >/dev/null 2>&1; then RUN_TIMEOUT="timeout 300"
-elif command -v gtimeout >/dev/null 2>&1; then RUN_TIMEOUT="gtimeout 300"; fi
+DOCTOR_TIMEOUT=""
+if command -v timeout >/dev/null 2>&1; then
+  RUN_TIMEOUT="timeout 120"
+  DOCTOR_TIMEOUT="timeout 30"
+elif command -v gtimeout >/dev/null 2>&1; then
+  RUN_TIMEOUT="gtimeout 120"
+  DOCTOR_TIMEOUT="gtimeout 30"
+fi
 
 # offer_install <name> <install command>
 # Interactive runs get a y/N offer to install a missing CLI;
@@ -192,7 +210,11 @@ apply_cli() {
 
   action="$(get_action "$name")"
   case "$action" in
-    pin)  skip "$name: pinned at ${before:-current version} — clear with: pin.sh remove $name"; return 0 ;;
+    pin)
+      if [ "$FORCE" -eq 0 ]; then
+        skip "$name: pinned at ${before:-current version} — clear with: pin.sh remove $name"
+        return 0
+      fi ;;
     auto) ;;  # configured to always upgrade — no question
     *)
       # Unconfigured. Ask only when a human is attached AND we can
@@ -253,7 +275,7 @@ register_cli "cortex" "$HOME/.local/bin/cortex" \
   "curl $CURL_RETRY -LsS https://ai.snowflake.com/static/cc-scripts/install.sh | NON_INTERACTIVE=1 SKIP_PATH_PROMPT=1 sh"
 
 # opencode's installer dir varies between versions.
-OPENCODE_INSTALL="curl $CURL_RETRY -fsSL https://opencode.ai/install | bash"
+OPENCODE_INSTALL="set -o pipefail; curl $CURL_RETRY -fsSL https://opencode.ai/install | bash"
 OPENCODE_BIN=""
 for p in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
   [ -x "$p" ] && { OPENCODE_BIN="$p"; break; }
@@ -262,7 +284,7 @@ done
 # Registering the bare name when nothing resolved lets wave 1 report it
 # as missing and wave 2 offer the install — same path as every other CLI.
 register_cli "opencode" "${OPENCODE_BIN:-opencode}" \
-  "\"%BIN%\" upgrade || $OPENCODE_INSTALL" "$OPENCODE_INSTALL"
+  "\"%BIN%\" upgrade || { $OPENCODE_INSTALL; }" "$OPENCODE_INSTALL"
 
 # agy (Google Antigravity) — a flat native binary, not a package. The
 # bootstrapper resolves a per-platform manifest, verifies the payload's
@@ -511,7 +533,7 @@ for i in "${!CLI_NAME[@]}"; do
 
   case "$status" in
     current | blocked) ;;
-    *) [ "$pol" = "pin" ] || NEED_ACTION="yes" ;;
+    *) { [ "$FORCE" -eq 1 ] || [ "$pol" != "pin" ]; } && NEED_ACTION="yes" ;;
   esac
 done
 
@@ -582,12 +604,13 @@ fi
 CLAUDE_MEM_BIN="$(command -v claude-mem 2>/dev/null || true)"
 if [ -z "$CLAUDE_MEM_BIN" ]; then
   skip "claude-mem not installed, runtime check skipped"
-elif $RUN_TIMEOUT claude-mem doctor >"$LOG" 2>&1; then
+elif { echo "  claude-mem: checking runtime..."; $DOCTOR_TIMEOUT claude-mem doctor >"$LOG" 2>&1; }; then
   ok "claude-mem: doctor passes"
 else
   CLAUDE_MEM_DIAGNOSIS=$(grep -F '✗' "$LOG" | head -1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-  if $RUN_TIMEOUT claude-mem repair >"$LOG" 2>&1 \
-    && $RUN_TIMEOUT claude-mem doctor >"$LOG" 2>&1; then
+  echo "  claude-mem: repairing runtime (up to 120 seconds)..."
+  if $RUN_TIMEOUT claude-mem repair 2>&1 | tee "$LOG" \
+      && $DOCTOR_TIMEOUT claude-mem doctor >"$LOG" 2>&1; then
     ok "claude-mem: repaired (doctor now passes)"
   else
     warn "claude-mem: ${CLAUDE_MEM_DIAGNOSIS:-doctor failed}"
@@ -647,7 +670,11 @@ fi
 PINS="$(list_pins)"
 if [ -n "$PINS" ]; then
   echo
-  echo -e "  ${DIM}Pinned, not upgraded: $(echo "$PINS" | tr '\n' ' ')${RESET}"
+  if [ "$FORCE" -eq 1 ]; then
+    echo -e "  ${DIM}Pins ignored for this run: $(echo "$PINS" | tr '\n' ' ')${RESET}"
+  else
+    echo -e "  ${DIM}Pinned, not upgraded: $(echo "$PINS" | tr '\n' ' ')${RESET}"
+  fi
   echo -e "  ${DIM}Clear with: scripts/pin.sh remove <name>${RESET}"
 fi
 

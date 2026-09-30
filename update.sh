@@ -51,6 +51,7 @@ set -euo pipefail
 #                  and fleet are all skipped.
 #   --claude-only  Skip the sibling agent CLIs and the vendored skills (4-7).
 #   --no-prune     Skip the post-upgrade backup prune.
+#   --force        Install missing CLIs and upgrade pinned CLIs without questions.
 # ─────────────────────────────────────────────────────────────────
 
 # ── Colors & helpers ─────────────────────────────────────────────
@@ -74,26 +75,37 @@ CLAUDE_JSON="$HOME/.claude.json"
 BACKUP_ROOT="$DOTFILES_DIR/backup"
 TS="$(date +%Y%m%d_%H%M%S)"
 
-DRY_RUN="no"; RUN_PRUNE="yes"; RUN_AGENTS="yes"; RUN_FLEET="no"
+DRY_RUN="no"; RUN_PRUNE="yes"; RUN_AGENTS="yes"; RUN_FLEET="no"; FORCE="no"
 for arg in "$@"; do
   case "$arg" in
     --all)         RUN_FLEET="yes" ;;
     --dry-run)     DRY_RUN="yes"; export LINKS_DRY_RUN=1 ;;
     --claude-only) RUN_AGENTS="no" ;;
     --no-prune)    RUN_PRUNE="no" ;;
+    --force)       FORCE="yes" ;;
     -h|--help)
       echo "Optional worker release: set HERDR_TEMPORAL_ARTIFACT and HERDR_TEMPORAL_SHA256."
-      echo "Usage: ./update.sh [--all] [--dry-run] [--claude-only] [--no-prune]"
+      echo "Usage: ./update [--all] [--dry-run] [--claude-only] [--no-prune] [--force]"
       echo "  Backs up config to backup/<timestamp>/ then upgrades Claude Code"
       echo "  and the sibling agent CLIs (codex, cursor-agent, cortex, opencode, agy, pi, grok, headroom, skillspector)."
       echo "  --all also runs ansible-ai/update.yml against the fleet servers afterward."
+      echo "  --force installs missing CLIs and upgrades pinned CLIs without questions."
       exit 0 ;;
     *) warn "Unknown flag: $arg (ignored)" ;;
   esac
 done
 
+if [ "$FORCE" = "yes" ]; then
+  export CI=1 GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never
+fi
+
 SUDO=""
-[ "$(id -u)" -ne 0 ] && command -v sudo &>/dev/null && SUDO="sudo"
+if [ "$(id -u)" -ne 0 ] && command -v sudo &>/dev/null; then
+  SUDO="sudo"
+  if [ "$FORCE" = "yes" ]; then
+    SUDO="sudo -n"
+  fi
+fi
 
 # ── Locate Claude Code & determine how it was installed ──────────
 if ! command -v claude &>/dev/null; then
@@ -241,7 +253,11 @@ echo -e "  ${DIM}Roll back anytime:  ${CYAN}backup/$TS/rollback.sh${RESET}"
 # ── 3. Sibling agent CLIs ────────────────────────────────────────
 if [ "$RUN_AGENTS" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/agents-update.sh" ]; then
   echo
-  "$DOTFILES_DIR/scripts/agents-update.sh" || warn "Some agent CLI upgrades failed (non-fatal)."
+  if [ "$FORCE" = "yes" ]; then
+    "$DOTFILES_DIR/scripts/agents-update.sh" --force || warn "Some agent CLI upgrades failed (non-fatal)."
+  else
+    "$DOTFILES_DIR/scripts/agents-update.sh" || warn "Some agent CLI upgrades failed (non-fatal)."
+  fi
 fi
 
 # ── 3b. herdr (node session backend, macOS/brew only) ────────────

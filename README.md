@@ -159,6 +159,7 @@ is always **commit → push → playbook**. Nothing reaches a host that isn't on
 ./update.sh                        # this machine: Claude Code + sibling CLIs (codex, cursor,
                                    #   cortex, opencode, agy, pi, grok, headroom) + config
 ./update.sh --all                  # …then propagate to the fleet via ansible
+./update --force                   # update locally without CLI prompts, including pinned CLIs
 just fleet-waves                   # deploy committed WAVES skills without CLI upgrades
 ```
 
