@@ -110,7 +110,7 @@ Then log: `echo "$(date '+%Y-%m-%d %H:%M') | <file> | <reason>" >> ~/.claude/.ba
 
 | Command                       | What it does                                          |
 | ----------------------------- | ----------------------------------------------------- |
-| `just preflight`              | Verify every configured asset works (read-only, ~90s) |
+| `just preflight`              | Verify every configured asset works; auto-repairs plugins with a known fix (~90s) |
 | `just preflight --quarantine` | Disable failing MCP servers, backing up first         |
 | `just audit`                  | Preflight plus tier-3 smoke tests                     |
 | `just test`                   | Run the preflight test suite                          |

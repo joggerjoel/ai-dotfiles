@@ -1031,6 +1031,23 @@ case "$out" in
   *) report fail "a failing health command outranks a fresh ledger" "got: $(printf '%s' "$out" | grep -i sickplug)" ;;
 esac
 
+# A failing health command with a repair command gets repaired, then re-probed:
+# a fault with a known fix must not wait for someone to copy the fix by hand.
+FIXED_MARK="$PLUGDIR/fixed"
+out=$(run_plugin_probe "fixplug|goodplug|test -f $FIXED_MARK|$FRESH_LEDGER|3600|touch $FIXED_MARK")
+case "$out" in
+  *"repaired fixplug"*"✔ fixplug"*) report pass "a repairable plugin is repaired and re-probed" ;;
+  *) report fail "a repairable plugin is repaired and re-probed" "got: $(printf '%s' "$out" | grep -i fixplug)" ;;
+esac
+
+# A repair that does not clear the health check keeps the ORIGINAL diagnosis.
+out=$(run_plugin_probe "brokeplug|goodplug|false|$FRESH_LEDGER|3600|true")
+case "$out" in
+  *"brokeplug"*"health check failed"*"repair did not clear it"*)
+    report pass "a repair that does not fix the plugin still fails it" ;;
+  *) report fail "a repair that does not fix the plugin still fails it" "got: $(printf '%s' "$out" | grep -i brokeplug)" ;;
+esac
+
 # The seam itself: empty means "no plugins", not "fall back to the real ones".
 out=$(run_plugin_probe "")
 case "$out" in

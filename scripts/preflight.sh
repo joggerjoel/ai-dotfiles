@@ -338,11 +338,11 @@ probe_hooks() {
 # failing will produce a stale ledger as a CONSEQUENCE. Reporting both would
 # bury the cause under its own symptom.
 probe_plugins() {
-  local spec name cli health ledger stale out detail last fails age
+  local spec name cli health ledger stale repair out detail last fails age
   [ -n "$PLUGIN_SPECS" ] || return
   while IFS= read -r spec; do
     [ -n "$spec" ] || continue
-    IFS='|' read -r name cli health ledger stale <<<"$spec"
+    IFS='|' read -r name cli health ledger stale repair <<<"$spec"
 
     # Presence. A real finding on its own: an absent CLI is what sends
     # `claude-mem restart` through npx, which stops to prompt for a download
@@ -354,11 +354,26 @@ probe_plugins() {
 
     # Liveness. The plugin's own doctor knows its dependencies; a non-zero
     # exit means a REQUIRED check failed, and its ✗ line names which one.
+    # A fault with a known fix is repaired here and re-probed, rather than
+    # reported with the fix for a human to copy. Fault-only: the repair
+    # never runs while the health check passes. Progress goes to stderr so
+    # --json stdout stays a single document.
     if [ -n "$health" ]; then
       if ! out=$(with_timeout 60 bash -c "$health" 2>&1); then
         detail=$(printf '%s' "$out" | grep -F '✗' | head -1 | sed 's/^[[:space:]]*//')
-        add_finding plugin "$name" fail "${detail:-health check failed: $health}" no
-        continue
+        detail="${detail:-health check failed: $health}"
+        if [ -z "$repair" ]; then
+          add_finding plugin "$name" fail "$detail" no
+          continue
+        fi
+        echo "preflight: $name — $detail; running: $repair" >&2
+        if with_timeout 120 bash -c "$repair" >/dev/null 2>&1 \
+            && with_timeout 60 bash -c "$health" >/dev/null 2>&1; then
+          echo "preflight: repaired $name" >&2
+        else
+          add_finding plugin "$name" fail "$detail (repair did not clear it: $repair)" no
+          continue
+        fi
       fi
     fi
 

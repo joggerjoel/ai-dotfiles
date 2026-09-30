@@ -70,8 +70,12 @@ MANDATED_CLIS=(
 #   stale_after  seconds since lastSuccessAt before the asset is called stale.
 #                A plugin that has not succeeded in this long is failing
 #                silently even when every other light is green.
+#   repair       run when health_cmd fails, then health_cmd is re-run; empty =
+#                report only. Use the global CLI, never npx: npx stops to ask
+#                before downloading. claude-mem's repair reinstalls the
+#                marketplace tree's node_modules, which a plugin update drops.
 PLUGIN_ASSETS=(
-  "claude-mem|claude-mem|claude-mem doctor|$HOME/.claude-mem/observer-health.json|21600"
+  "claude-mem|claude-mem|claude-mem doctor|$HOME/.claude-mem/observer-health.json|21600|claude-mem repair"
 )
 
 # Map an integration name to its index in INTEGRATIONS. Prints the index;
