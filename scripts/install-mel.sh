@@ -18,7 +18,7 @@
 # database. On a workstation, run that script from the unpacked archive instead.
 set -uo pipefail
 
-BASE="https://mel-downloads-818872636914.s3.ap-south-1.amazonaws.com"
+BASE="https://downloads.openmel.dev"
 PREFIX="${MEL_PREFIX:-$HOME}"
 BIN_DIR="$PREFIX/.local/bin"
 STATE_DIR="$PREFIX/.local/state/ai-dotfiles"
