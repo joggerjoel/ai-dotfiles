@@ -1020,7 +1020,10 @@ remove_mcp_server() {
 env_file_key() {
   local var="$1" env_file="$CLAUDE_DIR/.env"
   [ -f "$env_file" ] || return 0
-  grep -E "^[[:space:]]*(export[[:space:]]+)?${var}=" "$env_file" 2>/dev/null \
+  # `|| true`: an absent key is an empty answer, not an error. Under pipefail a
+  # no-match grep failed the whole pipeline, and set -e then killed the caller
+  # (sync_mcp_keys died on the first configured server without a key).
+  { grep -E "^[[:space:]]*(export[[:space:]]+)?${var}=" "$env_file" 2>/dev/null || true; } \
     | tail -1 | sed -E 's/^[^=]*=//' | tr -d "\"' "
 }
 
@@ -2396,18 +2399,105 @@ cmd_env() {
     exit 1
   fi
 
-  local env_file="$CLAUDE_DIR/.env"
+  env_set "$key" "$val"
+  ok "Saved ${key} to ~/.claude/.env"
+}
+
+# Write KEY=VAL into ~/.claude/.env (0600), replacing any earlier line for KEY.
+# The value only ever passes through printf, a builtin, so it never lands on a
+# command line where `ps` could show it — and a `|` in a token can't break a
+# sed expression the way the old in-place edit could.
+env_set() {
+  local key="$1" val="$2" env_file="$CLAUDE_DIR/.env" tmp
   touch "$env_file"
   chmod 600 "$env_file"
+  tmp=$(mktemp "${env_file}.XXXXXX")
+  grep -vE "^[[:space:]]*(export[[:space:]]+)?${key}=" "$env_file" > "$tmp" || true
+  printf '%s=%s\n' "$key" "$val" >> "$tmp"
+  chmod 600 "$tmp"
+  mv "$tmp" "$env_file"
+}
 
-  # Update or append
-  if grep -q "^${key}=" "$env_file" 2>/dev/null; then
-    sed_inplace "s|^${key}=.*|${key}=${val}|" "$env_file"
-    ok "Updated ${key} in ~/.claude/.env"
-  else
-    echo "${key}=${val}" >> "$env_file"
-    ok "Added ${key} to ~/.claude/.env"
+# Open a URL in the desktop browser when there is one; headless hosts just
+# get the URL printed by the caller.
+open_url() {
+  if [ "$(uname)" = "Darwin" ]; then
+    open "$1" 2>/dev/null || true
+  elif [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-open &>/dev/null; then
+    xdg-open "$1" >/dev/null 2>&1 || true
   fi
+}
+
+# Find every configured MCP server that needs a key it doesn't have, open the
+# page that issues one, and save what is pasted. ~/.claude/.env stays the one
+# store; sync_mcp_keys then derives ~/.claude.json from it. Disabled servers
+# are skipped — a key must not be demanded for something switched off.
+#
+# Plugin and hosted-HTTP servers authenticate by OAuth inside Claude Code, and
+# no script can drive that flow, so they are only listed with the /mcp step.
+cmd_tokens() {
+  [ -f "$CLAUDE_JSON" ] || { fail "No ~/.claude.json — run ./setup.sh first"; exit 1; }
+  header "MCP API keys"
+
+  local entry name key_var key_url mcp_key val baked unset_keys=0
+  for entry in "${INTEGRATIONS[@]}"; do
+    [ "$(get_field "$entry" 3)" = "yes" ] || continue
+    name=$(get_field "$entry" 1)
+    key_var=$(get_field "$entry" 4)
+    key_url=$(get_field "$entry" 8)
+    mcp_key=$(mcp_key_for "$name")
+
+    jq -e --arg k "$mcp_key" '(.mcpServers // {}) | has($k)' "$CLAUDE_JSON" >/dev/null 2>&1 || continue
+    if jq -e --arg k "$mcp_key" '.mcpServers[$k].disabled == true' "$CLAUDE_JSON" >/dev/null 2>&1; then
+      skip "${name}: disabled — not asking for ${key_var}"
+      continue
+    fi
+
+    val=$(env_file_key "$key_var")
+    baked=$(jq -r --arg k "$mcp_key" --arg v "$key_var" '.mcpServers[$k].env[$v] // empty' "$CLAUDE_JSON")
+    if [ -n "$val" ] && [ "$val" != "PLACEHOLDER" ]; then
+      ok "${name}: ${key_var} set"
+      continue
+    elif [ -n "$baked" ] && [ "$baked" != "PLACEHOLDER" ]; then
+      ok "${name}: ${key_var} set (in ~/.claude.json only)"
+      continue
+    fi
+
+    unset_keys=$((unset_keys + 1))
+    warn "${name}: ${key_var} missing"
+    echo -e "    Get one at: ${key_url:-the ${name} instance settings page}"
+    if [ ! -t 0 ]; then continue; fi
+    [ -z "$key_url" ] || open_url "$key_url"
+    echo -n "    Paste ${key_var} (Enter to skip): "
+    read -rs val || val=""
+    echo
+    if [ -z "$val" ]; then
+      skip "${name}: skipped"
+      continue
+    fi
+    env_set "$key_var" "$val"
+    ok "${name}: saved ${key_var} to ~/.claude/.env"
+    unset_keys=$((unset_keys - 1))
+  done
+  [ "$unset_keys" -eq 0 ] || echo -e "  ${DIM}${unset_keys} key(s) still missing — re-run ./setup.sh tokens in a terminal${RESET}"
+
+  sync_mcp_keys
+
+  header "Plugin / hosted MCP sign-ins"
+  if ! command -v claude &>/dev/null; then
+    skip "claude not on PATH — cannot check plugin sign-ins"
+    return 0
+  fi
+  local needs
+  needs=$(claude mcp list 2>/dev/null | grep "Needs authentication" | sed -E 's/: .*//' || true)
+  if [ -z "$needs" ]; then
+    ok "No server is waiting on a sign-in"
+    return 0
+  fi
+  while IFS= read -r name; do
+    warn "${name}: needs sign-in"
+  done <<< "$needs"
+  echo -e "  ${DIM}OAuth runs inside Claude Code: start \`claude\`, type /mcp, pick each one, choose Authenticate.${RESET}"
 }
 
 # ── cache-guard policy (.local/.cache-policy, gitignored) ─────────
@@ -2501,6 +2591,7 @@ case "${1:-}" in
   list)     cmd_list ;;
   update)   cmd_update "${2:-}" ;;
   env)      cmd_env "${2:-}" "${3:-}" ;;
+  tokens)   cmd_tokens ;;
   cache)    cmd_cache "${2:-}" "${3:-}" ;;
   supabase) configure_supabase "${2:-}" ;;
   # Install/upgrade only the zsh module registry. Re-running is the upgrade
@@ -2524,6 +2615,7 @@ case "${1:-}" in
     echo "  ./setup.sh check-herdr-temporal [--offline]  Read-only readiness report"
     echo "  ./setup.sh zsh          Install or upgrade only the zsh module registry"
     echo "  ./setup.sh env KEY [v]  Add an API key to ~/.claude/.env"
+    echo "  ./setup.sh tokens       Find MCP keys/sign-ins still missing; open the page to get each"
     echo "  ./setup.sh cache [p]    cache-guard policy (subscription|api|custom <s>|off,"
     echo "                          or mode: observe|warn|protect; no arg shows current)"
     echo "  ./setup.sh supabase [m] Configure Supabase MCP (m = cloud|internal, or prompt)"

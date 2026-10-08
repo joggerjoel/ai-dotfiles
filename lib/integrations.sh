@@ -2,7 +2,8 @@
 # Asset registry shared by setup.sh and scripts/preflight.sh.
 # Sourced, never executed. Defines data and one pure function; no side effects.
 
-# Format: name|description|needs_key|key_var|disabled_by_default|extra_vars|desktop_only
+# Format: name|description|needs_key|key_var|disabled_by_default|extra_vars|desktop_only|key_url
+# key_url: where to issue the key; `setup.sh tokens` opens it when the key is missing.
 INTEGRATIONS=(
   "context7|Documentation lookup|no||||no"
   "serena|Semantic code assistant|no||||no"
@@ -13,11 +14,11 @@ INTEGRATIONS=(
   # running it was one where someone had edited ~/.claude.json directly.
   "headroom|Context-optimization proxy|no||||no"
   "chrome-devtools|Browser DevTools (desktop only)|no||yes||yes"
-  "firecrawl|Web scraping (large-scale)|yes|FIRECRAWL_API_KEY|||no"
-  "github|GitHub repo/issue/PR management|yes|GITHUB_PERSONAL_ACCESS_TOKEN|yes||no"
-  "openrouter|OpenRouter AI models|yes|OPENROUTER_API_KEY|yes||no"
-  "apify|Web scraping actors|yes|APIFY_TOKEN|yes||no"
-  "digitalocean|DigitalOcean infrastructure|yes|DIGITALOCEAN_API_TOKEN|yes||no"
+  "firecrawl|Web scraping (large-scale)|yes|FIRECRAWL_API_KEY|||no|https://www.firecrawl.dev/app/api-keys"
+  "github|GitHub repo/issue/PR management|yes|GITHUB_PERSONAL_ACCESS_TOKEN|yes||no|https://github.com/settings/personal-access-tokens/new"
+  "openrouter|OpenRouter AI models|yes|OPENROUTER_API_KEY|yes||no|https://openrouter.ai/settings/keys"
+  "apify|Web scraping actors|yes|APIFY_TOKEN|yes||no|https://console.apify.com/settings/integrations"
+  "digitalocean|DigitalOcean infrastructure|yes|DIGITALOCEAN_API_TOKEN|yes||no|https://cloud.digitalocean.com/account/api/tokens"
   "n8n|Workflow automation|yes|N8N_JWT|yes|N8N_URL|no"
   "crawl4ai|Self-hosted web scraping (SSE)|yes|CRAWL4AI_TOKEN|yes|CRAWL4AI_URL|no"
   "playwright|Browser automation & testing|no||yes||yes"

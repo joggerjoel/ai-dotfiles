@@ -54,3 +54,6 @@ skills/unlazy/scripts/
 # Handoff notes carrying real LAN addresses, hostnames and topology. The file's
 # own header says it must not live in this repo, which is public. Keep it local.
 general-monitoring-handoff.md
+
+# Stray hand-made backups of profile settings (real backups live in ~/.claude/.backups)
+profiles/*/*.bak
