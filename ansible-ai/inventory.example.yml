@@ -58,6 +58,15 @@ ninerouter_ai:
   hosts:
     server1:
 
+# ── Self-hosted MCP compose stacks — deploy-mcp-services.yml targets ─
+# Hosts that run MCP servers as docker compose stacks, one per directory
+# under ~/services. Each gets a boot-enabled mcp-compose@<dir> systemd unit,
+# and update.sh re-pulls + restarts a stack when its image changed.
+# Also a subset of aorus_ai (list the host in both groups).
+mcp_services_ai:
+  hosts:
+    server1:
+
 # ── Native headroom proxy host(s) — deploy-headroom-proxy.yml targets ─
 # Hosts that run `headroom proxy` straight from the CLI install, supervised
 # as a systemd user unit (Linux only). ninerouter_ai hosts get their proxy

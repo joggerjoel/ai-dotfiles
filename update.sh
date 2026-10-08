@@ -30,6 +30,10 @@ set -euo pipefail
 #      --deploy) — it is agent-agnostic, so Codex gets it too.
 #   8. Re-vendor RayFernando's WAVES skills and deploy them for Claude and
 #      Codex (scripts/vendor-rayfernando-skills.sh --deploy).
+#   8b. Re-pull the self-hosted MCP compose stacks on mcp_services_ai hosts
+#      (aorus4) and restart only the ones with a newer image
+#      (ansible-ai/deploy-mcp-services.yml; skipped with --dry-run, and
+#      left to update.yml under --all).
 #   9. Prune old backups (last 7 days + first-of-month snapshots).
 #  10. With --all: propagate to the fleet servers via
 #      ansible-ai/update.yml --limit aorus_ai (this machine was already
@@ -599,6 +603,24 @@ if [ "$RUN_AGENTS" = "yes" ] && [ -x "$DOTFILES_DIR/scripts/vendor-rayfernando-s
     fi
   else
     warn "WAVES skill re-vendor failed (non-fatal — check network)"
+  fi
+fi
+
+# ── 6d. Self-hosted MCP stacks (mcp_services_ai, e.g. aorus4) ────
+# Re-pulls each ~/services compose stack on the MCP host(s) and restarts its
+# mcp-compose@ unit only when an image changed. An unreachable host is reported
+# and skipped. --all runs the same playbook via update.yml, so skip it here.
+if [ "$DRY_RUN" = "no" ] && [ "$RUN_FLEET" = "no" ]; then
+  header "MCP services (ansible-ai/deploy-mcp-services.yml)"
+  if ! command -v ansible-playbook &>/dev/null; then
+    skip "ansible-playbook not found — not a control node"
+  elif [ ! -f "$DOTFILES_DIR/ansible-ai/inventory.local.yml" ]; then
+    skip "No ansible-ai/inventory.local.yml — not a control node"
+  # cat: ansible aborts on the non-blocking stdout an agent session hands it.
+  elif (cd "$DOTFILES_DIR/ansible-ai" && ansible-playbook deploy-mcp-services.yml 2>&1 | cat); then
+    ok "MCP services checked."
+  else
+    warn "MCP services update finished with failures — check the recap above."
   fi
 fi
 

@@ -133,6 +133,12 @@
 - import_playbook: deploy-headroom-proxy.yml
   tags: [headroom]
 
+# ── 5b. Self-hosted MCP compose stacks (mcp_services_ai hosts) ───────────────
+# Re-pulls each ~/services stack and restarts its mcp-compose@ unit only when
+# an image changed. Skip with:  ansible-playbook update.yml --skip-tags mcp-services
+- import_playbook: deploy-mcp-services.yml
+  tags: [mcp-services]
+
 # ── 6. herdr terminal workspace manager (ai_all) ────────────────────────────
 # Installs herdr where absent, and converges stale installs — but ONLY on hosts
 # whose herdr server is idle, because `herdr update` stops the server and would

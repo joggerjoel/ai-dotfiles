@@ -136,6 +136,10 @@ _firecrawl_key:
 fleet-firecrawl limit="aorus_ai": _control _firecrawl_key
     set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook provision-firecrawl.yml --limit {{quote(limit)}} 2>&1 | cat
 
+# [fleet] boot-enable + update the self-hosted MCP compose stacks (~/services)
+fleet-mcp-services: _control
+    set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook deploy-mcp-services.yml 2>&1 | cat
+
 # [fleet] refresh the agent CLIs (claude/codex/pi/grok/…) everywhere
 fleet-harnesses: _control
     set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook update.yml --tags harnesses 2>&1 | cat
@@ -171,6 +175,10 @@ update:
 # [local] re-run setup on this machine
 setup:
     {{dotfiles}}/setup.sh
+
+# [local] find missing MCP keys / plugin sign-ins; opens the page to get each
+tokens:
+    {{dotfiles}}/setup.sh tokens
 
 # [local] injection-guard: unit tests + backtest against real transcripts
 guard-verify:

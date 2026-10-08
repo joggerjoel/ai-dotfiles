@@ -1,0 +1,124 @@
+---
+# Self-hosted MCP servers run as docker compose stacks, one per directory under
+# ~/services (github-mcp-server, brave-search-mcp, …). Every stack found there
+# is managed — dropping a new compose dir in is enough to enrol it.
+#
+# Two jobs, both idempotent:
+#   1. Survive a reboot. Each stack gets an enabled mcp-compose@<dir> systemd
+#      unit. `restart: unless-stopped` alone is not enough: a container that
+#      was ever `docker stop`ped stays down after the next boot.
+#   2. Stay current. Re-pull each stack's images and restart its unit ONLY
+#      when a running container's image differs from the freshly pulled one,
+#      so a no-update run never drops a live MCP session.
+#
+# Targets group `mcp_services_ai` only (see inventory.example.yml).
+# update.sh runs this on every update; update.yml imports it for --all.
+#   Setup / update:  cd ansible-ai && ansible-playbook deploy-mcp-services.yml
+#   Skip in update:  ansible-playbook update.yml --skip-tags mcp-services
+- name: Deploy/refresh self-hosted MCP compose stacks
+  hosts: mcp_services_ai
+  gather_facts: true
+  ignore_unreachable: true
+  vars:
+    mcp_services_dir: "{{ ansible_facts.env.HOME }}/services"
+  tasks:
+    - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
+      vars: { unreachable_note: "MCP stacks were not checked here" }
+
+    - name: Find compose stacks
+      ansible.builtin.find:
+        paths: "{{ mcp_services_dir }}"
+        patterns:
+          [
+            "docker-compose.yml",
+            "docker-compose.yaml",
+            "compose.yml",
+            "compose.yaml",
+          ]
+        recurse: true
+        depth: 2
+      register: compose_files
+
+    - name: Collect stack names
+      ansible.builtin.set_fact:
+        mcp_stacks: "{{ compose_files.files | map(attribute='path') | map('dirname') | map('basename') | unique | sort }}"
+
+    - name: End host without stacks or systemd
+      ansible.builtin.meta: end_host
+      when: mcp_stacks | length == 0 or ansible_facts.system != 'Linux'
+
+    - name: Ensure docker starts at boot
+      become: true
+      ansible.builtin.systemd_service:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Install the mcp-compose@ template unit
+      become: true
+      ansible.builtin.template:
+        src: templates/mcp-compose@.service.j2
+        dest: /etc/systemd/system/mcp-compose@.service
+        mode: "0644"
+
+    - name: Enable + start each stack's unit
+      become: true
+      ansible.builtin.systemd_service:
+        name: "mcp-compose@{{ item }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+      loop: "{{ mcp_stacks }}"
+
+    # A service is stale when its container is missing or runs an image ID
+    # other than the one its tag now resolves to after the pull.
+    - name: Pull images and detect stale containers
+      ansible.builtin.shell: |
+        set -euo pipefail
+        docker compose pull --quiet
+        stale=no
+        for svc in $(docker compose config --services); do
+          cid=$(docker compose ps -q "$svc")
+          if [ -z "$cid" ]; then stale=yes; continue; fi
+          tag=$(docker inspect -f '{{ '{{' }}.Config.Image{{ '}}' }}' "$cid")
+          running=$(docker inspect -f '{{ '{{' }}.Image{{ '}}' }}' "$cid")
+          latest=$(docker image inspect -f '{{ '{{' }}.Id{{ '}}' }}' "$tag")
+          [ "$running" = "$latest" ] || stale=yes
+        done
+        echo "stale=$stale"
+      args:
+        chdir: "{{ mcp_services_dir }}/{{ item }}"
+        executable: /bin/bash
+      loop: "{{ mcp_stacks }}"
+      register: pulls
+      changed_when: false
+
+    - name: Restart stacks with a newer image
+      become: true
+      ansible.builtin.systemd_service:
+        name: "mcp-compose@{{ item.item }}"
+        state: restarted
+      loop: "{{ pulls.results }}"
+      loop_control: { label: "{{ item.item }}" }
+      when: "'stale=yes' in item.stdout"
+
+    - name: Verify every service in each stack is running
+      ansible.builtin.shell: |
+        set -euo pipefail
+        want=$(docker compose config --services | wc -l)
+        have=$(docker compose ps --status running -q | wc -l)
+        echo "$have/$want running"
+        [ "$have" -eq "$want" ]
+      args:
+        chdir: "{{ mcp_services_dir }}/{{ item }}"
+        executable: /bin/bash
+      loop: "{{ mcp_stacks }}"
+      changed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          {{ mcp_stacks | length }} MCP stack(s) boot-enabled and running:
+          {{ mcp_stacks | join(', ') }}.
+          Restarted for a newer image:
+          {{ pulls.results | selectattr('stdout', 'search', 'stale=yes') | map(attribute='item') | join(', ') or 'none' }}.

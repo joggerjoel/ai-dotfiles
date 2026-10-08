@@ -1,0 +1,20 @@
+# ANSIBLE MANAGED — MCP compose stacks (ansible-ai/deploy-mcp-services.yml).
+# Edit the playbook/template, not this file on the host.
+# One instance per stack: mcp-compose@<dir>.service runs {{ mcp_services_dir }}/<dir>.
+[Unit]
+Description=MCP compose stack %i
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User={{ ansible_user_id }}
+WorkingDirectory={{ mcp_services_dir }}/%i
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
+ExecStop=/usr/bin/docker compose stop
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
