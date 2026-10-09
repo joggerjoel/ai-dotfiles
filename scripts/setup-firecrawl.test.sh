@@ -97,6 +97,7 @@ STUB
 run_setup() {
   PATH="$TMP/bin" HOME="$TMP/home" SUDO="" bash -c "
     set -euo pipefail
+    unset FIRECRAWL_API_KEY  # a key exported in the caller's shell must not leak in
     source '$TMP/defs.sh' >/dev/null 2>&1
     $1
   " 2>&1

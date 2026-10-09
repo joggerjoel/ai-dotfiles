@@ -16,6 +16,7 @@ trap 'rm -rf "$TMP"' EXIT
 REPO=$TMP/repo
 DEEP=$REPO/packages/api/src
 mkdir -p "$DEEP" "$REPO/.git"
+printf 'ref: refs/heads/main\n' > "$REPO/.git/HEAD"
 RESOLVED_REPO=$(cd "$REPO" && pwd -P)
 CALLS=$TMP/calls
 MAILBOX=$TMP/mail
@@ -114,6 +115,14 @@ run SessionStart "$TMP"
 if [ "$RC" = 0 ] && [ -z "$OUT" ] && [ ! -s "$CALLS" ]; then
   ok "a directory outside any repository asks nothing"
 else ko "no repository means no question" "rc=$RC out=$OUT"; fi
+
+reset
+mail "from supervisor: unreachable"
+mkdir -p "$TMP/stray/.git"
+run SessionStart "$TMP/stray"
+if [ "$RC" = 0 ] && [ -z "$OUT" ] && [ ! -s "$CALLS" ]; then
+  ok "an empty stray .git directory is not a repository"
+else ko "an empty stray .git directory is not a repository" "rc=$RC out=$OUT"; fi
 
 echo "── fail open and silent ───────────────────────────────"
 reset

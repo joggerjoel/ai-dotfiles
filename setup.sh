@@ -2,7 +2,10 @@
 
 # Bash reads scripts incrementally. Run from a private snapshot so an editor or
 # repository update cannot change the file underneath an in-progress setup.
-if [ "${AI_DOTFILES_SETUP_SNAPSHOT:-}" != "1" ] && [ "${BASH_SOURCE[0]}" = "$0" ]; then
+# Only when executed: `return` succeeds solely in a sourced file, and an exec
+# there would replace the caller's shell. Comparing BASH_SOURCE to $0 is not
+# enough, because `bash -c 'source "$0"' setup.sh` makes them equal.
+if [ "${AI_DOTFILES_SETUP_SNAPSHOT:-}" != "1" ] && ! (return 0 2>/dev/null); then
   setup_source="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
   setup_snapshot=$(mktemp "${TMPDIR:-/tmp}/ai-dotfiles-setup.XXXXXX")
   cp "$setup_source" "$setup_snapshot"

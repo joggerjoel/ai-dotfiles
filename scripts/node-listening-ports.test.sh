@@ -112,8 +112,8 @@ eq "leaves no temp file behind for node_exporter to read" \
    "0" "$(find "$TMP/out" -name 'listening_ports.prom.*' | wc -l | tr -d ' ')"
 
 eq "the written file is world readable" \
-   "644" "$(stat -f '%OLp' "$TMP/out/listening_ports.prom" 2>/dev/null \
-            || stat -c '%a' "$TMP/out/listening_ports.prom")"
+   "644" "$(stat -c '%a' "$TMP/out/listening_ports.prom" 2>/dev/null \
+            || stat -f '%OLp' "$TMP/out/listening_ports.prom")"
 
 # Re-running must replace, not append.
 before=$(wc -l < "$TMP/out/listening_ports.prom")

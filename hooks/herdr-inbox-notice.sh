@@ -54,8 +54,9 @@ RESOLVED=$(cd "$CWD" 2>/dev/null && pwd -P) || exit 0
 find_repo() { # resolved directory → the nearest ancestor holding .git
   local dir="$1" depth=0
   while [ "$depth" -lt 12 ]; do
-    # A worktree records .git as a file, not a directory.
-    if [ -e "$dir/.git" ]; then
+    # A worktree records .git as a file, not a directory. A bare empty .git
+    # directory (a stray mkdir) is not a repository; git rejects it too.
+    if [ -f "$dir/.git" ] || [ -f "$dir/.git/HEAD" ]; then
       printf '%s\n' "$dir"
       return 0
     fi
