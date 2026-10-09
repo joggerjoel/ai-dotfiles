@@ -26,7 +26,7 @@
 
 **Core**: context7, serena, morphllm-fast-apply
 **Optional**: chrome-devtools, firecrawl, github, openrouter, apify, digitalocean, n8n, crawl4ai, playwright, browser-tools, magic
-**Disabled**: Check `~/.claude.json` for full list. Enable with `./setup.sh add <name>`.
+**Off**: any integration not in `~/.claude.json` (`./setup.sh list` shows all). Enable with `./setup.sh add <name>`.
 
 ## Tool Priority (tl;dr)
 

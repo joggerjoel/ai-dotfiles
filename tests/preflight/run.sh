@@ -400,16 +400,26 @@ PREFLIGHT_ENV_FILE="$TESTS_DIR/fixtures/regression/env" \
 PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/regression/skills" \
   bash "$REPO_DIR/scripts/preflight.sh" --quarantine >/dev/null 2>&1
 
-if jq -e '.mcpServers.magic.disabled == true' "$QDIR/claude.json" >/dev/null 2>&1; then
-  report pass "quarantine disables a failing server"
+# Claude Code has no per-server off switch (a "disabled" field is ignored and
+# the server still starts), so quarantine takes the server out of mcpServers
+# and parks its config, with why and when, in the quarantine file beside it.
+QFILE="$QDIR/claude-mcp-quarantine.json"
+if jq -e '.mcpServers | has("magic") | not' "$QDIR/claude.json" >/dev/null 2>&1; then
+  report pass "quarantine removes a failing server from mcpServers"
 else
-  report fail "quarantine disables a failing server" "$(cat "$QDIR/claude.json")"
+  report fail "quarantine removes a failing server from mcpServers" "$(cat "$QDIR/claude.json")"
 fi
 
-if jq -e '.mcpServers.magic._preflight.reason | length > 0' "$QDIR/claude.json" >/dev/null 2>&1; then
+if jq -e '.servers.magic.server.args == ["-y", "@21st-dev/magic"]' "$QFILE" >/dev/null 2>&1; then
+  report pass "quarantine keeps the removed server's config"
+else
+  report fail "quarantine keeps the removed server's config" "$(cat "$QFILE" 2>&1)"
+fi
+
+if jq -e '.servers.magic.reason | length > 0' "$QFILE" >/dev/null 2>&1; then
   report pass "quarantine records provenance"
 else
-  report fail "quarantine records provenance" "$(cat "$QDIR/claude.json")"
+  report fail "quarantine records provenance" "$(cat "$QFILE" 2>&1)"
 fi
 
 # UNKNOWN must never be quarantined — stripe is plugin-supplied and absent from
@@ -434,13 +444,13 @@ fi
 # either fail+containable or entirely absent from mcpServers. context7 and
 # github are both PASS and present in the regression fixture's claude.json,
 # so they catch exactly this regression.
-if jq -e '.mcpServers.context7 | has("disabled") | not' "$QDIR/claude.json" >/dev/null 2>&1; then
+if [ "$(jq -cS '.mcpServers.context7' "$QDIR/claude.json")" = "$(jq -cS '.mcpServers.context7' "$TESTS_DIR/fixtures/regression/claude.json")" ]; then
   report pass "quarantine leaves a passing server (context7) untouched"
 else
   report fail "quarantine leaves a passing server (context7) untouched" "$(cat "$QDIR/claude.json")"
 fi
 
-if jq -e '.mcpServers.github | has("disabled") | not' "$QDIR/claude.json" >/dev/null 2>&1; then
+if [ "$(jq -cS '.mcpServers.github' "$QDIR/claude.json")" = "$(jq -cS '.mcpServers.github' "$TESTS_DIR/fixtures/regression/claude.json")" ]; then
   report pass "quarantine leaves a passing server (github) untouched"
 else
   report fail "quarantine leaves a passing server (github) untouched" "$(cat "$QDIR/claude.json")"
@@ -448,7 +458,7 @@ fi
 
 # Idempotent re-run: quarantining an already-quarantined server must preserve
 # the original quarantinedAt timestamp, not stamp a new one each time.
-first_ts=$(jq -r '.mcpServers.magic._preflight.quarantinedAt' "$QDIR/claude.json")
+first_ts=$(jq -r '.servers.magic.quarantinedAt' "$QFILE")
 sleep 1
 PATH="$TESTS_DIR/stubs:$PATH" \
 PREFLIGHT_FIXTURE="$TESTS_DIR/fixtures/regression" \
@@ -457,7 +467,7 @@ PREFLIGHT_SETTINGS_JSON="$TESTS_DIR/fixtures/regression/settings.json" \
 PREFLIGHT_ENV_FILE="$TESTS_DIR/fixtures/regression/env" \
 PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/regression/skills" \
   bash "$REPO_DIR/scripts/preflight.sh" --quarantine >/dev/null 2>&1
-second_ts=$(jq -r '.mcpServers.magic._preflight.quarantinedAt' "$QDIR/claude.json")
+second_ts=$(jq -r '.servers.magic.quarantinedAt' "$QFILE")
 if [ "$first_ts" = "$second_ts" ]; then
   report pass "quarantine is idempotent: quarantinedAt unchanged on re-run"
 else
@@ -481,7 +491,7 @@ PREFLIGHT_ENV_FILE="$TESTS_DIR/fixtures/ghost/env" \
 PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/ghost/skills" \
   bash "$REPO_DIR/scripts/preflight.sh" --quarantine >/dev/null 2>&1
 
-if jq -e '.mcpServers["ghost-server"] | has("disabled") | not' "$GDIR/claude.json" >/dev/null 2>&1; then
+if [ "$(jq -cS '.mcpServers["ghost-server"]' "$GDIR/claude.json")" = "$(jq -cS '.mcpServers["ghost-server"]' "$TESTS_DIR/fixtures/ghost/claude.json")" ]; then
   report pass "quarantine leaves an unknown-verdict server (ghost-server) untouched"
 else
   report fail "quarantine leaves an unknown-verdict server (ghost-server) untouched" "$(cat "$GDIR/claude.json")"
@@ -492,9 +502,9 @@ fi
 # this on purpose" from "this vanished for some other reason" — a server
 # quarantined last run came back next run reporting the same generic
 # "configured but absent" line the marker exists to prevent. fixtures/
-# quarantined/claude.json has magic pre-quarantined (disabled, with a stored
-# _preflight.quarantinedAt/reason) and absent from mcp-list.txt, simulating a
-# real `claude mcp list` that doesn't list a disabled server.
+# fixtures/quarantined has magic pre-quarantined: out of claude.json, parked in
+# claude-mcp-quarantine.json with its quarantinedAt/reason, and absent from
+# mcp-list.txt, as a real `claude mcp list` would be for a removed server.
 out=$(run_preflight quarantined 2>&1); rc=$?
 
 if grep -q 'quarantined by preflight' <<<"$out"; then
@@ -535,7 +545,7 @@ else
 fi
 
 # --- quarantine: a failing mv must not be reported as a success (item 1) ----
-# Reproduced live: with mv failing, preflight printed false "disabled: true"
+# Reproduced live: with mv failing, preflight printed a false success line
 # success lines and a false "N contained" count, while claude.json stayed
 # unmodified and temp files were left beside it. Shadow only `mv` with a stub
 # that always fails; jq/cp/claude are untouched so the rest of quarantine
@@ -560,13 +570,19 @@ else
   report fail "a failing mv leaves claude.json byte-for-byte unmodified" "$out"
 fi
 
-if ! grep -q 'disabled: true' <<<"$out"; then
-  report pass "a failing mv prints no false 'disabled: true' success line"
+if ! grep -q 'moved to' <<<"$out"; then
+  report pass "a failing mv prints no false 'moved to' success line"
 else
-  report fail "a failing mv prints no false 'disabled: true' success line" "$out"
+  report fail "a failing mv prints no false 'moved to' success line" "$out"
 fi
 
-mv_fail_count=$(grep -c 'mv failed while quarantining' <<<"$out")
+if [ ! -e "$MVDIR/claude-mcp-quarantine.json" ]; then
+  report pass "a failing mv leaves no quarantine record for a server still configured"
+else
+  report fail "a failing mv leaves no quarantine record for a server still configured" "$(cat "$MVDIR/claude-mcp-quarantine.json")"
+fi
+
+mv_fail_count=$(grep -c 'could not record .* leaving it untouched' <<<"$out")
 if [ "$mv_fail_count" -eq 3 ]; then
   report pass "a failing mv is reported once per containable server (3)"
 else
@@ -631,7 +647,8 @@ PREFLIGHT_SKILLS_DIR="$TESTS_DIR/fixtures/regression/skills" \
     apply_quarantine
   ' preflight-sourced-not-executed "$REPO_DIR/scripts/preflight.sh" >/dev/null 2>&1
 
-if jq -e '.mcpServers.magic | has("disabled") | not' "$M4DIR/claude.json" >/dev/null 2>&1; then
+if jq -e '.mcpServers | has("magic")' "$M4DIR/claude.json" >/dev/null 2>&1 \
+   && [ ! -e "$M4DIR/claude-mcp-quarantine.json" ]; then
   report pass "M4: containable=no guard leaves an mcp/fail finding untouched"
 else
   report fail "M4: containable=no guard leaves an mcp/fail finding untouched" "$(cat "$M4DIR/claude.json")"

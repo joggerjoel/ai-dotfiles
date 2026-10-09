@@ -11,10 +11,9 @@
 #
 # sync_mcp_keys makes ~/.claude.json derived: the env file wins. What must hold:
 #   1. A stale baked value is replaced by the env-file value.
-#   2. `disabled` is cleared for integrations the registry enables by default
-#      (firecrawl), and LEFT ALONE for opt-in ones (github, openrouter, apify,
-#      digitalocean). Handing someone a key must not switch on a server they
-#      deliberately never turned on.
+#   2. Every configured server gets its key, opt-in ones (github) included.
+#      Being in mcpServers is what "on" means; off servers are simply absent
+#      (see setup-mcp-off.test.sh), so a key can never switch one on.
 #   3. It is idempotent — a converged config produces no write and no output,
 #      so it is safe on the `setup.sh update` path every fleet host runs.
 #   4. Servers absent from ~/.claude.json are skipped, not created. Syncing a
@@ -71,21 +70,18 @@ make_home() {
 baked_key() {
   jq -r --arg k "$2" --arg v "$3" '.mcpServers[$k].env[$v] // "ABSENT"' "$1/claude.json"
 }
-disabled_flag() {
-  jq -r --arg k "$2" '.mcpServers[$k].disabled // "ABSENT"' "$1/claude.json"
-}
 
 ENVFILE='FIRECRAWL_API_KEY=fc-realkey
 GITHUB_PERSONAL_ACCESS_TOKEN=ghp_realtoken
 N8N_JWT=jwt-realtoken'
 
-# ── 1 + 2: stale key replaced; disabled cleared only where the registry says ──
+# ── 1 + 2: stale keys replaced on every configured server ──
 H="$TMP/h1"
 make_home "$H" '{"mcpServers":{
   "firecrawl-mcp":{"type":"stdio","command":"npx","args":["-y","firecrawl-mcp"],
-                   "env":{"FIRECRAWL_API_KEY":"PLACEHOLDER"},"disabled":true},
+                   "env":{"FIRECRAWL_API_KEY":"PLACEHOLDER"}},
   "github":{"command":"npx","args":["-y","@modelcontextprotocol/server-github"],
-            "env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"PLACEHOLDER"},"disabled":true},
+            "env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"PLACEHOLDER"}},
   "context7":{"type":"stdio","command":"npx","args":["-y","@upstash/context7-mcp"],"env":{}}
 }}' "$ENVFILE"
 
@@ -96,20 +92,10 @@ got=$(baked_key "$H" firecrawl-mcp FIRECRAWL_API_KEY)
   && ok "PLACEHOLDER replaced by the ~/.claude/.env key" \
   || ko "PLACEHOLDER replaced by the ~/.claude/.env key" "got '$got'"
 
-got=$(disabled_flag "$H" firecrawl-mcp)
-[ "$got" = "ABSENT" ] \
-  && ok "firecrawl re-enabled (registry does not disable it by default)" \
-  || ko "firecrawl re-enabled (registry does not disable it by default)" "disabled=$got"
-
 got=$(baked_key "$H" github GITHUB_PERSONAL_ACCESS_TOKEN)
 [ "$got" = "ghp_realtoken" ] \
   && ok "opt-in integration still gets its key synced" \
   || ko "opt-in integration still gets its key synced" "got '$got'"
-
-got=$(disabled_flag "$H" github)
-[ "$got" = "true" ] \
-  && ok "github stays disabled (opt-in regardless of key)" \
-  || ko "github stays disabled (opt-in regardless of key)" "disabled=$got"
 
 grep -q 'firecrawl' <<<"$out" \
   && ok "a repaired integration is reported on stdout" \

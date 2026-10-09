@@ -1002,14 +1002,13 @@ ensure_claude_json() {
   fi
 }
 
+# A server is on when it is in mcpServers and off when it is not: Claude Code
+# has no per-server off switch (a "disabled" field is ignored and the server
+# starts anyway), so there is no third state to write.
 set_mcp_server() {
-  local name="$1" json="$2" disabled="${3:-false}"
+  local name="$1" json="$2"
   local mcp_key
   mcp_key=$(mcp_key_for "$name")
-
-  if [ "$disabled" = "true" ]; then
-    json=$(echo "$json" | jq '. + {"disabled": true}')
-  fi
 
   local tmp
   tmp=$(jq --arg key "$mcp_key" --argjson val "$json" '.mcpServers[$key] = $val' "$CLAUDE_JSON")
@@ -1024,6 +1023,62 @@ remove_mcp_server() {
   local tmp
   tmp=$(jq --arg k "$mcp_key" 'del(.mcpServers[$k])' "$CLAUDE_JSON")
   echo "$tmp" > "$CLAUDE_JSON"
+}
+
+# One-time migration from the old "disabled": true convention. Each such entry
+# was meant to be off but was running; it leaves mcpServers now. One preflight
+# quarantined (it carries _preflight) is parked in the quarantine file with its
+# date and reason instead of being dropped. Silent and write-free once
+# converged, so it is safe on every `setup.sh update`.
+drop_disabled_mcp_servers() {
+  [ -f "$CLAUDE_JSON" ] || return 0
+  local names name qfile tmp
+  names=$(jq -r '.mcpServers // {} | to_entries[] | select(.value.disabled == true) | .key' \
+    "$CLAUDE_JSON" 2>/dev/null)
+  [ -n "$names" ] || return 0
+  qfile=$(mcp_quarantine_path "$CLAUDE_JSON")
+
+  if jq -e '[.mcpServers[] | select(.disabled == true and has("_preflight"))] | length > 0' \
+       "$CLAUDE_JSON" >/dev/null 2>&1; then
+    if ! tmp=$(jq -n --slurpfile cfg "$CLAUDE_JSON" \
+          --slurpfile q <(cat "$qfile" 2>/dev/null || echo '{}') '
+        ($q[0] // {}) as $q
+        | reduce ($cfg[0].mcpServers | to_entries[]
+                  | select(.value.disabled == true and (.value | has("_preflight")))) as $e
+            ($q; .servers[$e.key] = {
+              quarantinedAt: ($q.servers[$e.key].quarantinedAt // $e.value._preflight.quarantinedAt),
+              reason: $e.value._preflight.reason,
+              server: ($e.value | del(.disabled, ._preflight))
+            })'); then
+      warn "Could not move quarantined MCP servers to $qfile — left ~/.claude.json as is"
+      return 0
+    fi
+    echo "$tmp" > "$qfile"
+  fi
+
+  if ! tmp=$(jq '.mcpServers |= with_entries(select(.value.disabled != true))' "$CLAUDE_JSON"); then
+    warn "Could not remove disabled MCP servers from ~/.claude.json"
+    return 0
+  fi
+  echo "$tmp" > "$CLAUDE_JSON"
+  local integration hint
+  while IFS= read -r name; do
+    if integration=$(integration_name_for_key "$name"); then
+      hint="./setup.sh add ${integration}"
+    else
+      hint="claude mcp add"
+    fi
+    ok "${name}: removed (it was marked disabled, which Claude Code ignores) — bring it back with ${hint}"
+  done <<< "$names"
+}
+
+# Re-adding a server ends its quarantine; preflight would otherwise keep
+# reporting it as parked.
+forget_quarantine() {
+  local key="$1" qfile tmp
+  qfile=$(mcp_quarantine_path "$CLAUDE_JSON")
+  jq -e --arg k "$key" '.servers // {} | has($k)' "$qfile" >/dev/null 2>&1 || return 0
+  tmp=$(jq --arg k "$key" 'del(.servers[$k])' "$qfile") && echo "$tmp" > "$qfile"
 }
 
 # Value of a variable in ~/.claude/.env; empty when the file or the key is
@@ -1043,8 +1098,8 @@ env_file_key() {
 #
 # Keys used to be snapshotted into ~/.claude.json at the instant they were
 # typed, and nothing ever refreshed them. Answering the setup prompt with a
-# blank line baked the literal string PLACEHOLDER (see the needs_key branch in
-# cmd_setup); adding the real key to ~/.claude/.env afterwards left the MCP
+# blank line baked the literal string PLACEHOLDER into cmd_setup's output;
+# adding the real key to ~/.claude/.env afterwards left the MCP
 # server still launching with PLACEHOLDER, so every call returned 401 while the
 # env file looked perfectly correct. Two stores for one secret, one of them
 # never maintained.
@@ -1052,19 +1107,15 @@ env_file_key() {
 # This makes ~/.claude.json a derived artifact: the env file wins, always.
 # Idempotent by construction, since it writes only when the baked value
 # differs — a converged host prints nothing and running it twice is one write.
-#
-# `disabled` is cleared only for integrations the registry does not disable by
-# default. github/openrouter/apify/digitalocean are opt-in whether or not a key
-# exists, and supplying one must not silently switch them on.
+# It never adds a server: only ones already in mcpServers (on) get a key.
 sync_mcp_keys() {
   [ -f "$CLAUDE_JSON" ] || return 0
-  local entry name needs_key key_var disabled_default mcp_key val baked enable tmp
+  local entry name needs_key key_var mcp_key val baked tmp
 
   for entry in "${INTEGRATIONS[@]}"; do
     name=$(get_field "$entry" 1)
     needs_key=$(get_field "$entry" 3)
     key_var=$(get_field "$entry" 4)
-    disabled_default=$(get_field "$entry" 5)
     [ "$needs_key" = "yes" ] || continue
     [ -n "$key_var" ] || continue
 
@@ -1084,13 +1135,8 @@ sync_mcp_keys() {
       '.mcpServers[$k].env[$v] // empty' "$CLAUDE_JSON" 2>/dev/null)
     [ "$baked" = "$val" ] && continue
 
-    if [ "$disabled_default" = "yes" ]; then enable=false; else enable=true; fi
-
     if ! tmp=$(jq --arg k "$mcp_key" --arg v "$key_var" --arg val "$val" \
-                  --argjson enable "$enable" \
-          '.mcpServers[$k].env[$v] = $val
-           | if $enable then .mcpServers[$k] |= del(.disabled) else . end' \
-          "$CLAUDE_JSON"); then
+          '.mcpServers[$k].env[$v] = $val' "$CLAUDE_JSON"); then
       warn "Could not re-sync ${key_var} into ~/.claude.json"
       continue
     fi
@@ -1974,15 +2020,14 @@ cmd_setup() {
     # no longer a menu-position indirection to resolve here.
     for real_idx in "${selected[@]}"; do
       local entry="${INTEGRATIONS[$real_idx]}"
-      local name desc needs_key key_var disabled_default extra_vars
+      local name desc needs_key key_var extra_vars
       name=$(get_field "$entry" 1)
       desc=$(get_field "$entry" 2)
       needs_key=$(get_field "$entry" 3)
       key_var=$(get_field "$entry" 4)
-      disabled_default=$(get_field "$entry" 5)
       extra_vars=$(get_field "$entry" 6)
 
-      local key_val="" extra_val="" should_disable="false"
+      local key_val="" extra_val=""
 
       if [ "$selection_saved" = "true" ]; then
         local saved_mcp_key
@@ -2002,13 +2047,10 @@ cmd_setup() {
           read -r key_val || key_val=""
         fi
 
+        # Without its key the server cannot start, and an entry in
+        # ~/.claude.json always starts, so it is not added at all.
         if [ -z "$key_val" ]; then
-          # No key provided - install disabled
-          should_disable="true"
-          local json
-          json=$(mcp_json_for "$name" "PLACEHOLDER" "")
-          set_mcp_server "$name" "$json" "true"
-          skip "${name} added (disabled - no key yet)"
+          skip "${name} not added (no ${key_var} yet) — ./setup.sh add ${name} once you have it"
           continue
         fi
 
@@ -2021,36 +2063,28 @@ cmd_setup() {
           fi
 
           if [ -z "$extra_val" ]; then
-            # No URL provided - install disabled rather than enabled against
-            # the unreachable placeholder host
-            should_disable="true"
+            skip "${name} not added (no ${extra_vars} yet) — ./setup.sh add ${name} once you have it"
+            continue
           fi
         fi
       fi
 
       local json
       json=$(mcp_json_for "$name" "$key_val" "$extra_val")
-
-      if [ "$disabled_default" = "yes" ] && [ "$needs_key" != "yes" ]; then
-        should_disable="true"
-      fi
-
-      set_mcp_server "$name" "$json" "$should_disable"
-
-      if [ "$should_disable" = "true" ]; then
-        ok "${name} added (disabled by default - enable in ~/.claude.json)"
-      else
-        ok "${name} enabled"
-        enabled_count=$((enabled_count+1))
-      fi
+      set_mcp_server "$name" "$json"
+      forget_quarantine "$(mcp_key_for "$name")"
+      ok "${name} enabled"
+      enabled_count=$((enabled_count+1))
     done
 
     echo ""
-    ok "${enabled_count} integration(s) active. Others added as disabled."
+    ok "${enabled_count} integration(s) active."
   fi
 
-  # Existing selected servers may still contain PLACEHOLDER from an earlier
-  # run. Keep ~/.claude/.env as the source of truth without exposing keys.
+  # Entries an older setup marked "disabled" were running all along; take
+  # them out. Existing selected servers may still contain PLACEHOLDER from an
+  # earlier run. Keep ~/.claude/.env as the source of truth without exposing keys.
+  drop_disabled_mcp_servers
   sync_mcp_keys
 
   # ── Supabase: Cloud vs internal ──
@@ -2161,7 +2195,8 @@ cmd_add() {
 
   local json
   json=$(mcp_json_for "$name" "$key_val" "$extra_val")
-  set_mcp_server "$name" "$json" "false"
+  set_mcp_server "$name" "$json"
+  forget_quarantine "$(mcp_key_for "$name")"
   ok "${name} enabled!"
 }
 
@@ -2191,19 +2226,11 @@ cmd_list() {
     local mcp_key status_icon
     mcp_key=$(mcp_key_for "$name")
 
-    if [ -f "$CLAUDE_JSON" ]; then
-      local exists disabled
-      exists=$(jq -r --arg k "$mcp_key" '.mcpServers[$k] // empty' "$CLAUDE_JSON")
-      if [ -n "$exists" ]; then
-        disabled=$(jq -r --arg k "$mcp_key" '.mcpServers[$k].disabled // false' "$CLAUDE_JSON")
-        if [ "$disabled" = "true" ]; then
-          status_icon="${YELLOW}○${RESET} disabled"
-        else
-          status_icon="${GREEN}●${RESET} active  "
-        fi
-      else
-        status_icon="${DIM}·${RESET} not added"
-      fi
+    if jq -e --arg k "$mcp_key" '.mcpServers // {} | has($k)' "$CLAUDE_JSON" >/dev/null 2>&1; then
+      status_icon="${GREEN}●${RESET} active  "
+    elif jq -e --arg k "$mcp_key" '.servers // {} | has($k)' \
+           "$(mcp_quarantine_path "$CLAUDE_JSON")" >/dev/null 2>&1; then
+      status_icon="${YELLOW}○${RESET} quarantined"
     else
       status_icon="${DIM}·${RESET} not added"
     fi
@@ -2389,6 +2416,10 @@ cmd_update() {
     configure_supabase "$(cat "$DOTFILES_DIR/.local/.supabase-mode")"
   fi
 
+  # Entries an older setup marked "disabled" were running all along; take them
+  # out before the key sync, which only serves servers that are on.
+  drop_disabled_mcp_servers
+
   # Pull every MCP secret back from ~/.claude/.env, the one place they are
   # maintained. Runs last so it also repairs blocks the steps above rewrote.
   sync_mcp_keys
@@ -2445,8 +2476,8 @@ open_url() {
 
 # Find every configured MCP server that needs a key it doesn't have, open the
 # page that issues one, and save what is pasted. ~/.claude/.env stays the one
-# store; sync_mcp_keys then derives ~/.claude.json from it. Disabled servers
-# are skipped — a key must not be demanded for something switched off.
+# store; sync_mcp_keys then derives ~/.claude.json from it. A server not in
+# ~/.claude.json is off, and no key is demanded for it.
 #
 # Plugin and hosted-HTTP servers authenticate by OAuth inside Claude Code, and
 # no script can drive that flow, so they are only listed with the /mcp step.
@@ -2463,10 +2494,6 @@ cmd_tokens() {
     mcp_key=$(mcp_key_for "$name")
 
     jq -e --arg k "$mcp_key" '(.mcpServers // {}) | has($k)' "$CLAUDE_JSON" >/dev/null 2>&1 || continue
-    if jq -e --arg k "$mcp_key" '.mcpServers[$k].disabled == true' "$CLAUDE_JSON" >/dev/null 2>&1; then
-      skip "${name}: disabled — not asking for ${key_var}"
-      continue
-    fi
 
     val=$(env_file_key "$key_var")
     baked=$(jq -r --arg k "$mcp_key" --arg v "$key_var" '.mcpServers[$k].env[$v] // empty' "$CLAUDE_JSON")

@@ -61,7 +61,7 @@ curl -s -X POST "https://<your-crawl4ai-host>/crawl" \
 
 ### apify — pre-built Actors (MCP off by default; enable on-demand)
 
-The `apify` MCP is intentionally kept `disabled` in `~/.claude.json` to save context.
+The `apify` MCP is intentionally left out of `~/.claude.json` to save context.
 **Leave it off by default.** When a task needs apify:
 
 - **One-off → REST via curl** (works immediately, no enable):
@@ -72,8 +72,9 @@ The `apify` MCP is intentionally kept `disabled` in `~/.claude.json` to save con
   curl -s -X POST "https://api.apify.com/v2/acts/<actor-id>/run-sync-get-dataset-items?token=$APIFY_TOKEN" \
     -H "Content-Type: application/json" -d '{ ...actor input... }'
   ```
-- **Substantial/iterative work → enable the MCP**: set `mcpServers.apify.disabled=false` in
-  `~/.claude.json` (needs a CC restart to load), use it, then set it back to `true` when done.
+- **Substantial/iterative work → enable the MCP**: `./setup.sh add apify` (needs a CC restart
+  to load), use it, then `claude mcp remove apify` when done. A `"disabled": true` field does
+  nothing — Claude Code starts every server in `mcpServers`.
 
 ### parse.bot — build a reusable API (via MCP `parse`)
 

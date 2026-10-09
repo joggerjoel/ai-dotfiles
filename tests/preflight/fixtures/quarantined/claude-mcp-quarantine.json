@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "magic": {
+      "quarantinedAt": "2026-07-20T10:00:00Z",
+      "reason": "-32001: Not authenticated - your API key is missing or was reset.",
+      "server": { "type": "stdio", "command": "npx", "args": ["-y", "@21st-dev/magic"] }
+    }
+  }
+}

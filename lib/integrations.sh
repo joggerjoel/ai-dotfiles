@@ -3,6 +3,9 @@
 # Sourced, never executed. Defines data and one pure function; no side effects.
 
 # Format: name|description|needs_key|key_var|disabled_by_default|extra_vars|desktop_only|key_url
+# disabled_by_default is retired: Claude Code has no per-server off switch, so a
+# server is either in ~/.claude.json (on) or not (off). The column stays so the
+# fields after it keep their positions.
 # key_url: where to issue the key; `setup.sh tokens` opens it when the key is missing.
 INTEGRATIONS=(
   "context7|Documentation lookup|no||||no"
@@ -96,6 +99,13 @@ integration_index_for() {
 }
 
 # Map an integration name to its key in ~/.claude.json.
+# Where preflight parks a quarantined server's config, beside the claude.json it
+# came out of. Derived from that path rather than $HOME so a test pointed at a
+# temp claude.json can never touch the real one.
+mcp_quarantine_path() {
+  printf '%s\n' "${1%.json}-mcp-quarantine.json"
+}
+
 mcp_key_for() {
   case "$1" in
     browser-tools) echo "browser-tools-mcp" ;;
@@ -105,4 +115,15 @@ mcp_key_for() {
     n8n)           echo "n8n-mcp" ;;
     *)             echo "$1" ;;
   esac
+}
+
+# Inverse of mcp_key_for: the registry name for an mcpServers key, or nothing
+# when the server is not one this toolkit manages.
+integration_name_for_key() {
+  local entry name
+  for entry in "${INTEGRATIONS[@]}"; do
+    name="${entry%%|*}"
+    [ "$(mcp_key_for "$name")" = "$1" ] && { printf '%s\n' "$name"; return 0; }
+  done
+  return 1
 }

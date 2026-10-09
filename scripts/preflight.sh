@@ -18,6 +18,7 @@ source "$DOTFILES_DIR/lib/integrations.sh"
 
 # Every path is overridable so tests never read the real $HOME.
 CLAUDE_JSON="${PREFLIGHT_CLAUDE_JSON:-$HOME/.claude.json}"
+QUARANTINE_JSON="$(mcp_quarantine_path "$CLAUDE_JSON")"
 SETTINGS_JSON="${PREFLIGHT_SETTINGS_JSON:-$HOME/.claude/settings.json}"
 ENV_FILE="${PREFLIGHT_ENV_FILE:-$HOME/.claude/.env}"
 SKILLS_DIR="${PREFLIGHT_SKILLS_DIR:-$DOTFILES_DIR/skills}"
@@ -218,19 +219,25 @@ probe_mcp() {
     case "$seen_names" in
       *"|$cfg_key|"*) continue ;;
     esac
-    # This is preflight's own quarantine marker (see apply_quarantine):
-    # distinguish "I disabled this on purpose" from a genuine unexplained
-    # absence, so a server we quarantined ourselves doesn't come back next
-    # run looking like a fresh, unexplained gap. Verdict stays `unknown` —
-    # a quarantined server must never become containable again.
-    quarantined_at=$(jq -r --arg k "$cfg_key" '.mcpServers[$k]._preflight.quarantinedAt // empty' "$CLAUDE_JSON" 2>/dev/null)
-    if [ -n "$quarantined_at" ]; then
-      reason=$(jq -r --arg k "$cfg_key" '.mcpServers[$k]._preflight.reason // "no reason recorded"' "$CLAUDE_JSON" 2>/dev/null)
-      add_finding mcp "$cfg_key" unknown "quarantined by preflight on $quarantined_at: $reason" no
-    else
-      add_finding mcp "$cfg_key" unknown "configured but absent from claude mcp list output" no
-    fi
+    add_finding mcp "$cfg_key" unknown "configured but absent from claude mcp list output" no
   done < <(jq -r '.mcpServers // {} | keys[]' "$CLAUDE_JSON" 2>/dev/null)
+
+  # Servers preflight quarantined itself (see apply_quarantine) are out of
+  # mcpServers and parked in $QUARANTINE_JSON. Report them from there, so one
+  # quarantined last run reads as a known, dated decision rather than
+  # vanishing. Verdict stays `unknown`: a quarantined server must never become
+  # containable again. One re-added by `setup.sh add` is configured again and
+  # is reported by the probes above instead.
+  while IFS=$'\t' read -r cfg_key quarantined_at reason; do
+    [ -n "$cfg_key" ] || continue
+    jq -e --arg k "$cfg_key" '.mcpServers // {} | has($k)' "$CLAUDE_JSON" >/dev/null 2>&1 && continue
+    case "$seen_names" in
+      *"|$cfg_key|"*) continue ;;
+    esac
+    add_finding mcp "$cfg_key" unknown "quarantined by preflight on $quarantined_at: ${reason:-no reason recorded}" no
+  done < <(jq -r '.servers // {} | to_entries[]
+                  | [.key, (.value.quarantinedAt // "an unknown date"), (.value.reason // "")] | @tsv' \
+             "$QUARANTINE_JSON" 2>/dev/null)
 }
 
 # Mandated CLIs. Missing ones cannot be contained — there is nothing to disable.
@@ -281,10 +288,6 @@ probe_env() {
 
     key="$(mcp_key_for "$name")"
     integration_configured "$key" || continue
-    # A disabled server (opt-in, or quarantined by this script) is not asked
-    # for its key, matching `setup.sh tokens`.
-    jq -e --arg k "$key" '.mcpServers[$k].disabled == true' "$CLAUDE_JSON" \
-      >/dev/null 2>&1 && continue
 
     missing=""
     if [ -n "$key_var" ] && ! env_var_set "$key_var"; then
@@ -665,35 +668,42 @@ apply_quarantine() {
       backup_done=1
     fi
 
-    local tmp
-    # Same directory as $CLAUDE_JSON (not $TMPDIR) so the final `mv` is a true
-    # atomic rename on one filesystem, and the temp file inherits its perms.
-    tmp="$(mktemp "${CLAUDE_JSON}.XXXXXX")"
+    # Claude Code has no per-server off switch, so containing a server means
+    # taking it out of mcpServers. Its config is parked in $QUARANTINE_JSON
+    # first, so the removal below never loses it: if that write fails, nothing
+    # has changed; if the removal fails, the record is inert because the
+    # server is still configured. Temp files sit beside their targets (not in
+    # $TMPDIR) so each `mv` is an atomic rename on one filesystem.
+    local qtmp tmp
+    qtmp="$(mktemp "${QUARANTINE_JSON}.XXXXXX")"
     # Preserve an existing quarantinedAt so re-running is idempotent.
-    if ! jq --arg k "$n" --arg r "$d" --arg t "$ts" '
-      .mcpServers[$k].disabled = true
-      | .mcpServers[$k]._preflight.quarantinedAt =
-          (.mcpServers[$k]._preflight.quarantinedAt // $t)
-      | .mcpServers[$k]._preflight.reason = $r
-    ' "$CLAUDE_JSON" > "$tmp"; then
-      echo "preflight: jq failed while quarantining $n — leaving it untouched" >&2
+    if ! jq -n --arg k "$n" --arg r "$d" --arg t "$ts" \
+          --slurpfile cfg "$CLAUDE_JSON" \
+          --slurpfile q <(cat "$QUARANTINE_JSON" 2>/dev/null || echo '{}') '
+      ($q[0] // {}) as $q
+      | $q
+      | .servers[$k] = {
+          quarantinedAt: ($q.servers[$k].quarantinedAt // $t),
+          reason: $r,
+          server: $cfg[0].mcpServers[$k]
+        }
+    ' > "$qtmp" || ! mv "$qtmp" "$QUARANTINE_JSON"; then
+      echo "preflight: could not record $n in $QUARANTINE_JSON — leaving it untouched" >&2
+      rm -f "$qtmp"
+      failed=$((failed + 1))
+      continue
+    fi
+
+    tmp="$(mktemp "${CLAUDE_JSON}.XXXXXX")"
+    if ! jq --arg k "$n" 'del(.mcpServers[$k])' "$CLAUDE_JSON" > "$tmp" \
+        || ! mv "$tmp" "$CLAUDE_JSON"; then
+      echo "preflight: could not remove $n from $CLAUDE_JSON — leaving it untouched" >&2
       rm -f "$tmp"
       failed=$((failed + 1))
       continue
     fi
 
-    # mv must be checked like the jq call above it: on failure, $CLAUDE_JSON
-    # is untouched (mv never started writing it — rename is atomic), so
-    # report the same "left it untouched" outcome rather than the success
-    # line, and don't count it as applied.
-    if ! mv "$tmp" "$CLAUDE_JSON"; then
-      echo "preflight: mv failed while quarantining $n — leaving it untouched" >&2
-      rm -f "$tmp"
-      failed=$((failed + 1))
-      continue
-    fi
-
-    printf '  → %-18s disabled: true\n' "$n" >&2
+    printf '  → %-18s moved to %s\n' "$n" "$QUARANTINE_JSON" >&2
     applied=$((applied + 1))
   done
 
