@@ -847,6 +847,15 @@ ensure_repo_tools() {
   done
 }
 
+# The desktop profile's hooks run agenttrail straight from its source checkout
+# (it publishes no package), so the checkout must exist before those hooks fire.
+# The hook entry point uses only node built-ins: a clone is the whole install.
+# The Kitchen build and claude-tap are optional extras — scripts/observability-tools.sh.
+ensure_agenttrail() {
+  git_clone_or_pull "${AI_3RDPARTY_ROOT:-$HOME/Developer/3rdparty}/agenttrail" \
+    https://github.com/sodiumsun/agenttrail.git agenttrail
+}
+
 # The tmuxp session configs in tmux/ are inert without their runtime: tmuxp
 # reads the YAML, tmux hosts the panes, and the panes run the monitors. Same
 # package name on brew and apt for tmux/htop/glances, so pkg_install covers
@@ -1810,6 +1819,7 @@ cmd_setup() {
   assemble_claude_md "$profile" "$github_user" "$hide_ai"
 
   # Install profile-specific settings.json (symlink, or stripped copy for Remote Control)
+  [ "$profile" = "desktop" ] && ensure_agenttrail
   install_settings "$profile" "$remote_control"
 
   # Every repo-owned link, from one definition (lib/links.sh).
@@ -2357,6 +2367,7 @@ cmd_update() {
   assemble_claude_md "$profile" "$github_user" "$hide_ai"
 
   # Re-install settings (honors saved Remote Control choice) and re-link everything
+  [ "$profile" = "desktop" ] && ensure_agenttrail
   install_settings "$profile" "$remote_control"
 
   # Every repo-owned link, from one definition (lib/links.sh).

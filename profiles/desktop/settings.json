@@ -396,7 +396,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node $HOME/Developer/3rdparty/agenttrail/bin/agenttrail.mjs hook"
+            "command": "f=$HOME/Developer/3rdparty/agenttrail/bin/agenttrail.mjs; [ ! -f \"$f\" ] || node \"$f\" hook"
           }
         ]
       },
@@ -435,7 +435,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node $HOME/Developer/3rdparty/agenttrail/bin/agenttrail.mjs hook"
+            "command": "f=$HOME/Developer/3rdparty/agenttrail/bin/agenttrail.mjs; [ ! -f \"$f\" ] || node \"$f\" hook"
           }
         ]
       },
@@ -475,7 +475,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node $HOME/Developer/3rdparty/agenttrail/bin/agenttrail.mjs hook"
+            "command": "f=$HOME/Developer/3rdparty/agenttrail/bin/agenttrail.mjs; [ ! -f \"$f\" ] || node \"$f\" hook"
           }
         ]
       },
@@ -537,7 +537,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node $HOME/Developer/3rdparty/agenttrail/bin/agenttrail.mjs hook"
+            "command": "f=$HOME/Developer/3rdparty/agenttrail/bin/agenttrail.mjs; [ ! -f \"$f\" ] || node \"$f\" hook"
           }
         ]
       },
@@ -638,7 +638,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node $HOME/Developer/3rdparty/agenttrail/bin/agenttrail.mjs hook"
+            "command": "f=$HOME/Developer/3rdparty/agenttrail/bin/agenttrail.mjs; [ ! -f \"$f\" ] || node \"$f\" hook"
           }
         ]
       },
