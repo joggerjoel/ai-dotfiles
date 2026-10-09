@@ -208,6 +208,30 @@ refresh_marketplaces() {
   fi
 }
 
+update_installed_plugins() {
+  # A catalog refresh alone does not move an installed plugin: claude-mem sat
+  # at 13.11.0 with 13.35.0 already in the cache, and its stale SessionStart
+  # hook printed invalid JSON on every start. Ask the CLI to update each one.
+  header "Updating installed plugins"
+  local spec name updated=0 current=0
+  local specs
+  specs=$(installed_plugins)
+  [ -n "$specs" ] || { skip "No installed plugins"; return 0; }
+  for spec in ${specs//,/ }; do
+    name="${spec%%@*}"
+    # One attempt: an update that times out leaves the working version in place.
+    if ATTEMPTS=1 run_retry claude plugin update "$spec"; then
+      case "$RUN_OUT" in
+        *"already at the latest"*) current=$((current + 1)) ;;
+        *) ok "$name — $(last_line "$RUN_OUT")"; updated=$((updated + 1)) ;;
+      esac
+    else
+      warn "$name — update failed: $(last_line "$RUN_OUT")"
+    fi
+  done
+  ok "$updated updated, $current already current (restart Claude Code to apply)"
+}
+
 install_plugin() {
   local spec="$1" desc="$2" name="${1%%@*}"
   # `plugin install` is idempotent too, and reports "already installed". Asking
@@ -333,6 +357,7 @@ uninstall_plugin() {
 # ── Run ──────────────────────────────────────────────────────────
 add_marketplaces
 refresh_marketplaces
+update_installed_plugins
 
 if [ "$AUTO" = "--core-only" ] || [ "$AUTO" = "-y" ]; then
   if [ -f "$PLUGIN_SELECTION_FILE" ]; then

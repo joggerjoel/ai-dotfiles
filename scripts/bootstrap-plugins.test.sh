@@ -110,5 +110,12 @@ grep -q '^plugin install feature-dev@claude-plugins-official$' "$FAKE_ROOT/calls
   && t_ok 'core-only update installs a saved core plugin' \
   || t_ko 'core-only update installs a saved core plugin' "calls: [$(tr '\n' '|' < "$FAKE_ROOT/calls")]"
 
+# A catalog refresh does not move an installed plugin; the fleet update must
+# run `plugin update` for each installed one (claude-mem stuck at 13.11.0).
+grep -q '^plugin update superpowers@superpowers-marketplace$' "$FAKE_ROOT/calls" \
+  && grep -q '^plugin update autoresearch@autoresearch$' "$FAKE_ROOT/calls" \
+  && t_ok 'core-only update updates every installed plugin' \
+  || t_ko 'core-only update updates every installed plugin' "calls: [$(tr '\n' '|' < "$FAKE_ROOT/calls")]"
+
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
