@@ -7,7 +7,7 @@
 INTEGRATIONS=(
   "context7|Documentation lookup|no||||no"
   "serena|Semantic code assistant|no||||no"
-  "morphllm-fast-apply|Fast code application|no||||no"
+  "morphllm-fast-apply|Fast code application|yes|MORPH_API_KEY|||no|https://morphllm.com/dashboard"
   # Needs the `headroom` binary on PATH (agents-update.sh installs it via
   # `uv tool install headroom-ai[all]`). Registered here rather than by hand so
   # a host's MCP config comes from one place; before this, the only machine
@@ -23,7 +23,7 @@ INTEGRATIONS=(
   "crawl4ai|Self-hosted web scraping (SSE)|yes|CRAWL4AI_TOKEN|yes|CRAWL4AI_URL|no"
   "playwright|Browser automation & testing|no||yes||yes"
   "browser-tools|Advanced browser tools|no||yes||yes"
-  "magic|UI component generation|no||yes||yes"
+  "magic|UI component generation|yes|API_KEY_21ST|yes||yes|https://21st.dev/mcp"
   # The first row that needs no key and runs no local process, so nothing about
   # provisioning it gates on this host. What it serves is third-party markdown
   # the agent then follows as instructions, and that is the reason it is off by

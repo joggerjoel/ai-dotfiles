@@ -71,7 +71,7 @@ mcp_json_for() {
     serena)
       echo '{"type":"stdio","command":"uvx","args":["--from","git+https://github.com/oraios/serena","serena","start-mcp-server","--context","ide-assistant","--enable-web-dashboard","false","--enable-gui-log-window","false"],"env":{}}';;
     morphllm-fast-apply)
-      echo '{"type":"stdio","command":"npx","args":["-y","@morph-llm/morph-fast-apply"],"env":{}}';;
+      echo "{\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"@morphllm/morphmcp\"],\"env\":{\"MORPH_API_KEY\":\"${key_val}\"}}";;
     headroom)
       # Bare `headroom`, not an absolute path: the binary lands in ~/.local/bin
       # on Linux and under brew or uv on macOS, and Claude Code resolves the
@@ -105,7 +105,7 @@ mcp_json_for() {
     browser-tools)
       echo '{"command":"npx","args":["-y","@agentdeskai/browser-tools-mcp@latest"]}';;
     magic)
-      echo '{"type":"stdio","command":"npx","args":["-y","@21st-dev/magic"],"env":{}}';;
+      echo "{\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"@21st-dev/magic\"],\"env\":{\"API_KEY_21ST\":\"${key_val}\"}}";;
     supabase)
       # Internal/self-hosted only — direct Postgres MCP; key_val = connection string.
       # (Cloud Supabase uses the plugin's hosted MCP instead — see configure_supabase.)
@@ -1072,12 +1072,13 @@ sync_mcp_keys() {
     val=$(env_file_key "$key_var")
     [ -n "$val" ] || continue
 
+    # http/sse servers carry the secret in an Authorization header and have no
+    # env block. Those have their own configure path; guessing at a header
+    # shape here would corrupt a working block.
+    jq -e --arg k "$mcp_key" '.mcpServers[$k] | has("env")' \
+      "$CLAUDE_JSON" >/dev/null 2>&1 || continue
     baked=$(jq -r --arg k "$mcp_key" --arg v "$key_var" \
       '.mcpServers[$k].env[$v] // empty' "$CLAUDE_JSON" 2>/dev/null)
-    # http/sse servers carry the secret in an Authorization header instead of
-    # env. Those have their own configure path; guessing at a header shape here
-    # would corrupt a working block.
-    [ -n "$baked" ] || continue
     [ "$baked" = "$val" ] && continue
 
     if [ "$disabled_default" = "yes" ]; then enable=false; else enable=true; fi

@@ -150,6 +150,20 @@ after=$(jq -cS '.mcpServers["n8n-mcp"]' "$H/claude.json")
   && ok "http/sse server with a header secret is untouched" \
   || ko "http/sse server with a header secret is untouched" "before=$before after=$after"
 
+# ── 6: a stdio server whose env block lacks the key gets it filled ──
+# Registry rows that once needed no key (morphllm-fast-apply) were installed
+# with "env":{}. Treating "no baked value" as "header-carried secret" left
+# them keyless forever: `setup.sh tokens` saved the key and this sync skipped it.
+H="$TMP/h6"
+make_home "$H" '{"mcpServers":{
+  "morphllm-fast-apply":{"type":"stdio","command":"npx","args":["-y","@morphllm/morphmcp"],"env":{}}
+}}' 'MORPH_API_KEY=sk-morphkey'
+run_sync "$H" >/dev/null
+got=$(baked_key "$H" morphllm-fast-apply MORPH_API_KEY)
+[ "$got" = "sk-morphkey" ] \
+  && ok "empty env block on a stdio server gets the env-file key" \
+  || ko "empty env block on a stdio server gets the env-file key" "got '$got'"
+
 # ── env_file_key: quoting and export forms the env file actually contains ──
 H="$TMP/h4"
 make_home "$H" '{"mcpServers":{}}' 'PLAIN=abc

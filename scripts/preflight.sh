@@ -281,6 +281,10 @@ probe_env() {
 
     key="$(mcp_key_for "$name")"
     integration_configured "$key" || continue
+    # A disabled server (opt-in, or quarantined by this script) is not asked
+    # for its key, matching `setup.sh tokens`.
+    jq -e --arg k "$key" '.mcpServers[$k].disabled == true' "$CLAUDE_JSON" \
+      >/dev/null 2>&1 && continue
 
     missing=""
     if [ -n "$key_var" ] && ! env_var_set "$key_var"; then
