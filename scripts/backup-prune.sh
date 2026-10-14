@@ -34,7 +34,7 @@ else
   CUTOFF="$(date -d "-${RETAIN_DAYS} days" +%Y%m%d)"  # GNU / Linux
 fi
 
-echo -e "${BOLD}Pruning backups${RESET} ${DIM}(keep < ${RETAIN_DAYS}d + first-of-month; cutoff ${CUTOFF})${RESET}"
+echo -e "${BOLD}Pruning backups${RESET} ${DIM}(keep < ${RETAIN_DAYS}d + first-of-month; cutoff ${CUTOFF}) [$(date '+%H:%M:%S')]${RESET}"
 
 # Snapshot names sort lexically == chronologically and glob expansion is
 # sorted, so the first name seen for a month is that month's first snapshot.

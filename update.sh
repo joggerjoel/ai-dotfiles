@@ -65,7 +65,7 @@ ok()     { echo -e "  ${GREEN}✓${RESET} $1"; }
 skip()   { echo -e "  ${DIM}○ $1${RESET}"; }
 warn()   { echo -e "  ${YELLOW}!${RESET} $1"; }
 fail()   { echo -e "  ${RED}✗${RESET} $1"; }
-header() { echo -e "\n${BOLD}$1${RESET}"; }
+header() { echo -e "\n${BOLD}$1${RESET} ${DIM}[$(date '+%H:%M:%S')]${RESET}"; }
 
 DOTFILES_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/links.sh
@@ -78,6 +78,7 @@ CLAUDE_DIR="$HOME/.claude"
 CLAUDE_JSON="$HOME/.claude.json"
 BACKUP_ROOT="$DOTFILES_DIR/backup"
 TS="$(date +%Y%m%d_%H%M%S)"
+START_TIME=$(date +%s)
 
 DRY_RUN="no"; RUN_PRUNE="yes"; RUN_AGENTS="yes"; RUN_FLEET="no"; FORCE="no"
 for arg in "$@"; do
@@ -219,7 +220,8 @@ if [ "$DRY_RUN" = "yes" ]; then
     skip "Would run: claude update"
   fi
   [ "$RUN_FLEET" = "yes" ] && skip "Would run: ansible-playbook update.yml --limit aorus_ai  (fleet servers)"
-  ok "Backup created; no upgrade performed."
+  ELAPSED=$(( $(date +%s) - START_TIME ))
+  ok "Backup created; no upgrade performed. ${DIM}(took ${ELAPSED}s at $(date '+%H:%M:%S'))${RESET}"
   exit 0
 fi
 
@@ -663,3 +665,7 @@ if [ -x "$DOTFILES_DIR/scripts/preflight.sh" ]; then
 else
   skip "scripts/preflight.sh not present — skipping verification"
 fi
+
+ELAPSED=$(( $(date +%s) - START_TIME ))
+echo -e "\n${GREEN}✓${RESET} ${BOLD}Update complete${RESET} ${DIM}(took ${ELAPSED}s at $(date '+%H:%M:%S'))${RESET}"
+

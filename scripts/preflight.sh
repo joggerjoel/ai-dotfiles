@@ -571,7 +571,7 @@ render_human() {
   untested=$(count_verdict untested)
   total=$(( pass + fail + unknown + untested ))
 
-  printf 'PREFLIGHT  %s\n' "$(date '+%Y-%m-%d %H:%M')"
+  printf 'PREFLIGHT  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
 
   render_class config "CONFIG FILES"
   render_class mcp   "MCP SERVERS"
@@ -758,8 +758,15 @@ main() {
 
   validate_configs
 
+  # Nothing renders until every probe finishes, and `claude mcp list` alone
+  # runs 40s+ — a silent wait that reads as a hang. Terminal-only, so --json
+  # and captured runs see exactly what they did before.
+  progress() { [ -t 2 ] && echo "  … $1 [$(date '+%H:%M:%S')]" >&2; return 0; }
+
+  progress "probing MCP servers via claude mcp list (up to ${MCP_TIMEOUT}s)"
   probe_mcp
   probe_clis
+  progress "checking plugin health"
   probe_plugins
   probe_env
   probe_hooks
