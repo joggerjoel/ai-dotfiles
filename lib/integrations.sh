@@ -75,11 +75,21 @@ MANDATED_CLIS=(
 #                A plugin that has not succeeded in this long is failing
 #                silently even when every other light is green.
 #   repair       run when health_cmd fails, then health_cmd is re-run; empty =
-#                report only. Use the global CLI, never npx: npx stops to ask
-#                before downloading. claude-mem's repair reinstalls the
-#                marketplace tree's node_modules, which a plugin update drops.
+#                report only. Never npx: npx stops to ask before downloading.
+#                claude-mem's repair reinstalls the marketplace tree's
+#                node_modules, which a plugin update drops.
+#
+# claude-mem ships two binaries under one name. The bare `claude-mem` on PATH
+# must be the hook launcher (~/.local/bin, placed by `claude-mem install`):
+# every Claude Code hook runs `claude-mem hook claude-code <event>`. The
+# management CLI (doctor/repair) is the npm package, so it lives in a private
+# prefix that is never on PATH. A global `npm install -g` put it in nvm's bin,
+# ahead of ~/.local/bin, and shadowed the launcher (found 2026-10-14). Running
+# it through npx fails too: npx prepends its own .bin, so doctor finds itself.
+CLAUDE_MEM_CLI_PREFIX="$HOME/.local/share/claude-mem-cli"
+CLAUDE_MEM_CLI="$CLAUDE_MEM_CLI_PREFIX/node_modules/.bin/claude-mem"
 PLUGIN_ASSETS=(
-  "claude-mem|claude-mem|claude-mem doctor|$HOME/.claude-mem/observer-health.json|21600|claude-mem repair"
+  "claude-mem|$CLAUDE_MEM_CLI|$CLAUDE_MEM_CLI doctor|$HOME/.claude-mem/observer-health.json|21600|$CLAUDE_MEM_CLI repair"
 )
 
 # Map an integration name to its index in INTEGRATIONS. Prints the index;

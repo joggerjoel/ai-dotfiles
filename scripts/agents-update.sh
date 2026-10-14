@@ -80,6 +80,8 @@ export NVM_DIR="$HOME/.nvm"
 # run — see pin.sh's header.
 SCRIPT_DIR="$(cd "$(dirname "${AGENTS_UPDATE_SOURCE:-${BASH_SOURCE[0]}}")" && pwd)"
 . "$SCRIPT_DIR/pin.sh"
+# shellcheck source=../lib/integrations.sh
+. "$SCRIPT_DIR/../lib/integrations.sh"
 
 FORCE=0
 for arg in "$@"; do
@@ -451,8 +453,10 @@ fi
 # doctor` is mid-outage, on a box that may be unattended, over a link that may
 # be the thing that broke. Hit 2026-09-01: the observer had been failing for 9
 # hours and the documented recovery command was itself not installed.
-CLAUDE_MEM_INSTALL="npm install -g claude-mem@latest"
-register_cli "claude-mem" "claude-mem" "$CLAUDE_MEM_INSTALL" "$CLAUDE_MEM_INSTALL" "npm_latest claude-mem"
+# Installed into a private prefix, never -g: see CLAUDE_MEM_CLI in
+# lib/integrations.sh for why the bare `claude-mem` must stay the hook launcher.
+CLAUDE_MEM_INSTALL="npm install --prefix \"$CLAUDE_MEM_CLI_PREFIX\" --no-fund --no-audit claude-mem@latest"
+register_cli "claude-mem" "$CLAUDE_MEM_CLI" "$CLAUDE_MEM_INSTALL" "$CLAUDE_MEM_INSTALL" "npm_latest claude-mem"
 
 # firecrawl — the live-web CLI behind the firecrawl-* skills. Only the BINARY is
 # this file's business. Its skills live under ~/.agents/skills and are refreshed
@@ -595,22 +599,22 @@ fi
 # `claude-mem doctor` (lib/integrations.sh PLUGIN_ASSETS); the repair had
 # no home until now, and reporting a break nobody fixes is how it lasted.
 #
-# `claude-mem` here is the global CLI registered in the companion block
-# above, never `npx claude-mem`: npx stops to ask before downloading, and
-# an unattended host would sit on that prompt.
+# $CLAUDE_MEM_CLI is the management CLI registered in the companion block
+# above. Never the bare `claude-mem` (the hook launcher, which exits 0 on
+# `doctor` without checking anything) and never `npx claude-mem` (npx stops
+# to ask before downloading, and an unattended host would sit on that prompt).
 #
 # Repair runs ONLY when doctor fails. It performs an npm install, so it
 # stays a fault-only path instead of a cost every update pays.
-CLAUDE_MEM_BIN="$(command -v claude-mem 2>/dev/null || true)"
-if [ -z "$CLAUDE_MEM_BIN" ]; then
+if [ ! -x "$CLAUDE_MEM_CLI" ]; then
   skip "claude-mem not installed, runtime check skipped"
-elif { echo "  claude-mem: checking runtime..."; $DOCTOR_TIMEOUT claude-mem doctor >"$LOG" 2>&1; }; then
+elif { echo "  claude-mem: checking runtime..."; $DOCTOR_TIMEOUT "$CLAUDE_MEM_CLI" doctor >"$LOG" 2>&1; }; then
   ok "claude-mem: doctor passes"
 else
   CLAUDE_MEM_DIAGNOSIS=$(grep -F '✗' "$LOG" | head -1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
   echo "  claude-mem: repairing runtime (up to 120 seconds)..."
-  if $RUN_TIMEOUT claude-mem repair 2>&1 | tee "$LOG" \
-      && $DOCTOR_TIMEOUT claude-mem doctor >"$LOG" 2>&1; then
+  if $RUN_TIMEOUT "$CLAUDE_MEM_CLI" repair 2>&1 | tee "$LOG" \
+      && $DOCTOR_TIMEOUT "$CLAUDE_MEM_CLI" doctor >"$LOG" 2>&1; then
     ok "claude-mem: repaired (doctor now passes)"
   else
     warn "claude-mem: ${CLAUDE_MEM_DIAGNOSIS:-doctor failed}"
