@@ -92,6 +92,9 @@ local_ai:
     dotfiles_dir: "{{ ansible_facts.env.HOME }}/ai-dotfiles"
     # The control node roams off the LAN too, so it reaches Ollama over Tailscale.
     claude_mem_ollama_base_url: "http://<macstudio-tailscale-ip>:11434/v1"
+    # Set on a host whose observer you route yourself (e.g. a hosted model with
+    # its own key); the observer play then skips it instead of rewriting it.
+    # claude_mem_observer_self_managed: true
 
 # ── The everyday update target: fleet + control node ─────────────
 ai_all:

@@ -73,6 +73,18 @@
     - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
       vars: { unreachable_note: "the observer was left on its old provider" }
 
+    # A host that routes its observer elsewhere (for example straight to a
+    # hosted model with its own key) opts out; writing Ollama's placeholder key
+    # over it would stop its memory capture.
+    - name: Leave a self-managed observer alone
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: observer route is self-managed; nothing written"
+      when: claude_mem_observer_self_managed | default(false) | bool
+
+    - name: Stop on hosts whose observer route is self-managed
+      ansible.builtin.meta: end_host
+      when: claude_mem_observer_self_managed | default(false) | bool
+
     - name: Require a route to Ollama for this host
       ansible.builtin.assert:
         that: claude_mem_ollama_base_url is defined
