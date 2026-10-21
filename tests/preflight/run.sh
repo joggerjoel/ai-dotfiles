@@ -263,6 +263,17 @@ else
   report fail "reports jq as a passing CLI" "$out"
 fi
 
+# --- mandated CLIs: the vps profile has no browser, so agent-browser is exempt -
+vps_profile=$(mktemp)
+printf 'vps\n' > "$vps_profile"
+out=$(PREFLIGHT_PROFILE_FILE="$vps_profile" run_preflight healthy 2>&1)
+rm -f "$vps_profile"
+if sed -n '/MANDATED CLIS/,/^$/p' <<<"$out" | grep -q 'agent-browser'; then
+  report fail "vps profile does not mandate agent-browser" "$out"
+else
+  report pass "vps profile does not mandate agent-browser"
+fi
+
 # --- exit 2: the checker itself could not run -------------------------------
 # An empty stub dir plus a PATH with no `claude` must report "could not run",
 # NOT "everything failed". Distinguishing 2 from 1 is what stops a green cron

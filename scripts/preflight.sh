@@ -40,6 +40,9 @@ PREFLIGHT_LINK_DIRS="${PREFLIGHT_LINK_DIRS-$HOME/.claude/scripts:$HOME/.claude/h
 # install_settings in setup.sh) is harmless here.
 PREFLIGHT_LINK_FILES="${PREFLIGHT_LINK_FILES-$HOME/.claude/statusline.sh:$HOME/.claude/settings.json:$HOME/AGENTS.md:$HOME/.codex/AGENTS.md:$HOME/.config/opencode/AGENTS.md}"
 PREFLIGHT_DOTFILES_DIR="${PREFLIGHT_DOTFILES_DIR:-$DOTFILES_DIR}"
+# Written by setup.sh. The vps profile has no browser, so its CLAUDE.md forbids
+# agent-browser rather than mandating it.
+PREFLIGHT_PROFILE_FILE="${PREFLIGHT_PROFILE_FILE:-$DOTFILES_DIR/.local/.profile}"
 
 OPT_JSON=0
 OPT_QUARANTINE=0
@@ -242,8 +245,10 @@ probe_mcp() {
 
 # Mandated CLIs. Missing ones cannot be contained — there is nothing to disable.
 probe_clis() {
-  local cli
+  local cli profile
+  profile=$(cat "$PREFLIGHT_PROFILE_FILE" 2>/dev/null)
   for cli in "${MANDATED_CLIS[@]}"; do
+    [ "$profile" = "vps" ] && [ "$cli" = "agent-browser" ] && continue
     if command -v "$cli" >/dev/null 2>&1; then
       add_finding cli "$cli" pass "on PATH" no
     else
