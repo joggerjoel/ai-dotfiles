@@ -120,4 +120,4 @@ and attempts exceed roughly three.
 
 An implementation of these invariants, with the pane, worktree, and escalation machinery a real
 fleet needs, is specified in the sibling project's
-[master-control plan](../../../herdr-orchestrator/master-control-herdr-plan.md), sections 6 and 10.2.
+[master-control plan](https://github.com/joggerjoel/herdr-orchestrator/blob/main/master-control-herdr-plan.md), sections 6 and 10.2.
