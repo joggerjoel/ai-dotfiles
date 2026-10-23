@@ -770,8 +770,7 @@
     "caveman@caveman": true,
     "static-analysis@trailofbits": true,
     "variant-analysis@trailofbits": true,
-    "audit-context-building@trailofbits": true,
-    "firecrawl@firecrawl": true
+    "audit-context-building@trailofbits": true
   },
   "extraKnownMarketplaces": {
     "autoresearch": {
