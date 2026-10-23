@@ -63,11 +63,11 @@ For the **runtime view** — the five-layer stack (operator → `just` → provi
 
 The multiplier isn't the model; it's the discipline wired around it. These ship by default:
 
-| Command        | What it does                                                                                      |
-| -------------- | ------------------------------------------------------------------------------------------------- |
-| **`/fusion`**  | Two models answer independently, a third merges them — consensus, divergence, what got discarded. |
-| **`/council`** | An 8-lens adversarial audit of a plan or spec before any code is written.                         |
-| **`isolate`**  | One cold, zero-context reviewer — finds the gaps an author's own context hides.                   |
+| Command        | What it does                                                                                                                                       |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`/fusion`**  | Two models answer independently, a third merges them — consensus, divergence, what got discarded.                                                  |
+| **`/council`** | An 8-lens adversarial audit of a plan or spec before any code is written.                                                                          |
+| **`isolate`**  | One cold, zero-context reviewer — finds the gaps an author's own context hides.                                                                    |
 | **SHIPIT**     | The full loop: `isolate → council → write-back → isolate` to convergence, then commit. A documented sequence, not a slash command — see SHIPIT.md. |
 
 Full write-up: **[FUSE.md](FUSE.md)** (why isolation finds what authors miss) and
@@ -83,7 +83,7 @@ and routes across three model tiers:
 | Tier            | For                            | Reached via                                        |
 | --------------- | ------------------------------ | -------------------------------------------------- |
 | 💎 **Frontier** | hard reasoning, design         | subscription harnesses (Claude, GPT, Grok, Gemini) |
-| ⚡ **Bulk**     | cheap/fast mechanical subtasks | **9router** gateway (~690 models · ~69 providers) |
+| ⚡ **Bulk**     | cheap/fast mechanical subtasks | **9router** gateway (~690 models · ~69 providers)  |
 | 🏠 **Local**    | private, free to run           | **ollama** on your own machines                    |
 
 **9router** (an internal OpenAI-compatible gateway) and **headroom** (a context-optimization proxy)
@@ -165,15 +165,15 @@ just fleet-waves                   # deploy committed WAVES skills without CLI u
 
 Scoped ansible playbooks (in `ansible-ai/`, each targeting its own inventory group):
 
-| Playbook                                | Targets               | Does                                                              |
-| --------------------------------------- | --------------------- | ----------------------------------------------------------------- |
-| `update.yml`                            | whole fleet           | Claude + sibling CLIs + config; imports the gateway/proxy refresh |
-| `provision-ai.yml`                      | a new host            | first-time install of the base + harnesses                        |
-| `deploy-9router.yml`                    | `ninerouter_ai`       | the 9router Docker stack (aorus4/aorus8)                          |
-| `deploy-headroom-proxy.yml`             | `headroom_native_ai`  | the headroom proxy (systemd user unit)                            |
-| `provision-herdr.yml`                   | `ai_all`              | install/converge idle herdr; refresh its agent integrations       |
-| `provision-orca.yml`                    | `ai_all` (Macs)       | Orca + its agent skills on every fleet Mac                        |
-| `push-config.yml` / `verify-config.yml` | fleet                 | rsync uncommitted config for testing / prove a deploy landed      |
+| Playbook                                | Targets              | Does                                                              |
+| --------------------------------------- | -------------------- | ----------------------------------------------------------------- |
+| `update.yml`                            | whole fleet          | Claude + sibling CLIs + config; imports the gateway/proxy refresh |
+| `provision-ai.yml`                      | a new host           | first-time install of the base + harnesses                        |
+| `deploy-9router.yml`                    | `ninerouter_ai`      | the 9router Docker stack (aorus4/aorus8)                          |
+| `deploy-headroom-proxy.yml`             | `headroom_native_ai` | the headroom proxy (systemd user unit)                            |
+| `provision-herdr.yml`                   | `ai_all`             | install/converge idle herdr; refresh its agent integrations       |
+| `provision-orca.yml`                    | `ai_all` (Macs)      | Orca + its agent skills on every fleet Mac                        |
+| `push-config.yml` / `verify-config.yml` | fleet                | rsync uncommitted config for testing / prove a deploy landed      |
 
 Hands-off: `./scripts/fleet-cron-setup.sh` schedules a daily fleet update from the control node.
 Full dry-run / per-host detail: **[ansible-ai/README.md](ansible-ai/README.md)**.
@@ -189,7 +189,8 @@ you won't touch this directly). Two profiles — **Desktop** (full browser tooli
 (headless, Docker/systemctl perms).
 Your `~/.claude/CLAUDE.md` is assembled from `base/` + `profiles/<profile>/` + gitignored `.local/`.
 `tmux/` holds tmuxp session definitions, symlinked into `~/.tmux/` on setup — e.g.
-`tmuxp load ~/.tmux/server-metrics.yaml` opens a three-pane glances / htop / top monitor.
+`tmuxp load ~/.tmux/server-metrics.yaml` opens a three-pane glances / htop / top monitor, and
+`just herdr-monitor` gives that session a herdr workspace labelled `monitor` on every machine.
 
 ```bash
 ./setup.sh              # Initial setup (profile + skills + plugins + MCP)

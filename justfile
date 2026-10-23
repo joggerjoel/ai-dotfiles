@@ -91,6 +91,14 @@ fleet-waves limit="ai_all": _control
 fleet-sync limit="ai_all": _control
     set -o pipefail; cd {{dotfiles}}/ansible-ai && ansible-playbook update.yml --tags sync --limit {{quote(limit)}} 2>&1 | cat
 
+# Targets the local server plus every ENABLED saved machine (`herdr machine
+# list`); pass labels to narrow it: `just herdr-monitor aorus4`. A host that
+# already has a workspace labelled "monitor" is left alone. The monitor itself
+# is tmux/server-metrics.yaml (glances / htop / top), so there is one definition.
+# [herdr] ensure a "monitor" workspace exists on every machine
+herdr-monitor *machines:
+    bash {{quote(dotfiles)}}/scripts/herdr-monitor-workspace.sh {{machines}}
+
 # Build a state-free, checksummed source bundle. Output is an explicit local path.
 herdr-temporal-bundle source output:
     python3 {{quote(dotfiles)}}/scripts/herdr-temporal-release.py bundle --source {{quote(source)}} --output {{quote(output)}}
