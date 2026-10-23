@@ -171,7 +171,7 @@ Scoped ansible playbooks (in `ansible-ai/`, each targeting its own inventory gro
 | `provision-ai.yml`                      | a new host            | first-time install of the base + harnesses                        |
 | `deploy-9router.yml`                    | `ninerouter_ai`       | the 9router Docker stack (aorus4/aorus8)                          |
 | `deploy-headroom-proxy.yml`             | `headroom_native_ai`  | the headroom proxy (systemd user unit)                            |
-| `provision-herdr.yml`                   | `ai_all`              | install/converge herdr where its server is idle                   |
+| `provision-herdr.yml`                   | `ai_all`              | install/converge idle herdr; refresh its agent integrations       |
 | `provision-orca.yml`                    | `ai_all` (Macs)       | Orca + its agent skills on every fleet Mac                        |
 | `push-config.yml` / `verify-config.yml` | fleet                 | rsync uncommitted config for testing / prove a deploy landed      |
 
