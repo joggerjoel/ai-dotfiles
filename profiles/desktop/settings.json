@@ -770,7 +770,8 @@
     "caveman@caveman": true,
     "static-analysis@trailofbits": true,
     "variant-analysis@trailofbits": true,
-    "audit-context-building@trailofbits": true
+    "audit-context-building@trailofbits": true,
+    "context-mode@context-mode": true
   },
   "extraKnownMarketplaces": {
     "autoresearch": {
@@ -860,7 +861,7 @@
     "firecrawl": {
       "source": {
         "source": "github",
-        "repo": "firecrawl/firecrawl-cli"
+        "repo": "firecrawl/firecrawl-claude-plugin"
       }
     }
   },

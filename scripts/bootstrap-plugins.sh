@@ -55,7 +55,7 @@ MARKETPLACES=(
   "caveman|JuliusBrussee/caveman"
   "trailofbits|trailofbits/skills"
   "context-mode|mksglu/context-mode"
-  "firecrawl|firecrawl/firecrawl-cli"
+  "firecrawl|firecrawl/firecrawl-claude-plugin"
 )
 
 # ── CORE: the shipping engine (always installed) ─────────────────
