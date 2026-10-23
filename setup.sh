@@ -2188,14 +2188,31 @@ cmd_add() {
 
   local key_val="" extra_val=""
 
+  # ~/.claude/.env is the one store for secrets; ~/.claude.json only carries a
+  # copy that sync_mcp_keys re-derives from it. A typed key is therefore saved
+  # to the env file first, or it would vanish on the next `update`. A key the
+  # env file already has is offered for replacement only at a terminal, so a
+  # scripted run keeps using it without a prompt.
   if [ "$needs_key" = "yes" ]; then
     echo -ne "${BOLD}${name}${RESET} - ${desc}\n"
     key_val=$(env_file_key "$key_var")
-    if [ -n "$key_val" ]; then
+    if [ -n "$key_val" ] && [ ! -t 0 ]; then
       ok "${key_var} taken from ~/.claude/.env"
     else
-      echo -ne "  ${key_var} (required): "
-      read -r key_val || key_val=""
+      local typed=""
+      if [ -n "$key_val" ]; then
+        echo -ne "  ${key_var} (Enter to keep the one in ~/.claude/.env): "
+      else
+        echo -ne "  ${key_var} (required): "
+      fi
+      read -r typed || typed=""
+      if [ -n "$typed" ]; then
+        key_val="$typed"
+        env_set "$key_var" "$key_val"
+        ok "Saved ${key_var} to ~/.claude/.env"
+      elif [ -n "$key_val" ]; then
+        ok "${key_var} kept from ~/.claude/.env"
+      fi
     fi
 
     if [ -z "$key_val" ]; then
@@ -2204,8 +2221,23 @@ cmd_add() {
     fi
 
     if [ -n "$extra_vars" ]; then
-      echo -ne "  ${extra_vars}: "
-      read -r extra_val || extra_val=""
+      extra_val=$(env_file_key "$extra_vars")
+      if [ -n "$extra_val" ] && [ ! -t 0 ]; then
+        ok "${extra_vars} taken from ~/.claude/.env"
+      else
+        local typed_extra=""
+        if [ -n "$extra_val" ]; then
+          echo -ne "  ${extra_vars} (Enter to keep the one in ~/.claude/.env): "
+        else
+          echo -ne "  ${extra_vars}: "
+        fi
+        read -r typed_extra || typed_extra=""
+        if [ -n "$typed_extra" ]; then
+          extra_val="$typed_extra"
+          env_set "$extra_vars" "$extra_val"
+          ok "Saved ${extra_vars} to ~/.claude/.env"
+        fi
+      fi
 
       if [ -z "$extra_val" ]; then
         fail "${extra_vars} required for $name"
@@ -2692,5 +2724,12 @@ case "${1:-}" in
     echo "                          (--no-pull: reassemble without touching git)"
     echo "  ./setup.sh help         Show this help"
     ;;
-  *)      cmd_setup ;;
+  "")     cmd_setup ;;
+  *)
+    # A misspelt subcommand (`./setup.sh aad firecrawl`) used to land here and
+    # silently run the whole setup. Only a bare `./setup.sh` means setup.
+    fail "Unknown command: $1"
+    echo "  Run './setup.sh help' for the list of commands."
+    exit 1
+    ;;
 esac

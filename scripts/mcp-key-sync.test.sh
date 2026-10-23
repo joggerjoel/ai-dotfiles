@@ -45,6 +45,7 @@ if [ -z "$DISPATCH" ]; then
   exit 1
 fi
 sed -n "1,$((DISPATCH - 1))p" "$SETUP" > "$TMP/defs.sh"
+export DISPATCH_LINE="$DISPATCH" SETUP_FILE="$SETUP"
 
 # Build a fake home and run sync_mcp_keys against it. Echoes the function's
 # stdout; the caller inspects $2/claude.json afterwards.
@@ -187,6 +188,64 @@ if grep -q 'FIRECRAWL_API_KEY (required)' <<<"$out"; then
 else
   ok "cmd_add skips the key prompt when ~/.claude/.env is configured"
 fi
+
+
+# ── cmd_add persists a typed key to ~/.claude/.env ──
+# The prompt used to bake the key into ~/.claude.json only. ~/.claude/.env is
+# the one store sync_mcp_keys derives from, so a key that never reached it was
+# invisible to `tokens` and lost on the next `update`.
+H="$TMP/h-add-typed"
+mkdir -p "$H/.claude"
+: > "$H/.claude/.env"
+printf '%s\n' '{"mcpServers":{}}' > "$H/claude.json"
+out=$(bash -c '
+  set -uo pipefail
+  source "$1"
+  CLAUDE_DIR="$2/.claude"
+  CLAUDE_JSON="$2/claude.json"
+  cmd_add firecrawl
+' _ "$TMP/defs.sh" "$H" <<<"fc-typed" 2>&1)
+
+got=$(grep -E '^FIRECRAWL_API_KEY=' "$H/.claude/.env" | sed 's/^[^=]*=//')
+[ "$got" = "fc-typed" ] \
+  && ok "cmd_add saves a typed key to ~/.claude/.env" \
+  || ko "cmd_add saves a typed key to ~/.claude/.env" "env has '$got'; output: $out"
+
+got=$(baked_key "$H" firecrawl-mcp FIRECRAWL_API_KEY)
+[ "$got" = "fc-typed" ] \
+  && ok "cmd_add bakes the typed key into ~/.claude.json" \
+  || ko "cmd_add bakes the typed key into ~/.claude.json" "got '$got'"
+
+# ── a misspelt subcommand must not fall through to the full setup ──
+# `./setup.sh aad firecrawl` used to run cmd_setup: the dispatch's catch-all
+# treated any unknown word as "no argument".
+out=$(bash -c '
+  set -uo pipefail
+  source "$1"
+  cmd_setup() { echo SETUP_RAN; }
+  shift
+  eval "$(sed -n "$DISPATCH_LINE,\$p" "$SETUP_FILE")"
+' _ "$TMP/defs.sh" aad firecrawl 2>&1)
+rc=$?
+if grep -q SETUP_RAN <<<"$out"; then
+  ko "an unknown subcommand does not run the full setup" "output: $out"
+else
+  ok "an unknown subcommand does not run the full setup"
+fi
+[ "$rc" -ne 0 ] && grep -qi 'unknown command' <<<"$out" \
+  && ok "an unknown subcommand fails with a message" \
+  || ko "an unknown subcommand fails with a message" "rc=$rc output: $out"
+
+out=$(bash -c '
+  set -uo pipefail
+  source "$1"
+  cmd_setup() { echo SETUP_RAN; }
+  shift
+  eval "$(sed -n "$DISPATCH_LINE,\$p" "$SETUP_FILE")"
+' _ "$TMP/defs.sh" 2>&1)
+grep -q SETUP_RAN <<<"$out" \
+  && ok "no subcommand still runs the full setup" \
+  || ko "no subcommand still runs the full setup" "output: $out"
 
 printf '\n  %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
