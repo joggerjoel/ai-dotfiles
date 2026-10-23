@@ -144,7 +144,9 @@
 # whose herdr server is idle, because `herdr update` stops the server and would
 # kill live panes and any agent mid-task. A host with a running server is left
 # alone and reported by name. Also keeps the control node from updating itself
-# out from under a live session.
+# out from under a live session. Then re-registers herdr's agent integrations
+# (pi, claude, codex, cursor, antigravity-cli, grok) via the host's
+# scripts/herdr-integrations.sh — safe on a live server, it only edits hooks.
 # Skip with:  ansible-playbook update.yml --skip-tags herdr
 - import_playbook: provision-herdr.yml
   tags: [herdr]

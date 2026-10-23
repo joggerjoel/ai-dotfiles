@@ -1,5 +1,6 @@
 ---
-# Install / converge `herdr` (terminal workspace manager for coding agents) on
+# Install / converge `herdr` (terminal workspace manager for coding agents) and
+# its agent integrations (pi, claude, codex, cursor, antigravity-cli, grok) on
 # every fleet host (ai_all = aorus fleet + macstudio + this box).
 #
 # Both macOS and Linux use the official install.sh — deliberately NOT Homebrew on
@@ -113,6 +114,46 @@
         - herdr_check.rc | default(1) == 0
         - (herdr_server_state.stdout | default('') | trim) == 'running'
     # ─────────────────────────────────────────────────────────────────────────
+
+    # ── Agent integrations (pi, claude, codex, cursor, antigravity-cli, grok) ──
+    # The hook each harness runs so herdr can show idle/working/blocked state and
+    # restore sessions. scripts/herdr-integrations.sh in the host's ai-dotfiles
+    # checkout owns the roster (setup.sh and update.sh run the same script), so
+    # this play only invokes it. Safe on a host with a live server: it edits
+    # hook files, never the server. It runs here as well as inside `setup.sh
+    # update` because on a fresh host that update ran before herdr existed
+    # (play order in update.yml) — this is the play that just installed it.
+    - name: Is the integrations script present in ai-dotfiles?
+      ansible.builtin.stat:
+        path: "{{ dotfiles_dir }}/scripts/herdr-integrations.sh"
+      register: herdr_integrations_script
+      when:
+        - ansible_facts.system is defined
+        - dotfiles_dir is defined
+
+    - name: Install / refresh herdr agent integrations
+      ansible.builtin.shell: |
+        export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        bash scripts/herdr-integrations.sh
+      args:
+        chdir: "{{ dotfiles_dir }}"
+        executable: /bin/bash
+      register: herdr_integrations
+      when:
+        - ansible_facts.system is defined
+        - herdr_integrations_script.stat.exists | default(false)
+      failed_when: herdr_integrations.rc | default(0) != 0
+      # The script's last line reads
+      #   herdr-integrations: installed=N updated=N current=N skipped=N failed=N
+      # so a fleet that is already current recaps as 0 changed.
+      changed_when: >-
+        herdr_integrations.stdout is defined
+        and herdr_integrations.stdout is not search('installed=0 updated=0')
+
+    - name: Report herdr agent integrations
+      ansible.builtin.debug:
+        msg: "{{ herdr_integrations.stdout_lines | default(['(skipped — no ai-dotfiles checkout here)']) }}"
+      when: ansible_facts.system is defined
 
     # Skipped on hosts with no gathered facts (offline/unreachable) so a down
     # box recaps as a clean skip, never a false failure.

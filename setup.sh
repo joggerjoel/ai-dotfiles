@@ -464,6 +464,23 @@ ensure_herdr() {
     || warn "herdr install failed — brew install herdr (non-fatal)"
 }
 
+# herdr agent integrations — the hook each harness runs so herdr can show
+# idle/working/blocked state and restore sessions natively. One script owns
+# the target roster (pi, claude, codex, cursor, antigravity-cli, grok) and the
+# per-target reporting: scripts/herdr-integrations.sh. update.sh and
+# ansible-ai/provision-herdr.yml call the same one.
+#
+# Must run AFTER install_settings + relink_all, not in ensure_dependencies: the
+# claude hook registers itself in ~/.claude/settings.json, which install_settings
+# replaces (symlink, or stripped copy for Remote Control), so an earlier run
+# would be undone in the same pass. No-ops without herdr; a harness that is not
+# on this host is a skip inside the script, never a failure.
+ensure_herdr_integrations() {
+  command -v herdr &>/dev/null || { skip "herdr integrations skipped (herdr not installed)"; return 0; }
+  bash "$DOTFILES_DIR/scripts/herdr-integrations.sh" \
+    || warn "Some herdr integrations failed — re-run scripts/herdr-integrations.sh (non-fatal)"
+}
+
 # orca — Stably AI's Orca, an Electron IDE that orchestrates coding agents
 # across terminals and git worktrees, with a bundled `orca` CLI (`orca serve`
 # runs a headless runtime, `orca account add` manages Claude/Codex accounts).
@@ -1875,6 +1892,10 @@ cmd_setup() {
   # Every repo-owned link, from one definition (lib/links.sh).
   relink_all
 
+  # herdr's per-harness hooks. After install_settings + relink_all on purpose:
+  # the claude one registers itself in the settings.json just put in place.
+  ensure_herdr_integrations
+
   # Not repo-owned links, so outside relink_all: pstack's shared-skills clone
   # and links, tmuxp session configs, and the zsh module registry + ~/.zshrc.
   sync_pstack
@@ -2403,6 +2424,10 @@ cmd_update() {
 
   # Every repo-owned link, from one definition (lib/links.sh).
   relink_all
+
+  # herdr's per-harness hooks. After install_settings + relink_all on purpose:
+  # the claude one registers itself in the settings.json just put in place.
+  ensure_herdr_integrations
 
   # Not repo-owned links, so outside relink_all: pstack's shared-skills clone
   # and links, tmuxp session configs, and the zsh module registry + ~/.zshrc.

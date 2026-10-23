@@ -19,6 +19,10 @@ set -euo pipefail
 #      checked without installing just upgrade. Pinned CLIs are held at
 #      their version here and on the fleet until `setup.sh pin remove
 #      <name>`, and every run lists what is pinned.
+#   4b. Upgrade herdr (brew installs only), then re-register its agent
+#      integrations for pi, claude, codex, cursor, antigravity-cli and grok
+#      (scripts/herdr-integrations.sh, shared with setup.sh and the fleet
+#      playbook). Harnesses not on this host are skipped.
 #   5. Re-vendor the 9router skills from upstream and deploy them to
 #      ~/.claude/skills (scripts/vendor-9router-skills.sh --deploy).
 #   6. Refresh pstack (michael-denyer/pstack-claude) for Codex / Prime /
@@ -281,6 +285,18 @@ if [ "$RUN_AGENTS" = "yes" ] && command -v brew &>/dev/null && command -v herdr 
   else
     ok "herdr: already latest (${before_herdr})"
   fi
+fi
+
+# ── 3b-ii. herdr agent integrations (pi, claude, codex, cursor, antigravity-cli, grok)
+# Re-registers herdr's per-harness hooks after the CLI upgrades above: a herdr
+# release can bump an integration version, which `herdr integration status`
+# then reports as outdated until reinstalled. Unlike 3b this is not brew-gated —
+# the installer path (~/.local/bin/herdr) counts too. scripts/herdr-integrations.sh
+# owns the roster; setup.sh and ansible-ai/provision-herdr.yml run the same script.
+if [ "$RUN_AGENTS" = "yes" ] && command -v herdr &>/dev/null; then
+  header "herdr agent integrations"
+  bash "$DOTFILES_DIR/scripts/herdr-integrations.sh" \
+    || warn "Some herdr integrations failed — re-run scripts/herdr-integrations.sh (non-fatal)."
 fi
 
 # ── 3c. herdr-file-viewer content renderers (bat / delta / glow) ──
