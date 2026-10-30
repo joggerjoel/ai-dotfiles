@@ -36,6 +36,21 @@ if [ -z "$DISPATCH" ]; then
   exit 1
 fi
 sed -n "1,$((DISPATCH - 1))p" "$SETUP" > "$TMP/defs.sh"
+sed -n "${DISPATCH},\$p" "$SETUP" > "$TMP/dispatch.sh"
+
+# Exercise the real dispatcher without pulling or changing live config.
+for update_command in update --update; do
+  got=$(bash -c '
+    cmd_update() { printf "UPDATE:%s" "$1"; }
+    fail() { printf "%s" "$1"; }
+    source "$1" "$2" --no-pull
+  ' bash "$TMP/dispatch.sh" "$update_command" 2>&1)
+  if [ "$got" = "UPDATE:--no-pull" ]; then
+    ok "$update_command dispatches to update and forwards --no-pull"
+  else
+    ko "$update_command dispatches to update and forwards --no-pull" "got [$got]"
+  fi
+done
 
 # A PATH with no zsh on it. Can't just strip PATH: sourcing the definitions runs
 # `dirname` for DOTFILES_DIR. Can't stub zsh as a shell function either —

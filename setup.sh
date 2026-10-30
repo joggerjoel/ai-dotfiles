@@ -2688,7 +2688,7 @@ case "${1:-}" in
     check-herdr-temporal) shift; exec python3 "$DOTFILES_DIR/scripts/herdr-temporal-check.py" "$@" ;;
   add)      cmd_add "${2:-}" ;;
   list)     cmd_list ;;
-  update)   cmd_update "${2:-}" ;;
+  update|--update) cmd_update "${2:-}" ;;
   env)      cmd_env "${2:-}" "${3:-}" ;;
   tokens)   cmd_tokens ;;
   cache)    cmd_cache "${2:-}" "${3:-}" ;;
@@ -2721,6 +2721,7 @@ case "${1:-}" in
     echo "  ./setup.sh pin [c]      Hold an agent CLI at its version, incl. on unattended"
     echo "                          runs (list|add <name>|remove <name>)"
     echo "  ./setup.sh update       Pull latest and reassemble config"
+    echo "                          (alias: ./setup.sh --update)"
     echo "                          (--no-pull: reassemble without touching git)"
     echo "  ./setup.sh help         Show this help"
     ;;
