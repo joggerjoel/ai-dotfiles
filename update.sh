@@ -22,7 +22,9 @@ set -euo pipefail
 #   4b. Upgrade herdr (brew installs only), then re-register its agent
 #      integrations for pi, claude, codex, cursor, antigravity-cli and grok
 #      (scripts/herdr-integrations.sh, shared with setup.sh and the fleet
-#      playbook). Harnesses not on this host are skipped.
+#      playbook). Harnesses not on this host are skipped. Then re-sign it
+#      with the stable herdr-local identity (scripts/herdr-sign.sh) so macOS
+#      keeps its Local Network grant.
 #   5. Re-vendor the 9router skills from upstream and deploy them to
 #      ~/.claude/skills (scripts/vendor-9router-skills.sh --deploy).
 #   6. Refresh pstack (michael-denyer/pstack-claude) for Codex / Prime /
@@ -297,6 +299,18 @@ if [ "$RUN_AGENTS" = "yes" ] && command -v herdr &>/dev/null; then
   header "herdr agent integrations"
   bash "$DOTFILES_DIR/scripts/herdr-integrations.sh" \
     || warn "Some herdr integrations failed — re-run scripts/herdr-integrations.sh (non-fatal)."
+fi
+
+# ── 3b-iii. herdr code signature (macOS Local Network grant) ─────
+# A herdr release is ad-hoc signed with a per-build identity, so macOS drops
+# its Local Network grant and every LAN connect from a pane fails with "No
+# route to host". scripts/herdr-sign.sh re-signs it with the stable herdr-local
+# identity; it is a no-op when already signed and a skip off macOS. It never
+# restarts the server, which would close the panes this update may be running in.
+if [ "$RUN_AGENTS" = "yes" ] && command -v herdr &>/dev/null; then
+  header "herdr code signature"
+  bash "$DOTFILES_DIR/scripts/herdr-sign.sh" \
+    || warn "herdr signing failed — re-run scripts/herdr-sign.sh (non-fatal)."
 fi
 
 # ── 3c. herdr-file-viewer content renderers (bat / delta / glow) ──
