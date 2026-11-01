@@ -289,6 +289,10 @@ fix-claude-mem:
 fix-ghostty-ssh HOST="macstudio":
     @{{dotfiles}}/scripts/fix-ghostty-ssh.sh {{HOST}}
 
+# [fix] switch herdr's ssh aliases between LAN and tailnet routes (auto|lan|ts|status)
+herdr-network MODE="auto":
+    @{{dotfiles}}/scripts/herdr-network.sh {{MODE}}
+
 # [fix] untrack the per-host injection-guard baseline (must never be committed)
 fix-baseline:
     #!/usr/bin/env bash
