@@ -8,25 +8,44 @@
       vars:
         unreachable_note: "Herdr shell command was not updated"
 
-    - name: Fast-forward the existing ai-dotfiles checkout
-      ansible.builtin.command: git pull --ff-only origin main
-      args:
-        chdir: "{{ dotfiles_dir }}"
-      register: shell_pull
-      changed_when: "'Already up to date.' not in shell_pull.stdout"
+    - name: Require an existing zsh module registry
+      ansible.builtin.stat:
+        path: "{{ dotfiles_dir }}/zsh/modules.conf"
+      register: shell_registry
+
+    - ansible.builtin.assert:
+        that: shell_registry.stat.isreg | default(false)
+        fail_msg: "Install ai-dotfiles with its zsh registry before deploying this module"
 
     - name: Back up shell configuration
       ansible.builtin.shell: |
         set -eu
         backup_dir="$HOME/.claude/.backups/herdr-shell"
         mkdir -p "$backup_dir"
-        if [ -e "$HOME/.zshrc" ]; then
-          cp -L "$HOME/.zshrc" "$backup_dir/zshrc.$(date +%Y%m%d_%H%M%S)"
-          printf '%s | ~/.zshrc | deploy herdr-master shell command\n' "$(date '+%Y-%m-%d %H:%M')" >> "$HOME/.claude/.backups/CHANGELOG.md"
-        fi
+        for config in "$HOME/.zshrc" "$DOTFILES_CHECKOUT/zsh/modules.conf" "$DOTFILES_CHECKOUT/zsh/modules/herdr-orchestrator.zsh"; do
+          if [ -e "$config" ]; then
+            cp -L "$config" "$backup_dir/$(basename "$config").$(date +%Y%m%d_%H%M%S)"
+            printf '%s | %s | deploy herdr-master shell command\n' "$(date '+%Y-%m-%d %H:%M')" "$config" >> "$HOME/.claude/.backups/CHANGELOG.md"
+          fi
+        done
       args:
         executable: /bin/bash
+      environment:
+        DOTFILES_CHECKOUT: "{{ dotfiles_dir }}"
       changed_when: false
+
+    - name: Deploy only the supervisor shell module
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../zsh/modules/herdr-orchestrator.zsh"
+        dest: "{{ dotfiles_dir }}/zsh/modules/herdr-orchestrator.zsh"
+        mode: '0644'
+
+    - name: Register the supervisor command on both platforms
+      ansible.builtin.lineinfile:
+        path: "{{ dotfiles_dir }}/zsh/modules.conf"
+        regexp: '^[0-9]+\|herdr-orchestrator\|'
+        line: '88|herdr-orchestrator|both|-|-'
+        insertbefore: '^90\|completions\|'
 
     - name: Apply the shared zsh registry
       ansible.builtin.command: bash setup.sh zsh
