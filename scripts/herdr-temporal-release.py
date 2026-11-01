@@ -23,7 +23,7 @@ import uuid
 # proves by importing from a bare extraction.
 PACKET_TEMPLATE = "skills/amnesiac-workers/references/task-packet.md"
 ROOT_FILES = {"herdr-temporal", "herdr_unblocker.py", "requirements-temporal.txt", "MACHINE.template.md",
-              PACKET_TEMPLATE}
+              PACKET_TEMPLATE, "herdr_master/prompts/interpretation.md"}
 REQUIRED_FILES = ROOT_FILES | {"herdr_master/temporal_cli.py", "herdr_master/cli.py"}
 MAX_BYTES = 32 * 1024 * 1024
 

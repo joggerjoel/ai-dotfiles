@@ -29,6 +29,9 @@ class ReleaseTests(unittest.TestCase):
         template = self.source / "skills/amnesiac-workers/references/task-packet.md"
         template.parent.mkdir(parents=True)
         template.write_text("template\n")
+        prompt = self.source / "herdr_master/prompts/interpretation.md"
+        prompt.parent.mkdir(parents=True)
+        prompt.write_text("interpreter prompt\n")
         self.prefix = self.root / "installed"
         self.artifact = self.root / "worker.tar.gz"
         binaries = self.root / "bin"
@@ -72,7 +75,8 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(self.build(), first)
         with tarfile.open(self.artifact) as archive:
             self.assertEqual(sorted(archive.getnames()), ["MACHINE.template.md", "herdr-temporal",
-                             "herdr_master/cli.py", "herdr_master/temporal_cli.py", "herdr_unblocker.py", "requirements-temporal.txt",
+                             "herdr_master/cli.py", "herdr_master/prompts/interpretation.md",
+                             "herdr_master/temporal_cli.py", "herdr_unblocker.py", "requirements-temporal.txt",
                              "skills/amnesiac-workers/references/task-packet.md"])
 
     def test_source_symlink_rejected(self):
