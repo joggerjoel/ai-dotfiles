@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# herdr-network.sh — point herdr's ssh aliases at the LAN or at the tailnet.
+# herdr-network.sh points herdr's ssh aliases at the LAN or at the tailnet.
 #
 # herdr saves machines as ssh aliases and runs `ssh -F <tmpfile>`, where the
 # tmpfile starts with `Include ~/.ssh/config`. So whatever is in the ssh config
