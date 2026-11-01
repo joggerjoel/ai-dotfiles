@@ -118,10 +118,15 @@ if [ "$MODE" = status ]; then
 fi
 
 probe_lan() {
-  local dir i
+  local dir i nc_opts=(-z)
+  # macOS nc's -w is an idle timeout; only -G bounds the connect.
+  [ "$(uname -s)" = Darwin ] && nc_opts+=(-G "$PROBE_TIMEOUT")
+  nc_opts+=(-w "$PROBE_TIMEOUT")
   dir=$(mktemp -d "${TMPDIR:-/tmp}/herdr-network.XXXXXX")
   for i in "${!ALIASES[@]}"; do
-    (nc -z -w "$PROBE_TIMEOUT" "${HOSTS[i]}" "${PORTS[i]}" >/dev/null 2>&1 \
+    # a LAN alias that already names the tailnet host answers from anywhere
+    [ "${HOSTS[i]}" = "${TSHOSTS[i]}" ] && continue
+    (nc "${nc_opts[@]}" "${HOSTS[i]}" "${PORTS[i]}" >/dev/null 2>&1 \
       && echo "${ALIASES[i]} (${HOSTS[i]}:${PORTS[i]})" > "$dir/$i") &
   done
   wait

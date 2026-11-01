@@ -128,10 +128,38 @@ fi
 fresh
 touch "$TMP/stub/lan.up"
 run auto >/dev/null 2>&1
-if grep -q 'nc -z -w 1 192.168.1.20 2222' "$TMP/stub/calls" && grep -q 'nc -z -w 1 192.168.1.10 22' "$TMP/stub/calls"; then
+if grep -q ' 192.168.1.20 2222$' "$TMP/stub/calls" && grep -q ' 192.168.1.10 22$' "$TMP/stub/calls"; then
   ok "auto probes each pair's LAN HostName and Port"
 else
   ko "auto probe targets" "$(cat "$TMP/stub/calls" 2>/dev/null)"
+fi
+
+# macOS nc's -w is an idle timeout; only -G bounds the connect, so without it a
+# dead LAN address holds auto for the kernel's 75 s.
+fresh
+run auto >/dev/null 2>&1
+if [ "$(uname -s)" != Darwin ] || grep -q 'nc -z -G 1 -w 1 192.168.1.10 22' "$TMP/stub/calls"; then
+  ok "auto bounds each probe's connect time on macOS"
+else
+  ko "probe connect timeout" "$(cat "$TMP/stub/calls" 2>/dev/null)"
+fi
+
+# A pair whose LAN alias already names the tailnet host (macstudio) answers from
+# anywhere, so probing it would always pick lan.
+fresh
+cat >> "$TMP/h/config" <<'CFG'
+
+Host gamma
+  HostName gamma.example.ts.net
+
+Host gamma-ts
+  HostName gamma.example.ts.net
+CFG
+run auto >/dev/null 2>&1
+if ! grep -q 'gamma.example.ts.net' "$TMP/stub/calls" && grep -q '192.168.1.10' "$TMP/stub/calls"; then
+  ok "auto skips pairs whose LAN route is the tailnet route"
+else
+  ko "auto probes tailnet-only pair" "$(cat "$TMP/stub/calls" 2>/dev/null)"
 fi
 
 fresh
