@@ -1,0 +1,57 @@
+---
+- name: Deploy the Herdr supervisor shell command
+  hosts: ai_all
+  gather_facts: true
+  ignore_unreachable: true
+  tasks:
+    - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
+      vars:
+        unreachable_note: "Herdr shell command was not updated"
+
+    - name: Fast-forward the existing ai-dotfiles checkout
+      ansible.builtin.command: git pull --ff-only origin main
+      args:
+        chdir: "{{ dotfiles_dir }}"
+      register: shell_pull
+      changed_when: "'Already up to date.' not in shell_pull.stdout"
+
+    - name: Back up shell configuration
+      ansible.builtin.shell: |
+        set -eu
+        backup_dir="$HOME/.claude/.backups/herdr-shell"
+        mkdir -p "$backup_dir"
+        if [ -e "$HOME/.zshrc" ]; then
+          cp -L "$HOME/.zshrc" "$backup_dir/zshrc.$(date +%Y%m%d_%H%M%S)"
+          printf '%s | ~/.zshrc | deploy herdr-master shell command\n' "$(date '+%Y-%m-%d %H:%M')" >> "$HOME/.claude/.backups/CHANGELOG.md"
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Apply the shared zsh registry
+      ansible.builtin.command: bash setup.sh zsh
+      args:
+        chdir: "{{ dotfiles_dir }}"
+      async: 110
+      poll: 5
+
+    - name: Verify generated shell configuration loads the module
+      ansible.builtin.shell: |
+        set -eu
+        zsh -n "$HOME/.zshrc"
+        grep -F '/zsh/modules/herdr-orchestrator.zsh' "$HOME/.zshrc"
+        zsh -fc 'source "$1/zsh/modules/herdr-orchestrator.zsh"; whence -w herdr-master' -- "$DOTFILES_CHECKOUT"
+        if [ -x "$HOME/Developer/herdr-orchestrator/herdr-master" ]; then
+          echo 'orchestrator default checkout: present'
+        else
+          echo 'orchestrator default checkout: absent; configure HERDR_ORCHESTRATOR_DIR before use'
+        fi
+      args:
+        executable: /bin/bash
+      environment:
+        DOTFILES_CHECKOUT: "{{ dotfiles_dir }}"
+      changed_when: false
+      register: shell_check
+
+    - ansible.builtin.debug:
+        var: shell_check.stdout_lines
