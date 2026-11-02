@@ -126,15 +126,18 @@ count_verdict() {
 #
 # Order: coreutils under either name, then perl, which every macOS has. Perl's
 # alarm kills with SIGALRM (exit 142); remapped to 124 so callers keep reading
-# one number for "timed out". If none exist, run uncapped rather than not at
+# one number for "timed out". Every branch escalates to SIGKILL after a 10 s
+# grace: a child stopped by SIGTTIN/SIGTTOU (e.g. run from a hook without a
+# controlling terminal) never acts on SIGTERM, so TERM alone can hang forever.
+# If none exist, run uncapped rather than not at
 # all, and say so once -- a slow probe beats a missing one.
 PREFLIGHT_TIMEOUT_WARNED=0
 with_timeout() {
   local secs="$1"; shift
   if command -v timeout >/dev/null 2>&1; then
-    timeout "$secs" "$@"
+    timeout -k 10 "$secs" "$@"
   elif command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$secs" "$@"
+    gtimeout -k 10 "$secs" "$@"
   elif command -v perl >/dev/null 2>&1; then
     # perl forks and reaps rather than alarm+exec: an alarm survives exec, so
     # the child would die of SIGALRM and the shell would print "Alarm clock" to
@@ -144,7 +147,10 @@ with_timeout() {
       my $s = shift;
       my $pid = fork(); defined $pid or exit 127;
       if ($pid == 0) { exec @ARGV or exit 127; }
-      $SIG{ALRM} = sub { kill "TERM", $pid; waitpid($pid, 0); exit 124; };
+      $SIG{ALRM} = sub {
+        kill "TERM", $pid; kill "CONT", $pid; sleep 10;
+        kill "KILL", $pid; waitpid($pid, 0); exit 124;
+      };
       alarm $s; waitpid($pid, 0); alarm 0;
       exit($? >> 8);
     ' "$secs" "$@"
@@ -165,7 +171,7 @@ probe_mcp() {
   # `claude` is on PATH before main() ever calls probe_mcp, and exited 2 if
   # not. A duplicate guard here could never fire — see main()'s single
   # CHECKER_BROKEN check right after check_preconditions.
-  out=$(with_timeout "$MCP_TIMEOUT" claude mcp list 2>&1)
+  out=$(with_timeout "$MCP_TIMEOUT" claude mcp list </dev/null 2>&1)
   rc=$?
 
   # 124 is `timeout` killing the child. Every server becomes UNKNOWN — never
