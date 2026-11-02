@@ -7,8 +7,9 @@
 # codex: ~/.codex/hooks.json plus `[features] hooks = true`; cursor:
 # ~/.cursor/hooks.json; antigravity-cli: ~/.gemini/config/hooks.json; grok:
 # ~/.grok/hooks/herdr.json; pi: an extension .ts). herdr probes for the harness
-# itself and exits 0 with "<x> directory not found ... install <x> first" when
-# it is absent, so a host without a harness is a skip, never a failure.
+# itself and prints "<x> directory not found ... install <x> first" when it is
+# absent (exit 0 for most targets, 1 for antigravity-cli), so a host without a
+# harness is a skip, never a failure.
 #
 # Install runs for every target on every pass, even when `herdr integration
 # status` already says current. Status inspects only the hook SCRIPT, while the
@@ -82,13 +83,15 @@ for target in $HERDR_INTEGRATION_TARGETS; do
   out="$(herdr integration install "$target" 2>&1)"
   rc=$?
   last_line="$(printf '%s\n' "$out" | tail -n 1)"
-  if [ "$rc" -ne 0 ]; then
-    fail "$target: failed — ${last_line:-herdr exited $rc}"
-    failed=$((failed + 1))
-  elif printf '%s\n' "$out" | grep -q "not found"; then
+  if printf '%s\n' "$out" | grep -q "not found.*install .* first"; then
     # "pi extension directory not found at ~/.pi/agent/extensions. install pi first"
+    # Checked before rc: most targets exit 0 here, but antigravity-cli exits 1
+    # for the same "harness absent" case, and an absent harness is a skip.
     skip "$target: skipped (${last_line##*. })"
     skipped=$((skipped + 1))
+  elif [ "$rc" -ne 0 ]; then
+    fail "$target: failed — ${last_line:-herdr exited $rc}"
+    failed=$((failed + 1))
   else
     after="$(status_snapshot)"
     ver_after="$(version_of "$after" "$target")"

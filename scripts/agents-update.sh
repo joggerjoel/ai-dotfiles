@@ -260,13 +260,17 @@ register_cli "codex" "$HOME/.local/bin/codex" "$CODEX_INSTALL" "$CODEX_INSTALL"
 
 # cursor-agent needs the macOS login keychain, which is locked over
 # SSH — a doomed attempt would just pollute the report every run.
+CURSOR_KEYCHAIN_LOCKED=0
 if [ "$(uname -s)" = "Darwin" ] && [ -n "${SSH_CONNECTION:-}" ] \
    && ! security show-keychain-info >/dev/null 2>&1; then
+  CURSOR_KEYCHAIN_LOCKED=1
   block_cli "cursor-agent" "login keychain locked over SSH — update from a local session"
 else
+  # `update` needs a live login and fails "[unauthenticated]" once the token
+  # lapses; the public installer doubles as the updater and needs none.
+  CURSOR_INSTALL="curl $CURL_RETRY -fsSL https://cursor.com/install | bash"
   register_cli "cursor-agent" "$HOME/.local/bin/cursor-agent" \
-    "\"%BIN%\" update" \
-    "curl $CURL_RETRY -fsSL https://cursor.com/install | bash"
+    "\"%BIN%\" update || $CURSOR_INSTALL" "$CURSOR_INSTALL"
 fi
 
 # https://docs.snowflake.com/en/user-guide/cortex-code/cortex-code-cli
@@ -486,6 +490,39 @@ register_cli "playwright-cli" "playwright-cli" "$PLAYWRIGHT_CLI_INSTALL" "$PLAYW
 if command -v brew >/dev/null 2>&1 && [ "$(uname -s)" = "Darwin" ]; then
   ORCA_INSTALL="$SCRIPT_DIR/install-orca.sh"
   register_cli "orca" "orca" "$ORCA_INSTALL" "$ORCA_INSTALL" "brew_cask_latest stablyai/orca/orca"
+fi
+
+# ── cursor-agent login gate ──────────────────────────────────────
+# An installed binary is not a usable one: a lapsed token still prints
+# "Logged in (unable to fetch user details)", `update` then fails
+# "[unauthenticated]", and the installer fallback hides that the agent
+# itself is unusable. Only "Logged in as <user>" means a live session.
+# Login opens a browser URL that only a human can complete, so: wait for
+# one when attached (ahead of wave 2, so `update` runs authenticated);
+# on fleet/unattended runs, never block — say who must log in where.
+cursor_logged_in() {
+  $DOCTOR_TIMEOUT "$1" status </dev/null 2>&1 | grep -q "Logged in as"
+}
+CURSOR_BIN="$HOME/.local/bin/cursor-agent"
+# Skipped under a locked keychain: login would fail the same way upgrades
+# do, and the survey already reports that block.
+if [ "$CURSOR_KEYCHAIN_LOCKED" -eq 0 ] && [ -x "$CURSOR_BIN" ] \
+   && ! cursor_logged_in "$CURSOR_BIN"; then
+  if [ "$INTERACTIVE" = "yes" ]; then
+    echo -e "  ${YELLOW}!${RESET} cursor-agent needs a login — open the URL below, finish in the browser (Ctrl-C skips)"
+    # Ctrl-C reaches the whole foreground group; trap it here so it ends
+    # only the login, not the update run. No timeout: a human is pacing it.
+    trap ':' INT
+    "$CURSOR_BIN" login </dev/tty >/dev/tty 2>&1
+    trap - INT
+    if cursor_logged_in "$CURSOR_BIN"; then
+      ok "cursor-agent: logged in"
+    else
+      warn "cursor-agent: still not logged in — run: cursor-agent login"
+    fi
+  else
+    warn "cursor-agent on $(hostname -s): login required — run there: cursor-agent login (opens a browser URL)"
+  fi
 fi
 
 # ── Wave 1: survey (read-only) ───────────────────────────────────
