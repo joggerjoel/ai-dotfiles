@@ -73,20 +73,27 @@ fi
 
 [ -d "$SKILLS_SRC" ] || { warn "plugins/pstack/skills not found in clone — upstream layout changed?"; exit 1; }
 
+# Prune links we made earlier that now dangle (renamed or removed upstream);
+# they would otherwise sit there as broken entries every runtime lists. Only
+# links pointing INTO $src are ours to remove; anything else in $dir belongs to
+# the user or another installer. Runs even when $src itself is gone — that is
+# exactly how upstream retiring a whole tree (the Codex prompt stubs, #388)
+# leaves every link dangling.
+prune_dangling() {
+  local dir="$1" src="$2" label="$3" link pruned=0
+  [ -d "$dir" ] || return 0
+  for link in "$dir"/*; do
+    [ -L "$link" ] || continue
+    case "$(readlink "$link")" in
+      "$src"/*) [ -e "$link" ] || { rm -f "$link"; pruned=$((pruned + 1)); } ;;
+    esac
+  done
+  [ "$pruned" -eq 0 ] || ok "pruned $pruned stale $label link(s)"
+}
+
 # ── 2. shared Agent Skills tree ──────────────────────────────────
-# Prune first: a link we made earlier that now dangles (skill renamed or
-# removed upstream) would otherwise sit there as a broken entry every runtime
-# lists. Only links pointing INTO our clone are ours to remove; anything else
-# in ~/.agents/skills belongs to the user or another installer.
 mkdir -p "$AGENTS_SKILLS"
-pruned=0
-for link in "$AGENTS_SKILLS"/*; do
-  [ -L "$link" ] || continue
-  case "$(readlink "$link")" in
-    "$SKILLS_SRC"/*) [ -e "$link" ] || { rm -f "$link"; pruned=$((pruned + 1)); } ;;
-  esac
-done
-[ "$pruned" -gt 0 ] && ok "pruned $pruned stale skill link(s)"
+prune_dangling "$AGENTS_SKILLS" "$SKILLS_SRC" skill
 
 linked=0; kept=0
 for dir in "$SKILLS_SRC"/*/; do
@@ -107,6 +114,7 @@ done
 ok "skills → ~/.agents/skills ($linked linked, $kept current)"
 
 # ── 3. Codex: slash-command stubs + multi_agent ───────────────────
+prune_dangling "$CODEX_PROMPTS" "$PROMPTS_SRC" "codex prompt"
 if [ -d "$PROMPTS_SRC" ]; then
   mkdir -p "$CODEX_PROMPTS"
   plinked=0; pkept=0
