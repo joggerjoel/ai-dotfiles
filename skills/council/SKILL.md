@@ -25,8 +25,8 @@ review the _same_ text — reject any merge where fingerprints disagree (`versio
 **until a pass returns no new material findings** — convergence is the exit condition, not a
 round count (typically 2–3 rounds; cap at 5 as a backstop). Each round is one model call; the
 council's dedupe and consensus scoring then spend their budget on hard structural defects
-instead of noise. After the council's fixes are written back, run the same isolate loop to
-convergence again — fixes are new text from a context-loaded author and need fresh eyes too.
+instead of noise. The post-council write-back and isolate loop is **not** optional: Step 5 always
+runs it, because fixes are new text from a context-loaded author and need fresh eyes too.
 
 ## Step 1 — pick the execution mode
 
@@ -89,8 +89,28 @@ reviewers raised it, the anchoring task+snippet, the concrete failure, and the o
 root causes grouped. Lead with `critical`/`high`. Do not soften. If the council found nothing at a
 given severity, say so plainly rather than padding.
 
-Then offer next steps: feed the criticals back into the plan, or (if the user wants) open the doc
-and apply the fixes.
+## Step 5 — write back, then isolate until consensus (default; always runs)
+
+This step is part of every `/council` run. The user does not need to ask for it. Skip it only
+when the user says "report only", "no fixes" or "don't edit", or the document is not a file you
+can write.
+
+1. **Write back.** Apply the fix for every consensus `critical`, `high` and `medium` finding to
+   the document. Leave `low` findings and the needs-human-verification list for the user. Do not
+   resolve a finding by deleting the requirement it guards. A finding that needs a decision only
+   the user can make becomes an explicit open question in the document, not a guessed answer.
+2. **Isolate loop.** Run `isolate --review < <doc>` (cold, zero-context, strongest model; the
+   last line is `MATERIAL: <n> | NIT: <m>`). Apply every MATERIAL finding, then run it again.
+   Leave NITs alone unless they are trivial.
+3. **Exit on convergence.** Stop when a pass reports `MATERIAL: 0`. Two passes in a row that
+   report only material findings already fixed or rejected (with a written reason) also count as
+   converged. Cap at 5 passes. If the cap is hit, stop and report the remaining material findings
+   as unresolved rather than claiming consensus.
+4. **Never declare convergence from a weaker model.** The convergence pass must come from the
+   default `isolate` model, not a `-m` override to a cheaper one.
+
+Report per round: `round N: MATERIAL n | NIT m — <what changed>`. Finish with the final counts
+line, the list of edits made, any unresolved findings, and anything left for the user to decide.
 
 ## Reference
 

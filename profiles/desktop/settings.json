@@ -13,7 +13,8 @@
     "VERCEL_TELEMETRY_DISABLED": "1",
     "CAVEMAN_DEFAULT_MODE": "off",
     "AR_DISABLE_SIMPLIFY_GATE": "1",
-    "CLAUDE_MEM_LLM_TIMEOUT_MS": "120000"
+    "CLAUDE_MEM_LLM_TIMEOUT_MS": "120000",
+    "AR_DISABLE_PRIVACY_BLOCK": "1"
   },
   "includeCoAuthoredBy": false,
   "permissions": {
@@ -363,7 +364,16 @@
       "Bash(/Users/nolanhu/Developer/Git/sigma-synapses-monorepo/scripts/dev/secrets-link.sh)",
       "mcp__ide__getDiagnostics",
       "Bash(vercel inspect *)",
-      "WebFetch(domain:animations.dev)"
+      "WebFetch(domain:animations.dev)",
+      "Bash(launchctl list)",
+      "Bash(launchctl list *)",
+      "Bash(tailscale serve status)",
+      "Bash(tailscale serve status *)",
+      "Bash(codex --version)",
+      "Bash(codex login status)",
+      "Bash(shasum *)",
+      "Bash(git merge-base *)",
+      "mcp__plugin_context-mode_context-mode__ctx_search"
     ],
     "deny": [
       "Bash(rm -rf *)",
@@ -379,7 +389,7 @@
     "ask": [],
     "defaultMode": "bypassPermissions"
   },
-  "model": "fable",
+  "model": "opus",
   "hooks": {
     "PreToolUse": [
       {
@@ -912,5 +922,6 @@
   "remoteControlAtStartup": true,
   "skipAutoPermissionPrompt": true,
   "voiceEnabled": true,
+  "autoresearch@autoresearch": true,
   "allowDangerouslySkipPermissions": true
 }

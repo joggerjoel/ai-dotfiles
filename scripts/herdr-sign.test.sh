@@ -35,7 +35,10 @@ case "$1" in
       printf 'Identifier=herdr-f885a9882c5a59ec\nSignature=adhoc\n' >&2
     fi ;;
   -f)
-    [ -f "$STUB_DIR/sign.fails" ] && exit 1
+    if [ -f "$STUB_DIR/sign.fails" ]; then
+      echo 'codesign: errSecInternalComponent' >&2
+      exit 1
+    fi
     echo 'SIGNED-herdr-local' >> "$file" ;;
 esac
 STUB
@@ -53,6 +56,9 @@ STUB
 cat > "$TMP/bin/launchctl" <<'STUB'
 #!/bin/bash
 echo "launchctl $*" >> "$STUB_DIR/calls"
+if [ "$1" = print ] && [ -f "$STUB_DIR/service.missing" ]; then
+  exit 1
+fi
 STUB
 chmod +x "$TMP/bin/"*
 
@@ -101,6 +107,7 @@ reset_stub Darwin; rm "$TMP/stub/has.identity"; run
 
 reset_stub Darwin; touch "$TMP/stub/sign.fails"; before=$(cat "$TMP/stub/herdr"); run
 [ "$RC" -eq 1 ] && [ "$(cat "$TMP/stub/herdr")" = "$before" ] && [ ! -e "$TMP/stub/herdr.new" ] \
+  && [[ "$OUT" == *"codesign: errSecInternalComponent"* ]] \
   && ok "failed signing leaves the binary untouched" \
   || ko "failed signing leaves the binary untouched" "rc=$RC out=$OUT"
 
@@ -113,6 +120,11 @@ reset_stub Darwin; touch "$TMP/stub/locked"; before=$(cat "$TMP/stub/herdr"); ru
 reset_stub Darwin; run --restart
 [ "$RC" -eq 0 ] && called "launchctl kickstart -k gui/$(id -u)/dev.herdr.node" \
   && ok "--restart kickstarts the server" || ko "--restart kickstarts the server" "rc=$RC out=$OUT"
+
+reset_stub Darwin; touch "$TMP/stub/service.missing"; run --restart
+[ "$RC" -eq 1 ] && [[ "$OUT" == *"herdr server stop"* ]] && ! called "launchctl kickstart" \
+  && ok "missing service gives manual restart instructions" \
+  || ko "missing service gives manual restart instructions" "rc=$RC out=$OUT"
 
 reset_stub Darwin; run --bogus
 [ "$RC" -eq 1 ] && ! called codesign \

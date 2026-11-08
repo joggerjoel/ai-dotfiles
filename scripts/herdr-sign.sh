@@ -122,7 +122,7 @@ else
   # Sign a copy and rename it in: rewriting the file a running server has
   # mapped can kill it on its next page-in.
   if ! cp -p "$bin" "$bin.new" \
-      || ! codesign -f -s "$IDENTITY" --identifier "$SIGN_ID" "$bin.new" >/dev/null 2>&1 \
+      || ! codesign -f -s "$IDENTITY" --identifier "$SIGN_ID" "$bin.new" \
       || ! is_signed "$bin.new" \
       || ! mv -f "$bin.new" "$bin"; then
     rm -f "$bin.new"
@@ -134,6 +134,11 @@ else
 fi
 
 if [ "$restart" = yes ]; then
+  if ! launchctl print "gui/$(id -u)/$SERVICE" >/dev/null 2>&1; then
+    fail "$SERVICE is not loaded — automatic restart unavailable"
+    warn "from a terminal outside herdr, run: herdr server stop; then run: herdr (closes every pane)"
+    exit 1
+  fi
   ok "restarting $SERVICE"
   launchctl kickstart -k "gui/$(id -u)/$SERVICE" || { fail "launchctl kickstart $SERVICE failed"; exit 1; }
 fi
