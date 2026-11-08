@@ -1287,6 +1287,30 @@ get_field() {
 # run, or an install from before this fix) prunes nothing.
 SKILLS_MANIFEST_NAME=".installed-by-setup"
 
+# Pulls third-party skills from upstream (`just vendor-skills`) so update
+# installs current copies, not whatever was last committed. Desktop only: a
+# vps checkout is a deploy mirror that hard-resets to origin, so vendoring
+# there is discarded on the next run — the fleet gets new skills via a commit.
+# Skipped under --no-pull, whose contract is "apply the pushed tree as-is".
+# The result is left uncommitted for review. Non-fatal: a network or gh failure
+# must not block the config refresh.
+refresh_vendored_skills() {
+  local profile="$1" no_pull="$2"
+  if [ "$profile" != "desktop" ] || [ "$no_pull" = "yes" ]; then
+    skip "Vendored skill refresh skipped (profile=$profile, no-pull=$no_pull)"
+    return 0
+  fi
+  if ! command -v just &>/dev/null; then
+    warn "just not found — vendored skills not refreshed (install just, or run the scripts/vendor-*.sh by hand)"
+    return 0
+  fi
+  if (cd "$DOTFILES_DIR" && just vendor-skills); then
+    ok "Vendored skills refreshed from upstream (review + commit: git status skills/)"
+  else
+    warn "just vendor-skills failed — installing the skills already in the tree (non-fatal)"
+  fi
+}
+
 install_skills() {
   [ -d "$DOTFILES_DIR/skills" ] || return 0
   mkdir -p "$CLAUDE_DIR/skills"
@@ -2416,6 +2440,7 @@ cmd_update() {
   ok "Reference files updated"
 
   ensure_unlazy_payload
+  refresh_vendored_skills "$profile" "$no_pull"
   # Re-install repo-owned skills
   install_skills
 
