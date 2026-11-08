@@ -33,6 +33,7 @@ SKILLS=(
   "ibelick/ui-skills|skills/fixing-motion-performance|fixing-motion-performance"
   "ibelick/ui-skills|skills/improve-ui|improve-ui"
   "ibelick/ui-skills|skills/ui-skills-root|ui-skills-root"
+  "warpdotdev/common-skills|.agents/skills/skill-doctor|skill-doctor"
 )
 
 DOT="$(cd "$(dirname "$0")/.." && pwd)"

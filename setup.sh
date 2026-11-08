@@ -1380,6 +1380,7 @@ CODEX_SKILLS=(
   first-principles
   humanizer
   review-changes
+  skill-doctor
   test-and-fix
   verify
 )
