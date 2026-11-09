@@ -102,35 +102,41 @@
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
 
-- [ ] **4.1 Extract `sentinel-agent <project> <id>` from `sentinel-02-agent.sh`, keeping every current safety property.**
+- [x] **4.1 Extract `sentinel-agent <project> <id>` from `sentinel-02-agent.sh`, keeping every current safety property.**
     depends-on: ["1.1", "1.2", "1.3", "1.6", "1.7", "1.9", "2.1", "2.2", "3.1", "3.2"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: PR #22: bin/sentinel-agent <project> <id> keeps every safeguard of sentinel-02-agent.sh (evidence captured outside the sandbox, bwrap read-only root, private tmp, pid namespace, die-with-parent, .env masked, only work/ writable, Read and Edit on copies only, validated copy-back, run lock); refuses to run the model without bwrap.
 
-- [ ] **4.2 Copy-back guard: reject edits that move an issue to `accepted`, `fixed` or `closed`, remove an issue, change an existing pattern, or add a pattern to an `accepted` or `closed` issue. Test each with a crafted edit.**
+- [x] **4.2 Copy-back guard: reject edits that move an issue to `accepted`, `fixed` or `closed`, remove an issue, change an existing pattern, or add a pattern to an `accepted` or `closed` issue. Test each with a crafted edit.**
     depends-on: ["4.1"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: PR #22: copy-back guard rejects accepted/fixed/closed transitions, removed issues, changed patterns, patterns added to accepted or closed issues and invalid JSON, each with a crafted-edit test.
 
-- [ ] **4.3 Wrapper-written proposals: validate the model's proposal copy file and append to `proposals-<id>.jsonl`.**
+- [x] **4.3 Wrapper-written proposals: validate the model's proposal copy file and append to `proposals-<id>.jsonl`.**
     depends-on: ["4.2"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: PR #22: proposals validated (exact keys, lengths, existing issue_id) and appended to var/sentinel/proposals-<id>.jsonl with a proposal_id; tests.
 
-- [ ] **4.4 Wrapper metering: `claude -p --output-format json` with a pinned `--model`; append every run to `agent-runs-<id>.jsonl` with tokens and cost.**
+- [x] **4.4 Wrapper metering: `claude -p --output-format json` with a pinned `--model`; append every run to `agent-runs-<id>.jsonl` with tokens and cost.**
     depends-on: ["4.3"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: PR #22: claude -p --output-format json with a pinned --model; every run, failed and skipped included, appended to agent-runs-<id>.jsonl with tokens and cost; tests.
 
-- [ ] **4.5 Budget: skip runs at `max_usd_per_day`; truncate the snapshot to `max_input_kb`, noting it in the prompt.**
+- [x] **4.5 Budget: skip runs at `max_usd_per_day`; truncate the snapshot to `max_input_kb`, noting it in the prompt.**
     depends-on: ["4.4"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: PR #22: runs skip at max_usd_per_day (today only); snapshot truncated to max_input_kb with a note in the prompt; procrun validate requires both caps and a pinned model; tests.
 
-- [ ] **4.6 Project-level lock for runners sharing one `sentinel-issues.json`.**
+- [x] **4.6 Project-level lock for runners sharing one `sentinel-issues.json`.**
     depends-on: ["4.5"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: PR #22: one project lock var/sentinel/sentinel-issues.lock around copy-back for all runners of a project; busy lock keeps edits uncopied; tests.
 
 - [x] **4.7 `procrun validate` fails a model `sentinel` entry whose `sandbox` lacks `bwrap`, `read_only` or a tool list.**
     depends-on: ["4.6"]
@@ -138,10 +144,11 @@
     EXPECT tests: [0-9]+ passed, 0 failed
     Evidence: PR #21: procrun validate fails a model sentinel whose sandbox lacks bwrap = true, read_only = true or a non-empty tools list; tests in 'validate: model sentinel sandbox'.
 
-- [ ] **4.8 Enforce `retain` for rotated and dated logs; report single legacy logs without pruning or moving them.**
+- [x] **4.8 Enforce `retain` for rotated and dated logs; report single legacy logs without pruning or moving them.**
     depends-on: ["4.7"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: PR #22: bin/procrun-retain enforces retain for rotated generations and dated log_glob matches, never the newest, and only reports single legacy logs; procrun-retain.test.sh 20 checks; just test-all 0 failed.
 
 - [ ] **4.9 Live proof: Acceptance: one real proposal appears in Needs-you with its run's cost, and a crafted status-closing edit is rejected. Record it in `inventory/process-sentinel-p3.md`.**
     depends-on: ["4.8"]
