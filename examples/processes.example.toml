@@ -1,0 +1,116 @@
+# processes.toml: the procrun registry for one machine.
+#
+# Copy to ~/.config/procrun/processes.toml (or point PROCRUN_REGISTRY at it),
+# replace every entry with this machine's own, then run `procrun validate`.
+# Guide: guides/procrun.md. Every path may start with ~.
+#
+# Generate the first version from `crontab -l`, ~/.tmuxp/*.yaml,
+# `systemctl list-units --type=service` and `docker ps`, then maintain it by
+# hand. Entries generated from today's crontab start as
+# migration = "pending" with timeout = 0, so nothing is killed that is not
+# killed today; set a timeout only after two weeks of procrun records.
+
+[projects]
+# project key = project directory. Sentinel entries refer to "<key>:<id>".
+dice = "~/Documents/Projects/clubs/dice"
+
+[machine]
+host = "aorus8"
+mounts = ["/"]
+# Called as `<mailer> <subject>` with the body on stdin.
+mailer = "~/Documents/Projects/go-events-bin/gmail-send"
+
+# A cron job already wrapped: its crontab line is
+#   */15 * * * * cd $DICE && ~/.local/bin/procrun dice-onsale-notify -- ./run-notify-dice-onsale-upcoming.sh
+[[process]]
+name = "dice-onsale-notify"
+kind = "cron"               # cron | daemon | tmux-pane | container | systemd | sentinel
+schedule = "*/15 * * * *"   # must equal the crontab line's schedule
+timeout = 0                 # 0 = none; e.g. "10m" once measured
+max_silence = "30m"         # also the grace before a missed run is reported
+log = "~/Documents/Projects/clubs/dice/logs/dice-onsale-notify.log"
+progress = "~/Documents/Projects/clubs/dice/logs/dice-onsale-notify.log"
+overlap = "allow"           # allow | skip
+lock = ""                   # required when overlap = "skip"
+owner = "joggerjoel"
+criticality = "medium"      # low | medium | high (mail reminders 24h | 6h | 1h)
+sentinel = "dice:02"        # project key : sentinel id that reads this log
+retain = "30d"
+migration = "done"          # pending | done
+
+# A cron job not wrapped yet. `match` is a substring of its crontab line, so
+# validate can find it; it gets progress checks only until it is wrapped.
+[[process]]
+name = "dice-api-breaker"
+kind = "cron"
+schedule = "* * * * *"
+timeout = 0
+max_silence = "10m"
+progress = "~/Documents/Projects/clubs/dice/logs/dice-api-breaker.log"
+overlap = "skip"
+lock = "/tmp/dice-api-breaker.lock"   # the lock path its `flock -n` uses today
+owner = "joggerjoel"
+criticality = "high"
+migration = "pending"
+match = "dice-api-breaker.js"
+
+# A tmux pane: present when a process matching `pattern` runs under the pane's
+# shell. A surviving shell alone is not presence.
+[[process]]
+name = "dice-reachpro-monitor"
+kind = "tmux-pane"
+target = "dice:0.3"
+pattern = "dice-reachpro-monitor"
+max_silence = "15m"
+progress = "~/Documents/Projects/clubs/dice/logs/reachpro-monitor.log"
+owner = "joggerjoel"
+criticality = "high"
+
+# A daemon outside tmux: name a pid_file or a pattern.
+[[process]]
+name = "stubhub-auto-review"
+kind = "daemon"
+pattern = "main\\.py auto-review-pipeline-workbook"
+owner = "joggerjoel"
+criticality = "medium"
+
+[[process]]
+name = "9router"
+kind = "container"
+container = "9router"
+owner = "joggerjoel"
+criticality = "medium"
+
+[[process]]
+name = "mysql"
+kind = "systemd"
+unit = "mysql.service"
+# user_unit = true          # for `systemctl --user` units
+owner = "joggerjoel"
+criticality = "high"
+
+# A counting sentinel: progress is its checks file, max_silence its cadence.
+# `doc` is the watch doc a `dice-health-alert.sh checklog` line must read.
+[[process]]
+name = "sentinel-02"
+kind = "sentinel"
+sentinel = "dice:02"
+progress = "~/Documents/Projects/clubs/dice/var/sentinel/checks-02.jsonl"
+doc = "watch-sentinel-02.md"
+max_silence = "45m"
+owner = "joggerjoel"
+criticality = "medium"
+
+# A model sentinel adds its model, budget and sandbox (P3).
+[[process]]
+name = "sentinel-02-agent"
+kind = "sentinel"
+sentinel = "dice:02"
+progress = "~/Documents/Projects/clubs/dice/var/sentinel/checks-02.jsonl"
+max_silence = "45m"
+owner = "joggerjoel"
+criticality = "low"
+model = "pinned-model-id"
+max_usd_per_day = 2.0
+max_input_kb = 256
+sandbox = { bwrap = true, read_only = true, tools = ["Read", "Edit"] }
