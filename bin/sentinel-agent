@@ -22,7 +22,7 @@ Guide: guides/sentinel-agent.md in ai-dotfiles.
 #   - the model runs inside bubblewrap with a read-only filesystem, a private
 #     /tmp, its own pid namespace, no tmux socket and ~/.claude/.env masked;
 #     without bwrap the wrapper refuses to run the model at all;
-#   - an explicit tool allowlist: Read the snapshot, Edit copies in work/;
+#   - an explicit tool set (--tools) and allowlist: Read the snapshot, Edit copies in work/;
 #   - a copy is written back only when it changed, the real file did not
 #     change during the run, and the result is valid;
 #   - one run per sentinel at a time (a busy run lock skips the tick).
@@ -420,12 +420,12 @@ def guard_issues(old: dict, new, sid: str) -> list[str]:
 
 def copy_back(root: Path, snap: Path, work: Path, files: list[str], base: dict[str, str],
               sid: str) -> tuple[list[str], list[str]]:
-    """Copy edited, valid copies over unchanged originals. Caller holds the
-    project lock. Returns (copied, rejected)."""
+    """Copy the edited copies in files over unchanged originals. Caller holds
+    the project lock. Returns (copied, rejected)."""
     copied, rejected = [], []
     for f in files:
         real, mine = root / f, work / f
-        if not mine.is_file() or mine.read_bytes() == real.read_bytes():
+        if mine.read_bytes() == real.read_bytes():
             continue
         if sha(real) != base[f]:
             shutil.copyfile(mine, snap / f"{f}.conflict")
@@ -577,7 +577,7 @@ def run(project: str, sid: str) -> int:
     prompt = build_prompt(project, sid, doc, snap, work, files, tools, str(entry.get("instructions", "")), note)
     argv = sandbox_argv(bwrap, work) + [
         claude, "-p", prompt, "--output-format", "json", "--model", model,
-        "--setting-sources", "", "--permission-mode", "dontAsk",
+        "--setting-sources", "", "--permission-mode", "dontAsk", "--tools", ",".join(tools),
         "--allowedTools", *allowed_tools(tools, snap, work, doc)]
     log("start")
     rc, out = run_model(argv)
@@ -586,13 +586,14 @@ def run(project: str, sid: str) -> int:
     if result is not None or out.strip():
         log(f"model output:\n{result if result is not None else out.strip()}")
 
+    edited = [f for f in edit_files if (work / f).is_file() and sha(work / f) != base[f]]
     lock = try_lock(var / "sentinel-issues.lock", COPYBACK_LOCK_WAIT)
     if lock is None:
         log(f"project lock busy for {COPYBACK_LOCK_WAIT:g}s; edits kept in {work}, not copied back")
-        copied, rejected = [], edit_files
+        copied, rejected = [], edited
     else:
         try:
-            copied, rejected = copy_back(root, snap, work, edit_files, base, sid)
+            copied, rejected = copy_back(root, snap, work, edited, base, sid)
         finally:
             os.close(lock)
 
