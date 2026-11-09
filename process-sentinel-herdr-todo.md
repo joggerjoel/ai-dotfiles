@@ -20,15 +20,17 @@
     EXPECT tests: [0-9]+ passed, 0 failed
     Evidence: PR #20: procrun check with run, progress and presence signals, status precedence, croniter due times, silent first-run baseline, status.jsonl on transitions, check-state.json every run, criticality reminders, tmux presence, rotation under flock; tests in procrun.test.sh.
 
-- [ ] **1.4 Live proof: Add a `procrun watch-check` cron line that mails if `check-state.json` is older than 15 min.**
+- [x] **1.4 Live proof: Add a `procrun watch-check` cron line that mails if `check-state.json` is older than 15 min.**
     depends-on: ["1.3"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: aorus8 2026-11-09 (inventory/process-sentinel-p1.md): procrun check, watch-check and validate --mail cron lines installed as guides/procrun.md gives them, crontab backed up first; first check was a silent baseline. Not yet observed: watch-check actually mailing checker down.
 
-- [ ] **1.5 Live proof: Generate `processes.toml` for aorus8 from the crontab, tmuxp files, `systemctl` and `docker ps`; mark every `cron` entry `migration = "pending"`; add one `sentinel` entry per counting and model sentinel; set every `timeout = 0`; fill owner, `max_silence`, `progress`, criticality and identity fields by hand.**
+- [x] **1.5 Live proof: Generate `processes.toml` for aorus8 from the crontab, tmuxp files, `systemctl` and `docker ps`; mark every `cron` entry `migration = "pending"`; add one `sentinel` entry per counting and model sentinel; set every `timeout = 0`; fill owner, `max_silence`, `progress`, criticality and identity fields by hand.**
     depends-on: ["1.4"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: aorus8 2026-11-09: ~/.config/procrun/processes.toml generated from the crontab, tmuxp files, systemctl and docker ps, cron entries migration pending, one sentinel entry per counting and model sentinel, timeout 0; procrun validate passes (inventory/process-sentinel-p1.md).
 
 - [x] **1.6 Write `procrun validate` with the plan's fail and warn rules, including the `checklog` target rule; run it daily and from `procrun check` when the registry changed; it never blocks checks. Prove it fails on a missing launcher, a schedule mismatch and the old `watch-sentinel.md` target.**
     depends-on: ["1.3"]
@@ -42,10 +44,11 @@
     EXPECT tests: [0-9]+ passed, 0 failed
     Evidence: PR #20: link_bin_tools installs ~/.local/bin/procrun -> bin/procrun; tested, including running under cron's minimal PATH.
 
-- [ ] **1.8 Live proof: Wrap aorus8's cron lines in batches, backing up the crontab before each batch; replace each `flock -n` with `overlap = "skip"` and its lock path; mark wrapped entries `migration = "done"`.**
+- [x] **1.8 Live proof: Wrap aorus8's cron lines in batches, backing up the crontab before each batch; replace each `flock -n` with `overlap = "skip"` and its lock path; mark wrapped entries `migration = "done"`.**
     depends-on: ["1.7"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: aorus8 2026-11-09: cron lines wrapped with procrun in batches of at most 5 with a crontab backup before each (15 backups in ~/ps-task), flock -n replaced by overlap skip, wrapped entries migration done; lines whose behaviour wrapping would change were left unwrapped with the reason recorded (venue-lookup-sync, reachpro-match-audit-review) and the stale/checklog lines kept.
 
 - [x] **1.9 Keep every existing `stale` and `checklog` line until P2 acceptance.**
     depends-on: ["1.7"]
@@ -58,10 +61,11 @@
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
 
-- [ ] **1.11 Live proof: Acceptance on aorus8: a failing job, a job that exits 0 without writing, a disabled job, a killed `procrun`, a held lock and a stopped container show as `failed`, `stalled`, `missed`, `orphaned`, `blocked` and `down`, each within its threshold, and each mails; the first run after registry creation sent no mail. Record it in `inventory/process-sentinel-p1.md`.**
+- [x] **1.11 Live proof: Acceptance on aorus8: a failing job, a job that exits 0 without writing, a disabled job, a killed `procrun`, a held lock and a stopped container show as `failed`, `stalled`, `missed`, `orphaned`, `blocked` and `down`, each within its threshold, and each mails; the first run after registry creation sent no mail. Record it in `inventory/process-sentinel-p1.md`.**
     depends-on: ["1.10"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: aorus8 2026-11-09: throwaway pstest-* entries showed failed, stalled, orphaned and blocked at the 08:25 check and missed and down at 08:30, each mailed; the first run after registry creation sent no mail; test entries, cron lines and the pstest-sleep container removed (inventory/process-sentinel-p1.md).
 
 - [x] **2.1 Write the v1 contract as a short guide with one example per language, and ship single-file helpers for Node, Python and Bash from `ai-dotfiles` with a version line.**
     depends-on: []

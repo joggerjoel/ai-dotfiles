@@ -1,0 +1,214 @@
+# process-sentinel P1 on aorus8: evidence
+
+Machine: aorus8 (`hostname` = aorus8, TZ America/New_York), 2026-11-09, run by Claude on aorus8 itself.
+ai-dotfiles at `f643054` (procrun from `~/.local/bin/procrun` -> `~/ai-dotfiles/bin/procrun`, unmodified).
+Crontab before any change: `~/ps-task/crontab.initial.20261109_075546` (163 lines).
+Scripts written for this work (not installed anywhere): `~/ps-task/gen/` (`gen_registry.py`, `wrap.py`,
+`batch.sh`, `cronscan.py`, `profile_scan.js`).
+
+## Findings to know before reading the rows
+
+1. **procrun leaks uv's environment into the child.** `procrun` runs under `uv run --script`, so the
+   wrapped command got `PATH=<uv env>/bin:…` (so `python3` = uv's Python 3.12 with only `croniter`),
+   `VIRTUAL_ENV`, `UV`, `UV_RUN_RECURSION_DEPTH`, and Python's PEP 538 `LC_CTYPE=C.UTF-8`. Measured
+   with a cron-like `env -i HOME PATH=/usr/bin:/bin LOGNAME SHELL` (diff of `env | sort`):
+   ```
+   > LC_CTYPE=C.UTF-8
+   < PATH=/usr/bin:/bin
+   > PATH=/home/joggerjoel/.cache/uv/environments-v2/procrun-fcb6fa38a2b976e8/bin:/usr/bin:/bin
+   > UV=/home/joggerjoel/.local/bin/uv
+   > UV_RUN_RECURSION_DEPTH=1
+   > VIRTUAL_ENV=/home/joggerjoel/.cache/uv/environments-v2/procrun-fcb6fa38a2b976e8
+   ```
+   Every job that calls `python3` (directly or from a script) would have run on the wrong interpreter.
+   I did not edit procrun (outside this task's files). Every wrapped line instead runs its command
+   through `env -u VIRTUAL_ENV -u UV -u UV_RUN_RECURSION_DEPTH -u LC_CTYPE PATH="$PATH"` (`$PATH` is
+   expanded by cron's shell before procrun starts, so it is the line's original PATH). With that prefix
+   the diff is only `PROCRUN_PROC` and `PROCRUN_RUN_ID`, which is intended. **Fix upstream:** procrun's
+   `cmd_run` should build the child env from the environment it was started with (drop the four
+   variables and the uv bin dir), after which the prefix can be removed from the crontab.
+2. **procrun's tmux-pane probe cannot see a pane whose program was exec'd** (the pane pid _is_ the
+   program, it has no children): `14-go-events-dice:0.2` (`bin/dice-reachpro-monitor`) and
+   `08-stubhub-sale-manager:0.1` (`reachpro-prevent-cancel-rebroadcast.py`). Both are `kind = "daemon"`
+   entries with a `pattern` instead.
+3. **A `match` cannot separate identical crontab commands**, so lines whose command repeats on another
+   line (the three `run-dice-onsale-watch-if-not-running.sh` lines, `tmuxp-watchdog.sh` */10 vs
+   `@reboot`) cannot be `pending` entries without failing validation; and `@reboot` lines cannot be
+   entries at all (croniter has no `@reboot`). They stay as validate warnings until wrapped (`@reboot`: forever).
+4. Broken jobs found while reading scripts and logs (not changed, reported):
+   - `0 * * * * …/dice/config/one/purge_tmp.sh`: the script does not exist; `purge_tmp.log` gains
+     `/bin/sh: 1: …/purge_tmp.sh: not found` every hour.
+   - `0 20 * * * … run-reachpro-match-audit-review.sh >> /var/log/reachpro-match-audit-review.log`:
+     `/var/log` is `root:syslog 755`, the redirect fails and the job has never run from cron. Shows as
+     `stalled (progress file missing)` in `procrun check`.
+   - `0 7 * * * … sync_venue_lookup_from_sheet.py --apply && python3 promote_lookup_venue_aliases.py --apply >> …/venue-lookup-sync.log`:
+     only the second command is redirected; the log was last written 2026-09-20 (≈49 days).
+   - The cancelled-orders watcher (`08-stubhub-sale-manager:0.0`, pid 17406, alive) has written nothing to
+     `reachpos/stubhub-orders-watch/logs/stubhub-cancelled-orders-watch-20261001.log` since
+     2026-10-03 17:26:47, whose last lines are `ERROR could not persist state … [Errno 28] No space left on device`.
+     That file is sentinel 08's `orders` source, so sentinel 08 has read nothing from it for 37 days.
+5. `~/ai-dotfiles/guides/procrun.md` contains a leftover merge-conflict marker
+   (`||||||| parent of 2bfccc9 (feat: add procrun-retain …)`) before "## Retention". Not edited.
+6. **`missed` false alarm after wrapping (procrun gap, one false mail sent).** `missed` counts from the
+   entry's `first_seen`, which `procrun check` set at the 08:02 baseline while every cron entry was still
+   `pending`. When an entry flips to `done`, the window between the baseline and the wrap has no run
+   records, so `sentinel-cron` (grace 10 min, wrapped 08:16:17) was reported `missed` at 08:16:35 and
+   **mailed** ("sentinel-cron: missed - no start since 08:06"). I backed up `check-state.json`
+   (`~/ps-task/check-state.before-first_seen-reset.081640.json`) and, holding `check.lock`, set
+   `first_seen` of the 51 wrapped entries to 08:16:56 (after the last wrap); the next check recorded
+   `sentinel-cron missed -> ok` itself. No status was edited by hand. **Fix upstream:** reset
+   `first_seen` when an entry's migration changes to `done` (or count from its first `start`).
+
+## Row 1: generate `~/.config/procrun/processes.toml` — done
+
+Generated by `~/ps-task/gen/gen_registry.py` (re-run after every batch; it reads `gen/wrapped.txt`)
+from `crontab -l`, `~/.tmuxp/watchdog.enabled` + the 15 supervised yaml files + the live panes
+(`tmux list-panes` and each pane shell's process tree), `ps`, `docker ps`, `systemctl list-units`
+(system and `--user`, read only) and `dice/sentinel-issues.json` + `sentinel-cron.sh`.
+First version saved as `~/ps-task/processes.toml.row1.20261109_080154`.
+
+| kind | n | notes |
+| --- | --- | --- |
+| cron | 59 (58 at row 1) | one per crontab job line; all `pending` + `match` at row 1; `timeout = 0` everywhere |
+| tmux-pane | 32 | panes of the watchdog-supervised sessions with a long-running program (`pattern` = that program) |
+| daemon | 4 | `dice-onsale-watch` (nohup'd by the guard), `dice-reachpro-monitor` and `reachpro-prevent-cancel-rebroadcast` (exec'd pane programs, finding 2), `herdr server` |
+| container | 2 | `9router`, `headroom` |
+| systemd | 6 | mysql, rabbitmq-server, docker, otelcol, node_exporter, glances (desktop/GNOME user units left out) |
+| sentinel | 8 | counting 02 03 04 04b 05 07 08 (`progress = var/sentinel/checks-<id>.jsonl`, `doc`, `max_silence = 45m`) + model `sentinel-02-agent` |
+
+How fields were filled (from the scripts and logs, per job; table in `gen_registry.py`):
+- `log` = the line's `>>` target; `progress` = that log when it advances every run (checked: log
+  mtime age vs schedule, `gen/cronscan.py`), or the file the job really writes: `dice-api-breaker` ->
+  `var/dice-api-breaker.tick` (as the `stale breaker-tick` alert), `tmuxp-watchdog` -> `logs/tmuxp-watchdog.log`
+  (its cron log has been empty since July), `sentinel-02-agent-cron` -> `logs/sentinel-02-agent.log`,
+  `dice-compress-old-logs` -> its own log, `dice-purchases-cache-refresh` pane -> `var/purchases-refresh-ok`
+  (as the `stale purchases-refresh` alert), go-events poller panes -> their `loop.log`. No progress where the
+  job writes only on events (`dice-onsale-watch-guard`, alerts) or to dated files.
+- `max_silence`: a little over the longest gap between runs (daily 25h, `0 8,21` 14h, weekly 170h,
+  hourly 90m, `*/15` 30–40m; existing alert thresholds kept: `turn-off-broadcast` 40m). Every cron entry
+  has one, because it is also the `missed` grace.
+- `criticality`: `high` for jobs that move money or live listings (unbroadcast, reachpro sweeps/orphan/uncovered,
+  breaker, tag-sync and price-sync panes, watchdog), `low` for cleanup/prune/backup, `medium` otherwise.
+- `sentinel`: the sentinel whose source reads the log (02 bands/onsale/breaker, 03 price-sync/replenish, 04 recon,
+  04b listing-tracker, 05 sync-tracker, 07 broadcast watch, 08 orders/prevent).
+- The model sentinel entry has no `model`/`max_usd_per_day`/`max_input_kb`/`sandbox`: plan decision 4 is open, and
+  validate fails a model entry that carries only some of them.
+- `[machine] mailer = ~/.config/procrun/mail.sh`: gmail-send takes `<subject> <email.json>` (as
+  `dice-health-alert.sh` calls it), so a wrapper adapts it to `<mailer> <subject>`; it also appends every
+  call (time, rc, subject, body) to `~/.local/state/procrun/mail.log` as evidence.
+
+`procrun validate` at row 1 (08:01): exit 0, 0 FAIL, 5 WARN (`crontab line neither wrapped nor pending`) for the
+three `run-dice-onsale-watch-if-not-running.sh` lines and the two `tmuxp-watchdog.sh` lines (finding 3).
+Final (08:31): exit 0, 0 FAIL, 2 WARN — the two `@reboot` lines.
+
+Status preview before the baseline (throwaway `PROCRUN_STATE_DIR`): 107 ok, 1 `stalled`
+(`reachpro-match-audit-review`, finding 4). Added later from the logs: progress for `cancelled-orders-watch`,
+which is `stalled` since 2026-10-03 (finding 4).
+
+## Row 2: procrun check / watch-check / validate cron lines — done
+
+Backup `~/ps-task/crontab.backup.20261109_080200`, then appended exactly the guide's lines:
+```
+*/5 * * * * /home/joggerjoel/.local/bin/procrun check
+*/5 * * * * /home/joggerjoel/.local/bin/procrun watch-check
+17 6 * * * /home/joggerjoel/.local/bin/procrun validate --mail
+```
+(plus one comment line). `crontab -l` diff = those 4 lines; `procrun validate` exit 0.
+Because `watch-check` mails "checker down" when `check-state.json` does not exist, and both lines start in the same
+minute, I ran the first `procrun check` by hand at 08:02:07 so the 08:05 `watch-check` would not race it.
+**Baseline:** `~/.local/state/procrun` did not exist before; after the run: `check-state.json` (108 processes,
+each non-ok one with `last_mail` = baseline time), `status.jsonl` with 108 `from: null` transitions,
+**no `mail.log`, i.e. no mail**. The cron checks at 08:05, 08:10, 08:15 sent nothing either; the first mail is
+08:16:35 (row 3). `watch-check` has run every 5 min since 08:05 without mailing (state never older than 15 min).
+
+## Row 3: wrap the cron lines — done (51 wrapped, 8 left unwrapped on purpose, 2 `@reboot` cannot be)
+
+`gen/wrap.py` rewrites a line found by its entry's `match`; `gen/batch.sh` does, per batch:
+`crontab -l > ~/ps-task/crontab.backup.<ts>`, rewrite (≤5 lines), regenerate the registry (wrapped -> `migration =
+"done"`, no `match`), show `diff backup <(crontab -l)`, `procrun validate`, and restore backup + previous registry
+if validate fails (never needed). 11 batches 08:03:47–08:16:25, backups `crontab.backup.20261109_0803xx … _081625`.
+Every batch's diff was read before applying (one dry-run showed `procrun` inserted before a `cd` in
+`export PATH=… && cd … && cmd` and `TZ=… cd … && cmd`; the insertion was fixed before that batch was applied, and
+`crontab -l | grep 'PATH="$PATH" (cd|export) '` found no such line in the installed crontab).
+
+Rewrite rule: keep every `cd` / `export` / `VAR=value` prefix and trailing comment; drop `>> LOG 2>&1` (the entry's
+`log` is the same file); drop `flock -n LOCK` (entry gets `overlap = "skip"`, `lock = LOCK`: status-watch ×3
+`/tmp/sw-{eb,ra,posh}.lock`, `go-events-cycle` `/tmp/go-events-cycle.lock` (its `flock -c '…'` form unwrapped to
+the script, which has a bash shebang), `scrape-and-update` `/tmp/fleet.lock`, `unlinked-report`
+`/tmp/unlinked-report.lock`); run the command through the env restore (finding 1). Example:
+```
+- */15 * * * * cd $DICE_ONSALE && ./run-notify-dice-onsale-upcoming.sh >> logs/dice-onsale-notify.log 2>&1
++ */15 * * * * cd $DICE_ONSALE && /home/joggerjoel/.local/bin/procrun dice-onsale-notify -- env -u VIRTUAL_ENV -u UV -u UV_RUN_RECURSION_DEPTH -u LC_CTYPE PATH="$PATH" ./run-notify-dice-onsale-upcoming.sh
+```
+Left unwrapped (registry `pending` entry with `match`, so they still get progress checks):
+| line | why |
+| --- | --- |
+| `dice-api-breaker.js` (`flock -n -o`) | `-o` keeps the lock fd from the child; procrun passes it to the child (`pass_fds`), which is the 2026-10-29 lock leak documented in `dice-limits-plan.md` (restarted consumers inherited the lock, breaker skipped every tick 07:51–08:10) |
+| `0 2 * * * pkill -f chrome` | `pkill -f chrome` would match procrun's own command line (`procrun … -- pkill -f chrome`) and kill it |
+| `venue-lookup-sync` (`A && B >> log`) | only B is redirected; A's output goes to cron mail today, procrun would put it in the log |
+| `reachpro-match-audit-review` (`>> /var/log/…`) | the redirect fails, so the job has never run; wrapping (with any writable log) would start running it |
+| 4 × `dice-health-alert.sh stale …` / `checklog …` | plan: keep the legacy alert lines untouched until P2 |
+| 2 × `@reboot` (onsale guard, watchdog) | croniter has no `@reboot`; no entry possible. The @reboot watchdog can also start the tmux server, which would inherit the run's env |
+`alert-disk-root` and `alert-liveproxies-plan` (dice-health-alert `disk`/`cmd`, not `stale`/`checklog`) were wrapped.
+Never set a timeout on `dice-onsale-watch-guard*`: the watcher it nohups stays in procrun's process group.
+
+Checked after wrapping: first wrapped run `eb-token-probe` 08:15:01 — `start` + `end` (`exit 0`, 326 ms,
+`log_bytes 156`), log line identical in form to the unwrapped ones. By 08:20:45 `sentinel-cron` (4 runs),
+`alert-disk-root`, `dice-onsale-watch-guard`, `tmuxp-watchdog` (exit 0, 657 ms), `reachpro-live-inventory-resync`
+ran with exit 0. `unlinked-report` exit 1 and `status-watch-eventbrite` exit 1 are pre-existing failures that
+procrun now reports (`gspread WorksheetNotFound: id 1383166471`, same traceback as the unwrapped runs before;
+`status_watch.py` `UnboundLocalError: local variable 'events'`, 1983 times in `status-watch-cron.log` before today).
+`dice-purge-tmp` will report `failed` from its 09:00 run (script missing, finding 4).
+Final crontab: `~/ps-task/crontab.after-row3.20261109_082056` (= current crontab after row 4's cleanup).
+Registry: 59 cron entries, 51 `done`, 8 `pending`; every `timeout = 0`.
+
+## Row 4: acceptance with pstest-* entries — done
+
+Six throwaway entries (`criticality = "low"`), added 08:21:15 with five cron lines in one batch
+(backup `crontab.backup.20261109_082115`); `procrun validate` exit 0 after adding.
+| test | setup | status | when (check) | mailed |
+| --- | --- | --- | --- | --- |
+| failing job | `* * * * * procrun pstest-fail -- sh -c '… exit 3'` | `failed (exit 3)` | 08:25:02 (first check after its first run) | 08:25:04 |
+| exits 0 without writing | `pstest-silent -- true`, `progress = log`, created empty 08:21:15, `max_silence 3m` | `stalled` "no progress for 3 min" | 08:25:02 (age 3m47s > 3m) | 08:25:04 |
+| killed procrun | `procrun pstest-orphan -- sleep 1800` by hand, `kill -9` of procrun's python (pid 2486226) at 08:21:26; its `sleep` lived on in its own session | `orphaned` "run dc8020ca has no end and procrun is gone" | 08:25:02 | 08:25:04 |
+| held lock | `flock -n /tmp/pstest/pstest.lock sleep 1800` (unwrapped flock(1)); `pstest-lock` `overlap = "skip"` on that lock, every minute | `skipped` 08:22, 08:23, 08:24 -> `blocked` "three consecutive overlap skips" | 08:25:02 | 08:25:04 |
+| disabled job | `pstest-disabled` ran every minute until 08:25:02, then its line was commented out (backup `…_082513`); `max_silence 2m` | `missed` "no start since 08:28" | 08:30:01 (due 08:28 + 2 min grace, next check) | 08:30:06 |
+| stopped container | `docker run -d --name pstest-sleep alpine sleep 3600`, `kind = "container"`; ok at 08:21 and 08:25; `docker stop` 08:25:16 | `down` "container stopped" | 08:30:01 | 08:30:06 |
+Disabling the line also made `procrun validate` report exactly one FAIL: `process 'pstest-disabled': no crontab line found`.
+Mail log (`~/.local/state/procrun/mail.log`, all `rc=0`):
+```
+2026-11-09T08:25:04-05:00 rc=0 subject=procrun aorus8: 4 not ok
+    pstest-fail: failed - failed (exit 3) [low]
+    pstest-silent: stalled - no progress for 3 min (max_silence 3m) [low]
+    pstest-orphan: orphaned - run dc8020ca has no end and procrun is gone [low]
+    pstest-lock: blocked - three consecutive overlap skips [low]
+2026-11-09T08:30:06-05:00 rc=0 subject=procrun aorus8: 2 not ok
+    pstest-disabled: missed - no start since 2026-11-09T08:28-05:00 [low]
+    pstest-sleep: down - container stopped [low]
+```
+First run after registry creation sent no mail: baseline 08:02:07 (row 2), `mail.log` first written 08:16:35.
+Cleanup 08:30: removed the pstest cron lines (backup `crontab.backup.20261109_083022`; resulting crontab is
+identical to `crontab.after-row3.*`), removed the entries (regenerated registry has 0 `pstest`), `procrun validate`
+exit 0, killed the lock holder and both `sleep 1800`, `docker rm pstest-sleep` (0 left), next check dropped the
+pstest states (`grep -c pstest check-state.json` = 0). Records kept in `~/ps-task/pstest-evidence/`.
+Not tested here: `watch-check` actually mailing "checker down" (it would need `procrun check` stopped for 15 min).
+
+Other mails procrun sent today (real, not tests): 08:16:35 `sentinel-cron missed` (false, finding 6) +
+`cancelled-orders-watch stalled` (real); 08:20:04 `unlinked-report failed` (real, pre-existing). Expect
+`status-watch-eventbrite failed`, `dice-purge-tmp failed` and 6-hourly/24-hourly reminders for the real ones.
+
+## Files changed on aorus8
+- crontab (backups above), `~/.config/procrun/processes.toml` (+ `.prev`), `~/.config/procrun/mail.sh`,
+  `~/.local/state/procrun/*` (created by procrun; `check-state.json` first_seen reset per finding 6).
+- No procrun, Docker (other than pstest-sleep), systemd or database change.
+
+## Summary
+1. Generate processes.toml — **done** (111 entries; validate exit 0, 2 WARN for the `@reboot` lines).
+2. check / watch-check / validate --mail cron lines — **done**; silent baseline 08:02:07, no mail.
+3. Wrap the cron lines — **done**: 51 wrapped in 11 backed-up batches, `flock -n` → `overlap = "skip"` (6 jobs);
+   8 left unwrapped with reasons, 2 `@reboot` lines cannot be entries. Needs the env-restore prefix until procrun
+   is fixed (finding 1).
+4. Acceptance — **done**: failed, stalled, orphaned, blocked at 08:25; missed, down at 08:30; each mailed; test
+   entries, lines, processes and the container removed.
+5. Clubs 1.1, 1.2 — **done**; 1.3 — **not done** (v1 prepared behind `DICE_API_BREAKER_LOG=v1`, not switched,
+   because four readers parse the legacy format). See `process-sentinel-clubs.md`.
