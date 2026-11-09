@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for bin/procrun: the cron wrapper, `procrun check`, `procrun validate`,
-# `procrun watch-check`, the registry template and the ~/.local/bin install.
+# `procrun watch-check`, `procrun export`, the registry template and the ~/.local/bin install.
 #
 # Real processes, real files, no network beyond uv's first fetch of croniter.
 # crontab, docker, systemctl, tmux and the mailer are stubs on PATH, so the
@@ -632,6 +632,289 @@ touch -t 200001010000 "$PROCRUN_STATE_DIR/check-state.json"
 check "watch-check mails when check-state.json is older than 15 min" '[ "$rc" = 1 ] && grep -q "checker down" "$MAILLOG"'
 "$PR" watch-check 2>/dev/null
 check "watch-check mails at most once an hour" '[ "$(mail_count)" = 1 ]'
+
+# ── 4.7: model sentinel sandbox ──────────────────────────────────────────────
+echo "validate: model sentinel sandbox"
+cat > "$TMP/r-model.toml" <<EOF
+[projects]
+dice = "$TMP/dice"
+[[process]]
+name = "s02-agent"
+kind = "sentinel"
+sentinel = "dice:02"
+progress = "$TMP/dice/var/sentinel/checks-02.jsonl"
+model = "pinned-model"
+SANDBOX
+EOF
+model_validate() {  # model_validate SANDBOX-LINE: prints validate's output
+  sed "s#^SANDBOX\$#$1#" "$TMP/r-model.toml" > "$TMP/r-model-1.toml"
+  PROCRUN_REGISTRY="$TMP/r-model-1.toml" "$PR" validate 2>&1
+}
+out=$(model_validate 'sandbox = { bwrap = true, read_only = true, tools = ["Read", "Grep"] }')
+check "validate passes a model sentinel with bwrap, read_only and a tools list" \
+  '! printf "%s" "$out" | grep -q "sandbox"' "$out"
+out=$(model_validate 'sandbox = { read_only = true, tools = ["Read"] }')
+check "validate fails a model sentinel whose sandbox lacks bwrap" \
+  'printf "%s" "$out" | grep -q "FAIL: .*sandbox lacks bwrap = true$"' "$out"
+out=$(model_validate 'sandbox = { bwrap = true, read_only = false, tools = ["Read"] }')
+check "validate fails a model sentinel whose sandbox is not read_only" \
+  'printf "%s" "$out" | grep -q "FAIL: .*sandbox lacks read_only = true$"' "$out"
+out=$(model_validate 'sandbox = { bwrap = true, read_only = true }')
+check "validate fails a model sentinel whose sandbox has no tools list" \
+  'printf "%s" "$out" | grep -q "FAIL: .*sandbox lacks a tools list$"' "$out"
+out=$(model_validate 'sandbox = { bwrap = true, read_only = true, tools = "Read" }')
+check "validate fails a model sentinel whose tools is not a list" \
+  'printf "%s" "$out" | grep -q "FAIL: .*sandbox lacks a tools list$"' "$out"
+out=$(model_validate '')
+check "validate fails a model sentinel with no sandbox at all" \
+  'printf "%s" "$out" | grep -q "FAIL: .*sandbox lacks bwrap = true, read_only = true, a tools list"' "$out"
+out=$(model_validate 'sandbox = { bwrap = true, read_only = true, tools = [] }')
+check "validate fails a model sentinel with an empty tools list" \
+  'printf "%s" "$out" | grep -q "FAIL: .*sandbox lacks a tools list$"' "$out"
+
+# ── 3.1 / 3.2: procrun export ────────────────────────────────────────────────
+echo "export"
+EX="$TMP/export"
+mkdir -p "$EX/dice/var/sentinel" "$EX/logs"
+cat > "$EX/processes.toml" <<EOF
+[projects]
+dice = "$EX/dice"
+[machine]
+host = "exporthost"
+mounts = ["/", "$EX"]
+[[process]]
+name = "job"
+kind = "cron"
+schedule = "* * * * *"
+log = "$EX/logs/job.log"
+criticality = "high"
+[[process]]
+name = "calm"
+kind = "cron"
+schedule = "* * * * *"
+log = "$EX/logs/calm.log"
+[[process]]
+name = "sentinel-02"
+kind = "sentinel"
+sentinel = "dice:02"
+progress = "$EX/dice/var/sentinel/checks-02.jsonl"
+EOF
+cat > "$EX/dice/sentinel-issues.json" <<'EOF'
+{"issues": [
+  {"id": "02-A", "sentinel": "02", "status": "open", "title": "Proxy stalls", "match": [{"re": "secret-pattern"}]},
+  {"id": "02-B", "sentinel": "02", "status": "closed", "title": "mail ops@example.com about it"},
+  {"id": "03-A", "sentinel": "03", "status": "open", "title": "another sentinel"}
+]}
+EOF
+ES="$EX/state"
+mkdir -p "$ES"
+printf '{"v":1,"last_run":%s,"processes":{"job":{"status":"failed","detail":"failed (exit 3)","since":1},"calm":{"status":"ok"}}}\n' \
+  "$(python3 -c 'import time; print(time.time() - 60)')" > "$ES/check-state.json"
+{
+  for i in $(seq 1 80); do echo "job log line $i"; done
+  echo "token ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+  echo "anthropic sk-ant-api03-abcdefghijklmnopqrstuvwxyz"
+  echo "aws AKIAABCDEFGHIJKLMNOP"
+  echo "db password=hunter2hunter2"
+  echo "Authorization: Bearer abc.def.ghi"
+  echo "reported by someone@example.org"
+  echo "-----BEGIN OPENSSH PRIVATE KEY-----"
+  echo "b3BlbnNzaC1rZXktdjEAAAAA"
+  echo "-----END OPENSSH PRIVATE KEY-----"
+} > "$EX/logs/job.log"
+echo "calm log line" > "$EX/logs/calm.log"
+for i in 1 2 3; do printf '{"v":1,"proc":"job","event":"start","n":%s}\n' "$i"; done > "$ES/job.jsonl"
+printf '{"check":1}\n' > "$EX/dice/var/sentinel/checks-02.jsonl"
+printf '{"proposal_id":"p1"}\n' > "$EX/dice/var/sentinel/proposals-02.jsonl"
+printf '{"run_id":"r1","cost_usd":0.1}\n' > "$EX/dice/var/sentinel/agent-runs-02.jsonl"
+printf '{"proc":"job","to":"failed"}\n{"proc":"calm","to":"ok"}\n' > "$ES/status.jsonl"
+
+# export_req JSON OUT: run export with JSON on stdin, output in OUT, rc in $rc
+export_req() {
+  printf '%s' "$1" | PROCRUN_REGISTRY="$EX/processes.toml" PROCRUN_STATE_DIR="$ES" "$PR" export > "$2" 2>"$2.err"
+  rc=$?
+}
+# pyj FILE EXPR: Python over one JSON document J (streams by index: S[i])
+pyj() {
+  python3 - "$1" "$2" <<'EOF'
+import json, sys
+J = json.load(open(sys.argv[1]))
+S = J.get("streams", [])
+print(eval(sys.argv[2]))
+EOF
+}
+if stat --version >/dev/null 2>&1; then snapshot() { find "$EX" -exec stat -c '%n %s %Y %i' {} + | sort; }
+else snapshot() { find "$EX" -exec stat -f '%N %z %m %i' {} + | sort; }; fi
+snapshot > "$TMP/ex-before"
+
+export_req '[{"stream":"runs","key":"job"},{"stream":"status","key":"job"},{"stream":"checks","key":"dice:02"},{"stream":"proposals","key":"dice:02"},{"stream":"agent_runs","key":"dice:02"}]' "$TMP/ex1.json"
+check "export answers a valid request with exit 0" '[ "$rc" = 0 ]' "$(cat "$TMP/ex1.json.err")"
+check "export: runs returns the process's record lines" \
+  '[ "$(pyj "$TMP/ex1.json" "[json.loads(l)[\"n\"] for l in S[0][\"lines\"]]")" = "[1, 2, 3]" ]'
+check "export: status returns only the named process's transitions" \
+  '[ "$(pyj "$TMP/ex1.json" "S[1][\"lines\"]")" = "['"'"'{\"proc\":\"job\",\"to\":\"failed\"}'"'"']" ]'
+check "export: checks, proposals and agent_runs resolve from the sentinel's directory" \
+  '[ "$(pyj "$TMP/ex1.json" "[len(s[\"lines\"]) for s in S[2:5]]")" = "[1, 1, 1]" ]'
+check "export: check-state.json last-run time is returned" \
+  '[ "$(pyj "$TMP/ex1.json" "J[\"check\"][\"last_run\"] is not None and 50 <= J[\"check\"][\"age_s\"] <= 600")" = True ]'
+check "export: sentinel issue statuses carry id, status and title only, per sentinel" \
+  '[ "$(pyj "$TMP/ex1.json" "J[\"sentinels\"]")" = "[{'"'"'key'"'"': '"'"'dice:02'"'"', '"'"'issues'"'"': [{'"'"'id'"'"': '"'"'02-A'"'"', '"'"'status'"'"': '"'"'open'"'"', '"'"'title'"'"': '"'"'Proxy stalls'"'"'}, {'"'"'id'"'"': '"'"'02-B'"'"', '"'"'status'"'"': '"'"'closed'"'"', '"'"'title'"'"': '"'"'mail [REDACTED:email] about it'"'"'}]}]" ]' \
+  "$(pyj "$TMP/ex1.json" "J[\"sentinels\"]")"
+check "export: df for every registry mount" \
+  '[ "$(pyj "$TMP/ex1.json" "[d[\"total\"] > 0 and d[\"free\"] >= 0 for d in J[\"disk\"]]")" = "[True, True]" ]'
+check "export: a non-ok process gets the last 50 lines of its log (a key block redacts to one line)" \
+  '[ "$(pyj "$TMP/ex1.json" "(lambda t: (t[0], t[-1]))(J[\"processes\"][0][\"log_tail\"].split(chr(10)))")" = "('"'"'job log line 40'"'"', '"'"'[REDACTED:private_key]'"'"')" ]'
+check "export: an ok process gets no log excerpt" \
+  '[ "$(pyj "$TMP/ex1.json" "\"log_tail\" in J[\"processes\"][1]")" = False ]'
+
+# 3.2: redaction removes token, key, password, Authorization and email patterns.
+for secret in ghp_abcdefghijklmnopqrstuvwxyz0123456789 sk-ant-api03-abcdefghijklmnopqrstuvwxyz \
+              AKIAABCDEFGHIJKLMNOP hunter2hunter2 abc.def.ghi someone@example.org ops@example.com \
+              b3BlbnNzaC1rZXktdjEAAAAA; do
+  check "export redacts $secret" '! grep -qF "$secret" "$TMP/ex1.json"'
+done
+check "export marks each redaction with its rule" \
+  '( for r in github_token anthropic_key aws_access_key secret_assignment authorization email private_key; do grep -q "REDACTED:$r" "$TMP/ex1.json" || exit 1; done )'
+check "export: the redaction rules are byte-identical to toodoo-herdr's (when checked out)" \
+  'th="${TOODOO_HERDR_DIR:-$DOT/../toodoo-herdr}/toodoo_herdr/redaction-rules.json"; [ ! -f "$th" ] || cmp -s "$th" "$DOT/lib/procrun/redaction-rules.json"'
+
+# 3.2: a request naming a path or an unknown key is rejected.
+# shellcheck disable=SC2088 # a literal ~ is the point: keys are never expanded
+for key in /etc/passwd ../job "~/.ssh/id_ed25519" "job/../../x" ".hidden" "dice:02/../../../etc"; do
+  export_req "[{\"stream\":\"runs\",\"key\":\"$key\"},{\"stream\":\"checks\",\"key\":\"$key\"}]" "$TMP/ex-path.json"
+  check "export rejects a path as a key: $key" \
+    '[ "$rc" = 1 ] && [ "$(pyj "$TMP/ex-path.json" "[s.get(\"error\") for s in S] + [\"lines\" in s for s in S]")" = "['"'"'keys are registry names, never paths'"'"', '"'"'keys are registry names, never paths'"'"', False, False]" ]'
+done
+export_req '[{"stream":"runs","key":"ghost"},{"stream":"checks","key":"dice:99"},{"stream":"checks","key":"job"},{"stream":"runs","key":"dice:02"},{"stream":"runs","key":"job"}]' "$TMP/ex-unk.json"
+check "export rejects unknown keys and keys of the wrong kind, and still answers the rest" \
+  '[ "$rc" = 1 ] && [ "$(pyj "$TMP/ex-unk.json" "[s.get(\"error\") for s in S[:4]] + [len(S[4][\"lines\"])]")" = "['"'"'unknown key'"'"', '"'"'unknown key'"'"', '"'"'unknown key'"'"', '"'"'unknown key'"'"', 3]" ]'
+for bad in 'not json' '{"stream":"runs","key":"job"}' '[{"stream":"files","key":"job"}]' \
+           '[{"stream":"runs","key":"job","path":"/etc/passwd"}]' '[{"stream":"runs","key":"job","offset":-1}]' \
+           '[{"stream":"runs","key":["job"]}]'; do
+  export_req "$bad" "$TMP/ex-bad.json"
+  check "export rejects a malformed request with exit 2: $bad" \
+    '[ "$rc" = 2 ] && [ "$(pyj "$TMP/ex-bad.json" "sorted(J)")" = "['"'"'error'"'"', '"'"'v'"'"']" ]'
+done
+
+snapshot > "$TMP/ex-after"
+check "export writes nothing (every file's size, mtime and inode unchanged; nothing created)" \
+  'diff "$TMP/ex-before" "$TMP/ex-after" >/dev/null' "$(diff "$TMP/ex-before" "$TMP/ex-after")"
+printf '[]' | PROCRUN_REGISTRY="$EX/processes.toml" PROCRUN_STATE_DIR="$EX/no-state" "$PR" export > /dev/null
+check "export does not create a missing state directory" '[ ! -e "$EX/no-state" ]'
+
+# 3.2: rotation between polls loses no line. Position is (inode, offset).
+pos_of() { pyj "$1" "json.dumps({k: S[0][k] for k in (\"inode\", \"offset\", \"prev\") if k in S[0]})"; }
+runs_req() {  # runs_req POSITION-JSON: a runs request for job continuing at that position
+  python3 -c 'import json, sys; d = json.loads(sys.argv[1]); d.update(stream="runs", key="job"); print(json.dumps([d]))' "$1"
+}
+export_req '[{"stream":"runs","key":"job"}]' "$TMP/p1.json"
+p=$(pos_of "$TMP/p1.json")
+for i in 4 5; do printf '{"v":1,"proc":"job","event":"start","n":%s}\n' "$i" >> "$ES/job.jsonl"; done
+printf '{"v":1,"proc":"job","event":"start","n":6,"partial":' >> "$ES/job.jsonl"  # still being written
+export_req "$(runs_req "$p")" "$TMP/p2.json"
+check "export returns only lines after the offset, and no partial line" \
+  '[ "$(pyj "$TMP/p2.json" "[json.loads(l)[\"n\"] for l in S[0][\"lines\"]]")" = "[4, 5]" ]'
+p=$(pos_of "$TMP/p2.json")
+printf 'true}\n{"v":1,"proc":"job","event":"start","n":7}\n' >> "$ES/job.jsonl"
+mv "$ES/job.jsonl" "$ES/job.jsonl.1"   # procrun check's rotation is this rename
+for i in 8 9; do printf '{"v":1,"proc":"job","event":"start","n":%s}\n' "$i" >> "$ES/job.jsonl"; done
+export_req "$(runs_req "$p")" "$TMP/p3.json"
+check "rotation between polls: the rest of .1 comes first, then the new file, nothing lost" \
+  '[ "$(pyj "$TMP/p3.json" "([json.loads(l)[\"n\"] for l in S[0][\"lines\"]], S[0][\"gap\"])")" = "([6, 7, 8, 9], False)" ]' \
+  "$(cat "$TMP/p3.json")"
+p=$(pos_of "$TMP/p3.json")
+printf '{"v":1,"proc":"job","event":"end","n":10}\n' >> "$ES/job.jsonl.1"  # a run open across the rename ends in .1
+printf '{"v":1,"proc":"job","event":"start","n":11}\n' >> "$ES/job.jsonl"
+export_req "$(runs_req "$p")" "$TMP/p4.json"
+check "a line written to .1 after the collector moved on is still returned (prev)" \
+  '[ "$(pyj "$TMP/p4.json" "[json.loads(l)[\"n\"] for l in S[0][\"lines\"]]")" = "[10, 11]" ]' "$(cat "$TMP/p4.json")"
+p=$(pos_of "$TMP/p4.json")
+export_req "$(runs_req "$p")" "$TMP/p5.json"
+check "a poll with nothing new returns nothing" '[ "$(pyj "$TMP/p5.json" "S[0][\"lines\"]")" = "[]" ]'
+# Hard links keep the replaced files' inodes allocated, so a new file cannot
+# reuse the inode the position names (ext4 reuses freed inodes at once).
+ln "$ES/job.jsonl.1" "$TMP/keep-a"; ln "$ES/job.jsonl" "$TMP/keep-b"
+mv "$ES/job.jsonl" "$ES/job.jsonl.1"
+printf '{"v":1,"proc":"job","event":"start","n":12}\n' > "$ES/job.jsonl"
+mv "$ES/job.jsonl" "$ES/job.jsonl.1"
+printf '{"v":1,"proc":"job","event":"start","n":13}\n' > "$ES/job.jsonl"
+export_req "$(runs_req "$p")" "$TMP/p6.json"
+check "two rotations between polls are reported as a gap, then read from the start" \
+  '[ "$(pyj "$TMP/p6.json" "([json.loads(l)[\"n\"] for l in S[0][\"lines\"]], S[0][\"gap\"])")" = "([12, 13], True)" ]'
+
+# 1 MB cap: more is set, and following the positions returns every line once.
+python3 - "$ES/job.jsonl" <<'EOF'
+import sys
+with open(sys.argv[1], "w") as f:
+    for i in range(3000):
+        f.write('{"v":1,"proc":"job","n":%d,"pad":"%s"}\n' % (i, "x" * 700))
+EOF
+rm -f "$ES/job.jsonl.1"
+p='{}'; seen="$TMP/cap-seen"; : > "$seen"; polls=0; maxbytes=0
+while [ $polls -lt 10 ]; do
+  export_req "$(runs_req "$p")" "$TMP/cap.json"
+  polls=$((polls + 1))
+  size=$(wc -c < "$TMP/cap.json"); [ "$size" -gt "$maxbytes" ] && maxbytes=$size
+  pyj "$TMP/cap.json" "'\n'.join(str(json.loads(l)['n']) for l in S[0]['lines'])" | grep . >> "$seen"
+  p=$(pos_of "$TMP/cap.json")
+  [ "$(pyj "$TMP/cap.json" "S[0][\"more\"]")" = True ] || break
+done
+check "the response is capped at 1 MB and needs several polls for 2 MB" \
+  '[ "$maxbytes" -le $((1024 * 1024 + 1)) ] && [ "$polls" -ge 3 ]' "max $maxbytes bytes, $polls polls"
+check "following the capped responses returns every line exactly once, in order" \
+  '[ "$(seq 0 2999 | cmp -s - "$seen" && echo same)" = same ]'
+
+python3 - "$ES/job.jsonl" <<'EOF2'
+import sys
+with open(sys.argv[1], "a") as f:
+    f.write('{"v":1,"proc":"job","n":"huge","pad":"%s"}\n' % ("y" * (1100 * 1024)))
+    f.write('{"v":1,"proc":"job","n":"after"}\n')
+EOF2
+export_req "$(runs_req "$p")" "$TMP/big.json"
+check "a line larger than the cap is skipped and counted, and the position moves past it" \
+  '[ "$(pyj "$TMP/big.json" "([json.loads(l)[\"n\"] for l in S[0][\"lines\"]], S[0].get(\"oversize_lines\"))")" = "(['"'"'after'"'"'], 1)" ]' \
+  "$(head -c 300 "$TMP/big.json")"
+
+# The cap can stop a poll inside the .1 lines that prev points at; the
+# position then stays in the current file, which is not read twice.
+printf '{"v":1,"proc":"job","n":"cur1"}\n' > "$ES/job.jsonl"
+export_req '[{"stream":"runs","key":"job"}]' "$TMP/pv1.json"
+p=$(pos_of "$TMP/pv1.json")
+mv "$ES/job.jsonl" "$ES/job.jsonl.1"
+printf '{"v":1,"proc":"job","n":"cur2"}\n' > "$ES/job.jsonl"
+export_req "$(runs_req "$p")" "$TMP/pv2.json"
+p=$(pos_of "$TMP/pv2.json")
+python3 - "$ES/job.jsonl.1" <<'EOF2'
+import sys
+with open(sys.argv[1], "a") as f:
+    for i in range(2000):
+        f.write('{"v":1,"proc":"job","n":"late%d","pad":"%s"}\n' % (i, "z" * 700))
+EOF2
+printf '{"v":1,"proc":"job","n":"cur3"}\n' >> "$ES/job.jsonl"
+: > "$seen"; polls=0
+while [ $polls -lt 10 ]; do
+  export_req "$(runs_req "$p")" "$TMP/pv.json"
+  polls=$((polls + 1))
+  pyj "$TMP/pv.json" "'\n'.join(json.loads(l)['n'] for l in S[0]['lines'])" | grep . >> "$seen"
+  p=$(pos_of "$TMP/pv.json")
+  [ "$(pyj "$TMP/pv.json" "S[0][\"more\"]")" = True ] || break
+done
+check "late .1 lines larger than the cap: every line once, and the current file is not re-read" \
+  '[ "$(sort "$seen" | uniq -d | wc -l | tr -d " ")" = 0 ] && [ "$(wc -l < "$seen" | tr -d " ")" = 2001 ] && [ "$(tail -1 "$seen")" = cur3 ] && [ $polls -ge 2 ]' \
+  "$(wc -l < "$seen") lines in $polls polls; dups: $(sort "$seen" | uniq -d | head -3)"
+
+# Fail closed: without the rules file nothing is exported.
+mkdir -p "$TMP/norules/bin"
+cp "$PR" "$TMP/norules/bin/procrun"
+out=$(printf '[]' | PROCRUN_REGISTRY="$EX/processes.toml" PROCRUN_STATE_DIR="$ES" "$TMP/norules/bin/procrun" export); rc=$?
+check "export fails closed when the redaction rules are missing" \
+  '[ "$rc" = 2 ] && printf "%s" "$out" | grep -q "redaction rules unavailable" && ! printf "%s" "$out" | grep -q exporthost' "$out"
+
+# A registry name that is a path cannot be declared either.
+printf '[[process]]\nname = "../escape"\nkind = "sentinel"\n' > "$TMP/r-pathname.toml"
+out=$(PROCRUN_REGISTRY="$TMP/r-pathname.toml" "$PR" validate 2>&1)
+check "validate fails a process name that is a path" \
+  'printf "%s" "$out" | grep -q "name must not contain a path separator"' "$out"
 
 # ── 1.7: install ─────────────────────────────────────────────────────────────
 echo "install"

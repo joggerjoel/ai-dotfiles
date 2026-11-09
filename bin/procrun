@@ -10,6 +10,7 @@ USAGE = """procrun: run, check and validate the processes named in a machine reg
     procrun check                           compute statuses, mail transitions
     procrun validate [--mail]               check the registry against the machine
     procrun watch-check [--max-age 15m]     mail if `procrun check` stopped running
+    procrun export < request.json           read-only, redacted state for a collector
 
 Registry: $PROCRUN_REGISTRY, default ~/.config/procrun/processes.toml.
 Guide: guides/procrun.md in ai-dotfiles.
@@ -24,6 +25,8 @@ Guide: guides/procrun.md in ai-dotfiles.
 # Environment: PROCRUN_REGISTRY, PROCRUN_STATE_DIR (default
 # $XDG_STATE_HOME/procrun or ~/.local/state/procrun), PROCRUN_KILL_GRACE
 # (seconds between SIGTERM and SIGKILL on timeout, default 10), PROCRUN_UV.
+# `procrun export` loads lib/procrun/redaction-rules.json beside this script's
+# real path (a byte-identical copy of toodoo-herdr's toodoo_herdr/redaction-rules.json).
 
 import datetime as dt
 import errno
@@ -47,7 +50,7 @@ from croniter import croniter
 V = 1
 KINDS = ("cron", "daemon", "tmux-pane", "container", "systemd", "sentinel")
 STATUSES = ("down", "orphaned", "failed", "missed", "blocked", "stalled", "ok")
-SUBCOMMANDS = ("check", "validate", "watch-check")
+SUBCOMMANDS = ("check", "validate", "watch-check", "export")
 ROTATE_BYTES = 10 * 1024 * 1024
 TAIL_BYTES = 256 * 1024
 REMIND = {"high": 3600, "medium": 6 * 3600, "low": 24 * 3600}
@@ -730,6 +733,8 @@ def schema_errors(reg: dict) -> list[str]:
             errs.append(f"{where}: duplicate name")
         elif name in SUBCOMMANDS:
             errs.append(f"{where}: name collides with a procrun subcommand")
+        elif not path_free(str(name)):
+            errs.append(f"{where}: name must not contain a path separator or start with . or ~")
         seen.add(name)
         kind = e.get("kind")
         if kind not in KINDS:
@@ -816,9 +821,16 @@ def sentinel_errors(e: dict, reg: dict) -> list[str]:
     if prog is None or prog.name != f"checks-{sid}.jsonl" or not prog.is_relative_to(root):
         errs.append(f"{where}: progress must be checks-{sid}.jsonl inside project {proj!r} ({root})")
     if e.get("model"):
-        sb = e.get("sandbox") or {}
-        if sb.get("bwrap") is not True or sb.get("read_only") is not True or not sb.get("tools"):
-            errs.append(f"{where}: model sentinel sandbox needs bwrap = true, read_only = true and tools")
+        sb = e.get("sandbox")
+        sb = sb if isinstance(sb, dict) else {}
+        tools = sb.get("tools")
+        tool_list = (isinstance(tools, list) and bool(tools)
+                     and all(isinstance(t, str) and t.strip() for t in tools))
+        missing = [k for k, good in (("bwrap = true", sb.get("bwrap") is True),
+                                     ("read_only = true", sb.get("read_only") is True),
+                                     ("a tools list", tool_list)) if not good]
+        if missing:
+            errs.append(f"{where}: model sentinel sandbox lacks {', '.join(missing)}")
     return errs
 
 
@@ -900,6 +912,339 @@ def cmd_validate(args: list[str]) -> int:
     return 1 if fails else 0
 
 
+# ── procrun export ───────────────────────────────────────────────────────────
+#
+# The only thing a collector's forced-command key can run. It reads a JSON list
+# of {stream, key, offset, inode} on stdin, resolves every path from the
+# registry itself, answers one JSON object on stdout with all text redacted,
+# and writes nothing (no state dir, no rotation, no record).
+
+EXPORT_CAP = 1024 * 1024      # bytes per response
+EXPORT_LOG_LINES = 50         # log lines for a process that is not ok
+EXPORT_LOG_TAIL = 64 * 1024   # bytes read from the end of that log
+EXPORT_LINE_CHARS = 2000      # one log-excerpt line is cut to this length
+STREAM_KINDS = {"runs": "process", "status": "process", "checks": "sentinel",
+                "proposals": "sentinel", "agent_runs": "sentinel"}
+
+
+def path_free(key: str) -> bool:
+    """True for a name that cannot be read as a path."""
+    return bool(key) and not any(c in key for c in "/\\\0") and not key.startswith((".", "~"))
+
+
+class Redactor:
+    """toodoo-herdr's portable rules: in order on every string, `secret` group or whole match."""
+
+    FLAGS = {"i": re.IGNORECASE, "m": re.MULTILINE, "s": re.DOTALL}
+
+    def __init__(self, path: Path):
+        self.rules = []
+        for rule in json.loads(path.read_text(encoding="utf-8"))["rules"]:
+            flags = 0
+            for flag in rule.get("flags", ""):
+                flags |= self.FLAGS[flag]
+            self.rules.append((f"[REDACTED:{rule['name']}]", re.compile(rule["pattern"], flags)))
+
+    def text(self, value: str) -> str:
+        for marker, regex in self.rules:
+            if "secret" in regex.groupindex:
+                value = regex.sub(lambda m, mk=marker: (m.group(0)[:m.start("secret") - m.start()] + mk
+                                                        + m.group(0)[m.end("secret") - m.start():]), value)
+            else:
+                value = regex.sub(marker, value)
+        return value
+
+    def value(self, value):
+        if isinstance(value, str):
+            return self.text(value)
+        if isinstance(value, dict):
+            return {self.text(k) if isinstance(k, str) else k: self.value(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self.value(v) for v in value]
+        return value
+
+
+def redaction_rules_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "lib" / "procrun" / "redaction-rules.json"
+
+
+class RequestError(Exception):
+    pass
+
+
+def parse_request(raw: str) -> list[dict]:
+    try:
+        req = json.loads(raw) if raw.strip() else []
+    except ValueError as e:
+        raise RequestError(f"request is not JSON: {e}") from e
+    if not isinstance(req, list):
+        raise RequestError("request must be a JSON list of {stream, key, offset, inode}")
+    for i, item in enumerate(req):
+        if not isinstance(item, dict):
+            raise RequestError(f"item {i}: not an object")
+        extra = set(item) - {"stream", "key", "offset", "inode", "prev"}
+        if extra:
+            raise RequestError(f"item {i}: unknown fields {sorted(extra)}")
+        if item.get("stream") not in STREAM_KINDS:
+            raise RequestError(f"item {i}: stream must be one of {', '.join(STREAM_KINDS)}")
+        if not isinstance(item.get("key"), str):
+            raise RequestError(f"item {i}: key must be a string")
+        for field in ("offset", "inode"):
+            v = item.get(field)
+            if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < 0):
+                raise RequestError(f"item {i}: {field} must be a non-negative integer or null")
+        prev = item.get("prev")
+        if prev is not None and not (isinstance(prev, dict) and all(
+                isinstance(prev.get(f), int) and not isinstance(prev.get(f), bool) and prev[f] >= 0
+                for f in ("offset", "inode"))):
+            raise RequestError(f"item {i}: prev must be {{offset, inode}}")
+    return req
+
+
+def sentinel_dirs(reg: dict) -> dict[str, Path]:
+    """project:id -> the directory of its checks-<id>.jsonl, from kind = sentinel entries."""
+    out = {}
+    for e in reg["process"]:
+        key = str(e.get("sentinel", ""))
+        if e.get("kind") == "sentinel" and e.get("progress") and key not in out:
+            out[key] = expand(e["progress"]).parent
+    return out
+
+
+def stream_path(reg: dict, stream: str, key: str) -> Path | None:
+    if STREAM_KINDS[stream] == "process":
+        if find_entry(reg, key) is None:
+            return None
+        return state_dir() / ("status.jsonl" if stream == "status" else f"{key}.jsonl")
+    d = sentinel_dirs(reg).get(key)
+    if d is None:
+        return None
+    sid = key.partition(":")[2]
+    return d / {"checks": f"checks-{sid}.jsonl", "proposals": f"proposals-{sid}.jsonl",
+                "agent_runs": f"agent-runs-{sid}.jsonl"}[stream]
+
+
+def open_ro(path: Path):
+    try:
+        return open(path, "rb")
+    except FileNotFoundError:
+        return None
+
+
+def read_stream(path: Path, item: dict, budget: dict, redact) -> dict:
+    """Whole lines after (inode, offset): the rotated generation first, then the current file.
+
+    `inode` names the file `offset` belongs to. After a rotation that file is
+    `.1`, so its rest is read before the new current file. When the position
+    moves into the current file, `prev` carries where `.1` ended, so a line a
+    still-running writer appends to `.1` later is returned on the next poll.
+    An inode that matches neither file (two rotations between polls, or a
+    replaced file) is reported as `gap`. Lines are redacted here and charged
+    to `budget` at their encoded size; a line too large for an empty response
+    is skipped and counted, so a position always advances.
+    """
+    proc = item["key"] if item["stream"] == "status" else None
+    cur = open_ro(path)  # current first: a rotation in between then shows as cur == rot
+    rot = open_ro(Path(f"{path}.1"))
+    try:
+        cur_ino = os.fstat(cur.fileno()).st_ino if cur else None
+        rot_ino = os.fstat(rot.fileno()).st_ino if rot else None
+        if cur and cur_ino == rot_ino:
+            cur, cur_ino = None, None
+        inode, offset, prev = item.get("inode"), item.get("offset") or 0, item.get("prev")
+        gap, anchored = False, False
+        if inode is None:
+            plan = [(rot, 0), (cur, 0)]
+        elif rot and inode == rot_ino:
+            plan = [(rot, offset), (cur, 0)]
+        elif cur and inode == cur_ino:
+            anchored = True  # the position stays in cur even if the cap stops us in .1
+            plan = [(rot, prev["offset"]) if rot and prev and prev["inode"] == rot_ino else (None, 0),
+                    (cur, offset)]
+        else:
+            gap = True
+            plan = [(rot, 0), (cur, 0)]
+        lines: list[str] = []
+        oversize = 0
+        more = False
+        pos = (inode, offset) if inode is not None else (None, 0)
+        rot_end = None
+        for f, start in plan:
+            if f is None:
+                continue
+            ino = os.fstat(f.fileno()).st_ino
+            if start > os.fstat(f.fileno()).st_size:
+                gap, start = True, 0  # truncated or replaced in place
+            f.seek(start)
+            at = start
+            while True:
+                line = f.readline()
+                if not line.endswith(b"\n"):
+                    break  # end of file or a line still being written
+                text = line[:-1].decode("utf-8", "replace")
+                if proc is None or proc_of(text) == proc:
+                    text = redact(text)
+                    cost = len(json.dumps(text)) + 1
+                    if cost > budget["left"]:
+                        if budget["used"]:
+                            more = True
+                            break
+                        oversize += 1
+                    else:
+                        lines.append(text)
+                        budget["left"] -= cost
+                        budget["used"] = True
+                at += len(line)
+            pos = (ino, at)
+            if f is rot:
+                rot_end = at
+            if more:
+                break
+        if anchored and pos[0] == rot_ino:
+            pos = (cur_ino, offset)
+        out = {"stream": item["stream"], "key": item["key"], "inode": pos[0], "offset": pos[1],
+               "lines": lines, "more": more, "gap": gap}
+        if rot is not None and pos[0] != rot_ino:
+            out["prev"] = {"inode": rot_ino,
+                           "offset": rot_end if rot_end is not None else os.fstat(rot.fileno()).st_size}
+        if oversize:
+            out["oversize_lines"] = oversize
+        return out
+    finally:
+        for f in (cur, rot):
+            if f:
+                f.close()
+
+
+def proc_of(line: str) -> str | None:
+    try:
+        rec = json.loads(line)
+    except ValueError:
+        return None
+    return rec.get("proc") if isinstance(rec, dict) else None
+
+
+def log_tail(path: Path) -> str | None:
+    """The last 50 lines as one string, so multi-line redaction rules see them whole."""
+    try:
+        with open(path, "rb") as f:
+            size = f.seek(0, os.SEEK_END)
+            f.seek(max(0, size - EXPORT_LOG_TAIL))
+            data = f.read()
+    except OSError:
+        return None
+    lines = data.decode("utf-8", "replace").splitlines()
+    if size > EXPORT_LOG_TAIL:
+        lines = lines[1:]  # cut by the seek
+    return "\n".join(ln[:EXPORT_LINE_CHARS] for ln in lines[-EXPORT_LOG_LINES:])
+
+
+def issue_statuses(reg: dict) -> list[dict]:
+    """(id, status, title) of each named sentinel's issues, from the project's sentinel-issues.json."""
+    keys = sorted({str(e["sentinel"]) for e in reg["process"] if e.get("sentinel")})
+    docs: dict[str, dict | str] = {}
+    out = []
+    for key in keys:
+        proj, _, sid = key.partition(":")
+        entry: dict = {"key": key}
+        if proj not in reg["projects"] or not sid:
+            entry["error"] = "project not in [projects]"
+            out.append(entry)
+            continue
+        if proj not in docs:
+            path = expand(reg["projects"][proj]) / "sentinel-issues.json"
+            try:
+                docs[proj] = json.loads(path.read_text())
+            except FileNotFoundError:
+                docs[proj] = "sentinel-issues.json not found"
+            except ValueError:
+                docs[proj] = "sentinel-issues.json is not valid JSON"
+        doc = docs[proj]
+        if isinstance(doc, str):
+            entry["error"] = doc
+        else:
+            entry["issues"] = [{"id": i.get("id"), "status": i.get("status"), "title": i.get("title")}
+                               for i in doc.get("issues", []) if isinstance(i, dict)
+                               and str(i.get("sentinel")) == sid]
+        out.append(entry)
+    return out
+
+
+def disk_usage(reg: dict) -> list[dict]:
+    out = []
+    for mount in reg["machine"].get("mounts", ["/"]):
+        try:
+            st = os.statvfs(expand(str(mount)))
+        except OSError as e:
+            out.append({"mount": mount, "error": e.strerror})
+            continue
+        total, free = st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
+        used = total - st.f_bfree * st.f_frsize
+        out.append({"mount": mount, "total": total, "used": used, "free": free,
+                    "use_pct": round(100 * used / (used + free)) if used + free else 0})
+    return out
+
+
+def iso(ts) -> str | None:
+    return dt.datetime.fromtimestamp(ts).astimezone().isoformat(timespec="seconds") \
+        if isinstance(ts, (int, float)) else None
+
+
+def cmd_export(stdin) -> int:
+    def fail(msg: str) -> int:
+        print(json.dumps({"v": V, "error": msg}))
+        return 2
+    try:
+        redactor = Redactor(redaction_rules_path())
+    except (OSError, ValueError, KeyError, re.error) as e:
+        return fail(f"redaction rules unavailable, nothing exported: {e}")  # fail closed
+    try:
+        req = parse_request(stdin.read(4 * 1024 * 1024))
+        reg = load_registry()
+    except (RequestError, RegistryError) as e:
+        return fail(str(e))
+
+    state = load_json(state_dir() / "check-state.json") or {}
+    now = time.time()
+    last_run = state.get("last_run")
+    pstates = state.get("processes", {})
+    processes = []
+    for e in reg["process"]:
+        name = e.get("name")
+        if not name:
+            continue
+        ps = pstates.get(name, {})
+        row = {"name": name, "kind": e.get("kind"), "criticality": e.get("criticality", "medium"),
+               "sentinel": e.get("sentinel"), "status": ps.get("status"), "detail": ps.get("detail"),
+               "since": iso(ps.get("since"))}
+        if ps.get("status") not in (None, "ok") and e.get("log"):
+            row["log_tail"] = log_tail(expand(e["log"]))
+        processes.append(row)
+    # One filter on all text: the summary here, each stream line as it is read.
+    out = redactor.value({
+        "v": V, "host": host_name(reg), "ts": now_iso(),
+        "check": {"last_run": iso(last_run),
+                  "age_s": int(now - last_run) if isinstance(last_run, (int, float)) else None},
+        "processes": processes, "sentinels": issue_statuses(reg), "disk": disk_usage(reg)})
+
+    envelope = 256  # one stream item without its lines, with room to spare
+    budget = {"left": EXPORT_CAP - len(json.dumps(out, separators=(",", ":"))) - envelope * (len(req) + 1),
+              "used": False}
+    streams, rejected = [], 0
+    for item in req:
+        key, stream = item["key"], item["stream"]
+        path = stream_path(reg, stream, key) if path_free(key) else None
+        if path is None:
+            rejected += 1
+            why = "unknown key" if path_free(key) else "keys are registry names, never paths"
+            streams.append({"stream": stream, "key": redactor.text(key), "error": why})
+            continue
+        streams.append(read_stream(path, item, budget, redactor.text))
+    out["streams"] = streams
+    print(json.dumps(out, separators=(",", ":")))
+    return 1 if rejected else 0
+
+
 # ── entry point ──────────────────────────────────────────────────────────────
 
 def main(argv: list[str]) -> int:
@@ -914,6 +1259,8 @@ def main(argv: list[str]) -> int:
             return cmd_validate(rest)
         if cmd == "watch-check":
             return cmd_watch_check(rest)
+        if cmd == "export":
+            return cmd_export(sys.stdin)
     except RegistryError as e:
         print(f"procrun: {e}", file=sys.stderr)
         return 1

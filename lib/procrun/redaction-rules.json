@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "about": "Shared redaction rules for toodoo-herdr's scoring traces and process-sentinel's export. Patterns use the regex subset Python re and PCRE share: no lookbehind; named groups are written (?P<name>...) (JavaScript spells them (?<name>...)). Rules run in order on every string. When a pattern has a group named 'secret', only that group is replaced; otherwise the whole match is. The replacement is [REDACTED:<name>].",
+  "flags_legend": {
+    "i": "case-insensitive",
+    "m": "multi-line ^ and $",
+    "s": "dot matches newline"
+  },
+  "rules": [
+    {
+      "name": "private_key",
+      "flags": "s",
+      "pattern": "-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)"
+    },
+    {
+      "name": "authorization",
+      "flags": "i",
+      "pattern": "\\b(?:proxy-)?authorization\\b[\"']?\\s*[:=]\\s*[\"']?(?P<secret>(?!\\[REDACTED)(?:(?:bearer|basic|token|digest|negotiate)\\s+)?[^\\s\"',;]+)"
+    },
+    {
+      "name": "cookie",
+      "flags": "im",
+      "pattern": "^\\s*(?:set-)?cookie\\s*:\\s*(?P<secret>.+)$"
+    },
+    {
+      "name": "anthropic_key",
+      "flags": "",
+      "pattern": "\\bsk-ant-[A-Za-z0-9_-]{16,}"
+    },
+    {
+      "name": "openai_key",
+      "flags": "",
+      "pattern": "\\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}"
+    },
+    {
+      "name": "github_token",
+      "flags": "",
+      "pattern": "\\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})"
+    },
+    {
+      "name": "aws_access_key",
+      "flags": "",
+      "pattern": "\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b"
+    },
+    {
+      "name": "google_api_key",
+      "flags": "",
+      "pattern": "\\bAIza[0-9A-Za-z_-]{20,}"
+    },
+    {
+      "name": "slack_token",
+      "flags": "",
+      "pattern": "\\bxox[abposr]-[A-Za-z0-9-]{10,}"
+    },
+    {
+      "name": "stripe_key",
+      "flags": "",
+      "pattern": "\\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{10,}"
+    },
+    {
+      "name": "jwt",
+      "flags": "",
+      "pattern": "\\beyJ[A-Za-z0-9_-]{8,}\\.eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}"
+    },
+    {
+      "name": "url_credentials",
+      "flags": "",
+      "pattern": "\\b[a-z][a-z0-9+.-]*://[^/\\s:@]+:(?P<secret>[^/\\s@]+)@"
+    },
+    {
+      "name": "secret_assignment",
+      "flags": "i",
+      "pattern": "\\b[A-Za-z0-9_.-]*(?:api[_-]?key|secret|token|passw(?:or)?d|passwd|pwd|access[_-]?key|private[_-]?key|credentials?)[A-Za-z0-9_.-]*[\"']?\\s*(?:=|:|=>)\\s*[\"']?(?P<secret>(?!\\[REDACTED)[^\\s\"'`,;)}\\]]{4,})"
+    },
+    {
+      "name": "email",
+      "flags": "",
+      "pattern": "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\\.[A-Za-z]{2,}\\b"
+    }
+  ]
+}
