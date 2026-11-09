@@ -80,7 +80,7 @@
     {
       "name": "secret_assignment",
       "flags": "i",
-      "pattern": "\\b[A-Za-z0-9_.-]*(?:api[_-]?key|secret|token|passw(?:or)?d|passwd|pwd|access[_-]?key|private[_-]?key|credentials?)[A-Za-z0-9_.-]*[\"']?\\s*(?:=|:|=>)\\s*[\"']?(?P<secret>(?!\\[REDACTED)[^\\s\"'`,;)}\\]]{4,})"
+      "pattern": "\\b[A-Za-z0-9_.-]*(?:api[_-]?key|secret|token|passw(?:or)?d|passwd|pwd|access[_-]?key|private[_-]?key|credentials?)[A-Za-z0-9_.-]*[\"']?\\s*(?:=|:|=>)\\s*[\"']?(?P<secret>(?!\\[REDACTED)(?![0-9]+(?:[\\s\"'`,;)}\\]]|$))[^\\s\"'`,;)}\\]]{4,})"
     },
     {
       "name": "email",
