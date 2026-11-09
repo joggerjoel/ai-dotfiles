@@ -13,6 +13,16 @@
       "pattern": "-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)"
     },
     {
+      "name": "private_key_tail",
+      "flags": "s",
+      "pattern": "\\A.*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----"
+    },
+    {
+      "name": "private_key_body",
+      "flags": "m",
+      "pattern": "(?:^[A-Za-z0-9+/]{48,}={0,2}[ \\t]*(?:\\r?\\n|$)){2,}"
+    },
+    {
       "name": "authorization",
       "flags": "i",
       "pattern": "\\b(?:proxy-)?authorization\\b[\"']?\\s*[:=]\\s*[\"']?(?P<secret>(?!\\[REDACTED)(?:(?:bearer|basic|token|digest|negotiate)\\s+)?[^\\s\"',;]+)"

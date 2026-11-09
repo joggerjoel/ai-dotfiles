@@ -101,16 +101,32 @@ max_silence = "45m"
 owner = "joggerjoel"
 criticality = "medium"
 
-# A model sentinel adds its model, budget and sandbox (P3).
+# A model sentinel, run by `sentinel-agent dice 02` (guides/sentinel-agent.md).
+# model and max_usd_per_day have no default: the operator sets both, with a
+# pinned model id, never an alias. Captures run outside the sandbox.
 [[process]]
 name = "sentinel-02-agent"
 kind = "sentinel"
 sentinel = "dice:02"
 progress = "~/Documents/Projects/clubs/dice/var/sentinel/checks-02.jsonl"
+log = "~/Documents/Projects/clubs/dice/logs/sentinel-02-agent.log"
 max_silence = "45m"
 owner = "joggerjoel"
 criticality = "low"
-model = "pinned-model-id"
-max_usd_per_day = 2.0
+model = "pinned-model-id"   # operator: replace with the pinned model id
+max_usd_per_day = 2.0       # operator: set the daily cap
 max_input_kb = 256
 sandbox = { bwrap = true, read_only = true, tools = ["Read", "Edit"] }
+
+[[process.capture]]
+cmd = ["node", "sentinel-check.js", "--sentinel=02", "--last"]
+name = "check-last"
+
+[[process.capture]]
+tmux = "dice:0.0"
+lines = 8
+
+[[process.capture]]
+tail = "logs/dice-link-tag-sync-2*.log"
+newest = 3
+name = "band"

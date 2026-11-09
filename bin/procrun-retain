@@ -1,0 +1,164 @@
+#!/bin/sh
+"exec" "${PROCRUN_UV:-$( [ -x ${HOME}/.local/bin/uv ] && echo ${HOME}/.local/bin/uv || command -v uv )}" "run" "--quiet" "--script" "$0" "$@"
+# /// script
+# requires-python = ">=3.12,<3.13"
+# dependencies = ["croniter>=2.0"]
+# ///
+USAGE = """procrun-retain: enforce each registry entry's `retain` on its old logs.
+
+    procrun-retain [--dry-run]
+
+For every entry with `retain`, deletes files older than it among:
+  - rotated generations of its `log` (else `progress`): <log>.1, <log>.2.gz,
+    <log>-20261101, <log>.2026-11-01 and the like;
+  - dated logs matched by its `log_glob` (a date in the file name), never the
+    newest match, and only when both the name's date and the mtime are older.
+A `log` with no rotated generations is a single continuously appended legacy
+log: it is reported, never pruned or moved. Undated `log_glob` matches are
+reported too.
+
+Registry: $PROCRUN_REGISTRY, default ~/.config/procrun/processes.toml.
+Guide: guides/procrun.md in ai-dotfiles.
+"""
+
+# Same polyglot header as bin/procrun, whose registry helpers it loads.
+# Plan: process-sentinel-plan.md section 5 (retention applies only to rotated
+# or dated logs) and the P3 row "Retention from retain".
+
+import datetime as dt
+import glob
+import os
+import re
+import sys
+import time
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
+from pathlib import Path
+
+
+def _load_procrun():
+    path = Path(__file__).resolve().parent / "procrun"
+    loader = SourceFileLoader("procrun", str(path))
+    mod = module_from_spec(spec_from_loader("procrun", loader))
+    loader.exec_module(mod)
+    return mod
+
+
+procrun = _load_procrun()
+
+COMPRESSED = r"(?:\.(?:gz|bz2|xz|zst))?"
+DATE = re.compile(r"(?<!\d)(\d{4})[-_]?(\d{2})[-_]?(\d{2})(?!\d)")
+
+
+def rotated(log: Path) -> list[Path]:
+    """Rotated generations of log beside it: numbered or dated suffixes."""
+    pat = re.compile(re.escape(log.name) + r"[.-](?:\d{1,3}|\d{8}|\d{4}-\d{2}-\d{2})" + COMPRESSED + "$")
+    try:
+        names = os.listdir(log.parent)
+    except FileNotFoundError:
+        return []
+    return [log.parent / n for n in sorted(names) if pat.match(n)]
+
+
+def name_date(path: Path) -> float | None:
+    for m in DATE.finditer(path.name):
+        try:
+            return dt.datetime(int(m[1]), int(m[2]), int(m[3])).timestamp()
+        except ValueError:
+            continue
+    return None
+
+
+def regular(p: Path) -> bool:
+    return p.is_file() and not p.is_symlink()
+
+
+def size_text(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return ""
+
+
+def plan(reg: dict, now: float) -> tuple[list[Path], list[str], list[str]]:
+    """(files to delete, report lines, errors)."""
+    delete: dict[Path, None] = {}
+    report, errors = [], []
+    seen_logs: set[Path] = set()
+    for e in reg["process"]:
+        if "retain" not in e:
+            continue
+        name = e.get("name")
+        try:
+            keep = procrun.parse_duration(e["retain"])
+        except ValueError as err:
+            errors.append(f"process {name!r}: retain: {err}")
+            continue
+        if keep <= 0:
+            errors.append(f"process {name!r}: retain must be longer than 0")
+            continue
+        cutoff = now - keep
+        base = e.get("log") or e.get("progress")
+        if base:
+            log = procrun.expand(base)
+            gens = [p for p in rotated(log) if regular(p)]
+            for p in gens:
+                if p.stat().st_mtime < cutoff:
+                    delete[p] = None
+            if not gens and log.is_file() and log not in seen_logs:
+                report.append(f"legacy {log} ({size_text(log.stat().st_size)}): a single continuously "
+                              f"appended log, not pruned or moved (process {name!r})")
+            seen_logs.add(log)
+        if e.get("log_glob"):
+            matches = sorted((Path(p) for p in glob.glob(str(procrun.expand(e["log_glob"])))
+                              if regular(Path(p))), key=lambda p: p.stat().st_mtime)
+            for p in matches[:-1]:          # the newest match may be the live file
+                d = name_date(p)
+                if d is None:
+                    report.append(f"undated {p}: matches log_glob of {name!r} but has no date in its name, "
+                                  "not pruned")
+                elif d < cutoff and p.stat().st_mtime < cutoff:
+                    delete[p] = None
+    return list(delete), report, errors
+
+
+def main(argv: list[str]) -> int:
+    if argv and argv[0] in ("-h", "--help"):
+        print(USAGE)
+        return 0
+    if argv not in ([], ["--dry-run"]):
+        print("procrun-retain: usage: procrun-retain [--dry-run]", file=sys.stderr)
+        return 2
+    dry = argv == ["--dry-run"]
+    try:
+        reg = procrun.load_registry()
+    except procrun.RegistryError as e:
+        print(f"procrun-retain: {e}", file=sys.stderr)
+        return 1
+    delete, report, errors = plan(reg, time.time())
+    freed, done = 0, 0
+    for p in delete:
+        size = p.stat().st_size
+        if dry:
+            print(f"would prune {p} ({size_text(size)})")
+            freed, done = freed + size, done + 1
+            continue
+        try:
+            p.unlink()
+        except OSError as e:
+            errors.append(f"{p}: {e.strerror}")
+            continue
+        print(f"pruned {p} ({size_text(size)})")
+        freed, done = freed + size, done + 1
+    for line in report:
+        print(line)
+    for line in errors:
+        print(f"FAIL: {line}")
+    verb = "would prune" if dry else "pruned"
+    print(f"{verb} {done} file(s), {size_text(freed)}; {len(report)} reported, not pruned")
+    return 1 if errors else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
