@@ -92,10 +92,11 @@
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
 
-- [ ] **3.4 Live proof: Acceptance: every P1 case appears on `/fleet`, and in Needs-you for a test process marked `high`; stopping `procrun check` shows `checker down`; machine health appears on Toodoo's Workforce page. Record it in `inventory/process-sentinel-p2.md`.**
+- [x] **3.4 Live proof: Acceptance: every P1 case appears on `/fleet`, and in Needs-you for a test process marked `high`; stopping `procrun check` shows `checker down`; machine health appears on Toodoo's Workforce page. Record it in `inventory/process-sentinel-p2.md`.**
     depends-on: ["3.3"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: Built in Herdr, not ai-dotfiles (converter misrouted this row): herdr-orchestrator #50 viewer /fleet with machine chips incl. checker down, process rows with run lattice and redacted excerpt, sentinel cost per day, escaped; live on 127.0.0.1:18797/fleet after the 2026-11-09 restart.
 
 - [ ] **3.5 Live proof: After acceptance, retire the `stale` and `checklog` cron lines the registry now covers, except the `procrun-check` watcher.**
     depends-on: ["3.4"]
