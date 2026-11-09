@@ -207,6 +207,8 @@ cache-test:
 # "is it set?" check and authenticated nothing.
 # Needs no inventory: hosts resolve through ~/.ssh/config unless
 # ansible-ai/inventory.local.yml exists, which is preferred when it does.
+# More than one subscription: `just claude-token --account NAME [host...]`
+# (see guides/claude-accounts.md).
 # [herdr] put the Claude fleet token in place: `just claude-token [host...]`
 claude-token *HOSTS:
     @bash {{dotfiles}}/scripts/claude-token.sh {{HOSTS}}
@@ -214,6 +216,10 @@ claude-token *HOSTS:
 # [herdr] same, but write nothing — proves the token works and shows the diff
 claude-token-check *HOSTS:
     @bash {{dotfiles}}/scripts/claude-token.sh --check {{HOSTS}}
+
+# [local] claude-acct: unit tests (scripts/claude-acct.test.sh)
+claude-acct-test:
+    @bash {{dotfiles}}/scripts/claude-acct.test.sh
 
 # [local] claude-token: unit tests (scripts/claude-token.test.sh)
 claude-token-test:

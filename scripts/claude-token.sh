@@ -5,6 +5,19 @@
 #   just claude-token aorus4     # ...to one host
 #   just claude-token --check    # dry run: prove the token works, write nothing
 #
+# Several subscription accounts, so a cron job can move to the next one when
+# one hits its usage limit (bin/claude-acct does the switching):
+#
+#   just claude-token --account joel_labelle     # mint, store and deploy a named one
+#   just claude-token --account hyunseokkim986 --from-primary
+#                                                # name the token already stored
+#
+# A named token is CLAUDE_CODE_OAUTH_TOKEN_<NAME> (NAME upper-cased, [a-z0-9_]),
+# and CLAUDE_ACCOUNTS in ~/.claude/.env lists the names in preference order,
+# first added first. The deploy writes all of them to the fleet env file and
+# exports the FIRST account's token as CLAUDE_CODE_OAUTH_TOKEN, so a plain
+# `claude` keeps working. With no --account, nothing changes from before.
+#
 # Why this exists rather than a documented sequence of steps: the documented
 # sequence had a hole. `read -rs TOKEN` in one shell and `printf ... "$TOKEN"`
 # in another writes `CLAUDE_CODE_OAUTH_TOKEN=` with an empty value — a line that
@@ -30,7 +43,7 @@ HOSTS_DEFAULT="$(fleet_hosts "$REAL_INVENTORY")"
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
 
-# The value of CLAUDE_CODE_OAUTH_TOKEN in $ENV_FILE, or empty. Deliberately
+# The value of $1 (default CLAUDE_CODE_OAUTH_TOKEN) in $ENV_FILE, or empty. Deliberately
 # returns the VALUE and not a yes/no: "the key is present" is exactly the
 # question whose wrong answer caused this script to exist.
 #
@@ -46,8 +59,8 @@ die() { printf '%s\n' "$*" >&2; exit 1; }
 # written octal so this survives the surrounding shell quoting.
 token_from_env_file() {
   [ -r "$ENV_FILE" ] || return 0
-  awk '
-    /^[[:blank:]]*(export[[:blank:]]+)?CLAUDE_CODE_OAUTH_TOKEN[[:blank:]]*=/ {
+  awk -v var="${1:-CLAUDE_CODE_OAUTH_TOKEN}" '
+    $0 ~ "^[[:blank:]]*(export[[:blank:]]+)?" var "[[:blank:]]*=" {
       v = substr($0, index($0, "=") + 1)
       gsub(/\r/, "", v)
       sub(/^[[:blank:]]+/, "", v); sub(/[[:blank:]]+$/, "", v)
@@ -59,6 +72,35 @@ token_from_env_file() {
     }
     END { if (length(last) > 0) print last }
   ' "$ENV_FILE"
+}
+
+# Account names are lower-case [a-z0-9_]: they become file names under
+# ~/.local/state/claude-acct and, upper-cased, part of a variable name.
+valid_account() {
+  case "$1" in ''|*[!a-z0-9_]*) return 1 ;; esac
+}
+
+# The env var holding the token for account $1 (empty $1 = the un-named one).
+token_var_for() {
+  if [ -z "$1" ]; then
+    printf 'CLAUDE_CODE_OAUTH_TOKEN'
+  else
+    printf 'CLAUDE_CODE_OAUTH_TOKEN_%s' "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
+  fi
+}
+
+# Append $1 to CLAUDE_ACCOUNTS in $ENV_FILE unless it is already listed. The
+# line is replaced through a temp file and a rename, so an interrupted run
+# leaves the old line rather than half of a new one.
+register_account() {
+  local current tmp
+  current="$(token_from_env_file CLAUDE_ACCOUNTS)"
+  case " $current " in *" $1 "*) return 0 ;; esac
+  tmp="$(mktemp "$ENV_FILE.XXXXXX")" || die "could not update $ENV_FILE"
+  chmod 600 "$tmp"
+  { grep -Ev '^[[:blank:]]*(export[[:blank:]]+)?CLAUDE_ACCOUNTS[[:blank:]]*=' "$ENV_FILE" || true; } > "$tmp"
+  printf 'CLAUDE_ACCOUNTS="%s"\n' "${current:+$current }$1" >> "$tmp"
+  mv -f "$tmp" "$ENV_FILE"
 }
 
 # Does this token actually authenticate? Set in the environment on purpose:
@@ -83,12 +125,17 @@ prompt_for_token() {
 }
 
 ensure_token() {
-  local tok
-  tok="$(token_from_env_file)"
+  local account="$1" from_primary="$2" var tok
+  var="$(token_var_for "$account")"
+  tok="$(token_from_env_file "$var")"
+  if [ -z "$tok" ] && [ "$from_primary" = 1 ]; then
+    tok="$(token_from_env_file)"
+    [ -n "$tok" ] || die "--from-primary: no usable CLAUDE_CODE_OAUTH_TOKEN in $ENV_FILE to name"
+  fi
   if [ -n "$tok" ]; then
     printf 'token found in %s\n' "$ENV_FILE" >&2
   else
-    printf 'no usable CLAUDE_CODE_OAUTH_TOKEN in %s\n' "$ENV_FILE" >&2
+    printf 'no usable %s in %s\n' "$var" "$ENV_FILE" >&2
     tok="$(prompt_for_token)" || exit 1
   fi
 
@@ -102,12 +149,14 @@ ensure_token() {
   fi
 
   # Store only if it was not already there.
-  if [ -z "$(token_from_env_file)" ]; then
+  if [ -z "$(token_from_env_file "$var")" ]; then
     mkdir -p "$(dirname "$ENV_FILE")"
     touch "$ENV_FILE"; chmod 600 "$ENV_FILE"
-    printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$tok" >> "$ENV_FILE"
-    printf 'stored in %s (0600)\n' "$ENV_FILE" >&2
+    printf '%s=%s\n' "$var" "$tok" >> "$ENV_FILE"
+    printf 'stored as %s in %s (0600)\n' "$var" "$ENV_FILE" >&2
   fi
+  [ -z "$account" ] || register_account "$account"
+  CLAUDE_TOKEN_VAR="$var"
   CLAUDE_TOKEN_VALUE="$tok"
 }
 
@@ -148,22 +197,40 @@ inventory_for() {
 }
 
 main() {
-  local check=0 hosts="" inv limit rc
+  local check=0 hosts="" inv limit rc account="" from_primary=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --check) check=1; shift ;;
-      -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+      --account)
+        [ $# -ge 2 ] || die "--account needs a name"
+        account="$2"; shift 2 ;;
+      --account=*) account="${1#--account=}"; shift ;;
+      --from-primary) from_primary=1; shift ;;
+      -h|--help) sed -n '2,/^$/p' "$0"; exit 0 ;;
       -*) die "unknown flag: $1" ;;
       *) hosts="$hosts $1"; shift ;;
     esac
   done
+  case "$account" in
+    "") [ "$from_primary" = 0 ] || die "--from-primary needs --account NAME" ;;
+    *) valid_account "$account" || die "bad account name '$account': use lower-case letters, digits and _" ;;
+  esac
   hosts="${hosts# }"
   [ -n "$hosts" ] || hosts="$HOSTS_DEFAULT"
 
   command -v ansible-playbook >/dev/null 2>&1 || die "ansible-playbook not found"
   [ -r "$PLAYBOOK" ] || die "playbook not found: $PLAYBOOK"
 
-  ensure_token
+  # The first account named becomes the fleet's primary. With an un-named token
+  # already in place, naming a different account first would silently demote it.
+  if [ -n "$account" ] && [ "$from_primary" = 0 ] \
+     && [ -z "$(token_from_env_file CLAUDE_ACCOUNTS)" ] && [ -n "$(token_from_env_file)" ]; then
+    die "$ENV_FILE holds an un-named CLAUDE_CODE_OAUTH_TOKEN and no account list yet. Name that one first, so it stays the primary:
+  just claude-token --account <its-name> --from-primary
+then add '$account'."
+  fi
+
+  ensure_token "$account" "$from_primary"
 
   inv="$(inventory_for "$hosts")"
   limit="$(printf '%s' "$hosts" | tr ' ' ',')"
@@ -176,13 +243,18 @@ main() {
   # NON-EMPTY value, and "0" is non-empty — so --check was passed on every run,
   # including the ones meant to write. Ansible then reported `changed:` for
   # three tasks and wrote nothing, which reads exactly like a successful deploy.
-  if [ "$(ansible_flags "$check")" = "--check --diff" ]; then
-    CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_TOKEN_VALUE" \
+  #
+  # `export` is a builtin, so unlike `env VAR=value cmd` the value never appears
+  # in an argv. The variable name is the named account's, so the playbook's own
+  # lookup finds it ahead of the file.
+  (
+    export "$CLAUDE_TOKEN_VAR=$CLAUDE_TOKEN_VALUE"
+    if [ "$(ansible_flags "$check")" = "--check --diff" ]; then
       ansible-playbook -i "$inv" "$PLAYBOOK" --limit "$limit" --check --diff
-  else
-    CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_TOKEN_VALUE" \
+    else
       ansible-playbook -i "$inv" "$PLAYBOOK" --limit "$limit"
-  fi
+    fi
+  )
   rc=$?
 
   # Remove the whole temp DIRECTORY, not just the file inside it.
@@ -196,7 +268,10 @@ main() {
 }
 
 case "${1:-}" in
-  _token_from_env_file) shift; token_from_env_file ;;
+  _token_from_env_file) shift; token_from_env_file "$@" ;;
+  # Adds an account to CLAUDE_ACCOUNTS in the env file, then prints the list.
+  _register_account) shift; register_account "$1"; token_from_env_file CLAUDE_ACCOUNTS ;;
+  _token_var_for) shift; token_var_for "${1:-}" ;;
   # Prints the path to a generated inventory. The caller owns cleanup; used by
   # the tests to hand a real file to `ansible-inventory` and prove it parses.
   _inventory_for) shift; inventory_for "$*" ;;
