@@ -134,6 +134,14 @@ check "the exhausted account is marked until the parsed reset" '[ "$(cut -d" " -
 run -p again
 check "the next run goes straight to the other account" '[ "$(calls)" = "$TOK_A $TOK_B $TOK_B " ]'
 
+# --- the weekly wording seen live on aorus8, 2026-11-09 ------------------------
+reset_world
+printf "1|You've hit your weekly limit · resets 7pm (America/New_York)|\n" > "$BEH/$TOK_A"
+run -p hello
+check "weekly-limit wording fails over" '[ "$(calls)" = "$TOK_A $TOK_B " ] && [ $RC -eq 0 ]'
+check "weekly-limit reset is parsed, not defaulted" '[ "$(cut -d" " -f2 "$STATE/alpha")" = limit ] && [ "$(cut -d" " -f1 "$STATE/alpha")" -ne $((NOW + 3600)) ]'
+check "the exit cleanup does not trip set -u" '! grep -q "unbound variable" "$ERR"'
+
 # --- limit text arrives on stderr, in the older wording -----------------------
 reset_world
 printf '1||5-hour limit reached ∙ resets 3pm\n' > "$BEH/$TOK_A"
