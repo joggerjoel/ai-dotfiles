@@ -276,7 +276,10 @@ def main(argv=None):
     directory, explicit = config_dir(args.config_dir)
     email = subscription = None
     try:
-        email, subscription = account_info(directory, explicit)
+        # An overridden keychain service is not tied to a config dir, so auth status would name
+        # some other login's account.
+        if args.keychain_service is None:
+            email, subscription = account_info(directory, explicit)
         login = read_login(directory, explicit, args.keychain_service)
         subscription = login.get("subscriptionType") if isinstance(login.get("subscriptionType"), str) else subscription
         check_login(login)
