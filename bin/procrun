@@ -1,0 +1,927 @@
+#!/bin/sh
+"exec" "${PROCRUN_UV:-$( [ -x ${HOME}/.local/bin/uv ] && echo ${HOME}/.local/bin/uv || command -v uv )}" "run" "--quiet" "--script" "$0" "$@"
+# /// script
+# requires-python = ">=3.12,<3.13"
+# dependencies = ["croniter>=2.0"]
+# ///
+USAGE = """procrun: run, check and validate the processes named in a machine registry.
+
+    procrun <name> -- <command> [args...]   run a cron job under its registry entry
+    procrun check                           compute statuses, mail transitions
+    procrun validate [--mail]               check the registry against the machine
+    procrun watch-check [--max-age 15m]     mail if `procrun check` stopped running
+
+Registry: $PROCRUN_REGISTRY, default ~/.config/procrun/processes.toml.
+Guide: guides/procrun.md in ai-dotfiles.
+"""
+
+# Line 2 is a shell/Python polyglot: /bin/sh execs uv ($PROCRUN_UV, else
+# ~/.local/bin/uv because cron's PATH lacks it, else uv from PATH), and Python
+# reads the same line as a harmless string expression (which is also why
+# USAGE is not a module docstring). Installed at ~/.local/bin/procrun by
+# link_bin_tools (lib/links.sh).
+#
+# Environment: PROCRUN_REGISTRY, PROCRUN_STATE_DIR (default
+# $XDG_STATE_HOME/procrun or ~/.local/state/procrun), PROCRUN_KILL_GRACE
+# (seconds between SIGTERM and SIGKILL on timeout, default 10), PROCRUN_UV.
+
+import datetime as dt
+import errno
+import fcntl
+import json
+import os
+import platform
+import re
+import secrets
+import shlex
+import signal
+import socket
+import subprocess
+import sys
+import time
+import tomllib
+from pathlib import Path
+
+from croniter import croniter
+
+V = 1
+KINDS = ("cron", "daemon", "tmux-pane", "container", "systemd", "sentinel")
+STATUSES = ("down", "orphaned", "failed", "missed", "blocked", "stalled", "ok")
+SUBCOMMANDS = ("check", "validate", "watch-check")
+ROTATE_BYTES = 10 * 1024 * 1024
+TAIL_BYTES = 256 * 1024
+REMIND = {"high": 3600, "medium": 6 * 3600, "low": 24 * 3600}
+PENDING_WARN_DAYS = 30
+
+
+# ── paths, time, records ─────────────────────────────────────────────────────
+
+def registry_path() -> Path:
+    return Path(os.environ.get("PROCRUN_REGISTRY") or "~/.config/procrun/processes.toml").expanduser()
+
+
+def state_dir() -> Path:
+    if os.environ.get("PROCRUN_STATE_DIR"):
+        return Path(os.environ["PROCRUN_STATE_DIR"]).expanduser()
+    base = os.environ.get("XDG_STATE_HOME") or "~/.local/state"
+    return Path(base).expanduser() / "procrun"
+
+
+def now_iso() -> str:
+    return dt.datetime.now().astimezone().isoformat(timespec="milliseconds")
+
+
+def parse_ts(value: str) -> float | None:
+    try:
+        return dt.datetime.fromisoformat(value).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_duration(value) -> int:
+    """Seconds from 0, "0", "90s", "10m", "1h", "30d" or a bare integer."""
+    if isinstance(value, bool):
+        raise ValueError(f"bad duration {value!r}")
+    if isinstance(value, int):
+        if value < 0:
+            raise ValueError(f"bad duration {value!r}")
+        return value
+    m = re.fullmatch(r"\s*(\d+)\s*([smhd]?)\s*", str(value))
+    if not m:
+        raise ValueError(f"bad duration {value!r}")
+    return int(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+
+
+def expand(path: str) -> Path:
+    return Path(os.path.expandvars(os.path.expanduser(path)))
+
+
+def append_line(fd: int, record: dict) -> None:
+    """One write of one whole line to an O_APPEND descriptor."""
+    data = (json.dumps(record, separators=(",", ":")) + "\n").encode()
+    if os.write(fd, data) != len(data):
+        raise OSError(errno.EIO, "short write to record file")
+
+
+def open_append(path: Path) -> int:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+
+
+def append_record(path: Path, record: dict) -> None:
+    fd = open_append(path)
+    try:
+        append_line(fd, record)
+    finally:
+        os.close(fd)
+
+
+def read_tail(path: Path, limit: int = TAIL_BYTES) -> list[dict]:
+    try:
+        with open(path, "rb") as f:
+            size = f.seek(0, os.SEEK_END)
+            f.seek(max(0, size - limit))
+            data = f.read()
+    except FileNotFoundError:
+        return []
+    lines = data.split(b"\n")
+    if size > limit:
+        lines = lines[1:]  # the first line was cut by the seek
+    out = []
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue  # empty, partial or foreign line
+        if isinstance(rec, dict):
+            out.append(rec)
+    return out
+
+
+def read_records(name: str) -> list[dict]:
+    """The rotated generation first, then the current file."""
+    base = state_dir() / f"{name}.jsonl"
+    return read_tail(Path(f"{base}.1")) + read_tail(base)
+
+
+# ── process identity (Linux /proc, macOS sysctl/ps, otherwise unknown) ───────
+
+def boot_id() -> str | None:
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip() or None
+    except OSError:
+        pass
+    if platform.system() == "Darwin":
+        out = run_quiet(["sysctl", "-n", "kern.bootsessionuuid"])
+        return (out or "").strip() or None
+    return None
+
+
+def pid_start(pid: int) -> str | None:
+    """Opaque start time of a live pid: /proc starttime ticks, else ps lstart."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        return stat[stat.rindex(")") + 2:].split()[19]
+    except FileNotFoundError:
+        if Path("/proc/self/stat").exists():
+            return None  # Linux, and the pid is gone
+    except (OSError, ValueError, IndexError):
+        return None
+    out = run_quiet(["ps", "-o", "lstart=", "-p", str(pid)], env={**os.environ, "LC_ALL": "C"})
+    return (out or "").strip() or None
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def run_quiet(argv: list[str], env: dict | None = None, timeout: int = 20) -> str | None:
+    """stdout of a probe command, or None when it is missing or fails."""
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=env)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+# ── registry ─────────────────────────────────────────────────────────────────
+
+class RegistryError(Exception):
+    pass
+
+
+def load_registry(path: Path | None = None) -> dict:
+    path = path or registry_path()
+    try:
+        with open(path, "rb") as f:
+            reg = tomllib.load(f)
+    except FileNotFoundError as e:
+        raise RegistryError(f"registry not found: {path}") from e
+    except tomllib.TOMLDecodeError as e:
+        raise RegistryError(f"registry {path}: {e}") from e
+    procs = reg.get("process", [])
+    if not isinstance(procs, list):
+        raise RegistryError("[[process]] must be an array of tables")
+    reg["process"] = procs
+    reg.setdefault("machine", {})
+    reg.setdefault("projects", {})
+    return reg
+
+
+def find_entry(reg: dict, name: str) -> dict | None:
+    return next((p for p in reg["process"] if p.get("name") == name), None)
+
+
+def host_name(reg: dict | None) -> str:
+    if reg and reg.get("machine", {}).get("host"):
+        return str(reg["machine"]["host"])
+    return socket.gethostname().split(".")[0]
+
+
+# ── procrun <name> -- <command> ──────────────────────────────────────────────
+
+def cmd_run(name: str, argv: list[str]) -> int:
+    if not argv:
+        print("procrun: usage: procrun <name> -- <command> [args...]", file=sys.stderr)
+        return 2
+    # A missing registry or entry must not stop the job: the command still runs
+    # with cron's own stdout/stderr and no timeout, exactly as before wrapping.
+    # `procrun validate` reports the missing entry.
+    reg, entry = None, None
+    try:
+        reg = load_registry()
+        entry = find_entry(reg, name)
+        if entry is None:
+            print(f"procrun: no registry entry named {name!r}; running unmanaged", file=sys.stderr)
+    except RegistryError as e:
+        print(f"procrun: {e}; running {name!r} unmanaged", file=sys.stderr)
+    entry = entry or {}
+    try:
+        timeout = parse_duration(entry.get("timeout", 0))
+    except ValueError as e:
+        print(f"procrun: {name}: {e}; running without a timeout", file=sys.stderr)
+        timeout = 0
+
+    run_id = secrets.token_hex(16)
+    rec_path = state_dir() / f"{name}.jsonl"
+    # Held open for the whole run: if `procrun check` rotates the file meanwhile,
+    # this run's end line lands in .1 next to its start.
+    rec_fd = open_append(rec_path)
+    base = {"host": host_name(reg), "proc": name, "run_id": run_id}
+    pid = os.getpid()
+
+    lock_fd = None
+    if entry.get("overlap") == "skip" and entry.get("lock"):
+        lock_path = expand(entry["lock"])
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            append_line(rec_fd, {"v": V, "ts": now_iso(), **base, "event": "skipped", "pid": pid,
+                                 "lock": str(lock_path)})
+            return 0
+
+    log_fd, log_start = None, None
+    if entry.get("log"):
+        log_fd = open_append(expand(entry["log"]))
+        log_start = os.fstat(log_fd).st_size
+
+    append_line(rec_fd, {"v": V, "ts": now_iso(), **base, "event": "start", "pid": pid,
+                         "pid_start": pid_start(pid), "boot_id": boot_id()})
+    started = time.monotonic()
+
+    env = {**os.environ, "PROCRUN_RUN_ID": run_id, "PROCRUN_PROC": name}
+    try:
+        # start_new_session: the child and its descendants form their own
+        # process group, apart from procrun and cron's shell. The lock fd is
+        # inherited, as flock(1) does, so the lock outlives a killed procrun.
+        child = subprocess.Popen(
+            argv, stdout=log_fd, stderr=log_fd, env=env, start_new_session=True,
+            pass_fds=(lock_fd,) if lock_fd is not None else (),
+        )
+    except OSError as e:
+        msg = f"procrun: {argv[0]}: {e.strerror}\n".encode()
+        os.write(log_fd if log_fd is not None else 2, msg)
+        code = 127 if isinstance(e, FileNotFoundError) else 126
+        append_line(rec_fd, end_record(base, pid, code, None, "exit", started, log_fd, log_start))
+        return code
+
+    reason = "exit"
+    try:
+        rc = child.wait(timeout=timeout or None)
+    except subprocess.TimeoutExpired:
+        reason = "timeout"
+        rc = kill_group(child)
+    sig = -rc if rc < 0 else None
+    if reason == "exit" and sig is not None:
+        reason = "signal"
+    code = rc if rc >= 0 else 128 + sig
+    append_line(rec_fd, end_record(base, pid, code, sig, reason, started, log_fd, log_start))
+    return 124 if reason == "timeout" else code
+
+
+def end_record(base, pid, code, sig, reason, started, log_fd, log_start) -> dict:
+    rec = {"v": V, "ts": now_iso(), **base, "event": "end", "pid": pid, "exit": code,
+           "duration_ms": int((time.monotonic() - started) * 1000),
+           "log_bytes": max(0, os.fstat(log_fd).st_size - log_start) if log_fd is not None else None,
+           "reason": reason}
+    if sig is not None:
+        rec["signal"] = sig
+    return rec
+
+
+def kill_group(child: subprocess.Popen) -> int:
+    """SIGTERM the child's group, SIGKILL whatever is left after the grace."""
+    pgid = child.pid
+    grace = float(os.environ.get("PROCRUN_KILL_GRACE") or 10)
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        child.poll()
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            break  # group empty: child reaped and no descendants left
+        except PermissionError:
+            pass
+        time.sleep(0.1)
+    else:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    return child.wait()
+
+
+# ── presence probes ──────────────────────────────────────────────────────────
+
+def process_table() -> list[tuple[int, int, str]]:
+    out = run_quiet(["ps", "-A", "-o", "pid=,ppid=,args="]) or ""
+    rows = []
+    for line in out.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+            rows.append((int(parts[0]), int(parts[1]), parts[2] if len(parts) > 2 else ""))
+    return rows
+
+
+def descendants(root: int, table) -> list[tuple[int, int, str]]:
+    kids: dict[int, list] = {}
+    for row in table:
+        kids.setdefault(row[1], []).append(row)
+    out, todo = [], [root]
+    while todo:
+        for row in kids.get(todo.pop(), []):
+            out.append(row)
+            todo.append(row[0])
+    return out
+
+
+def probe_presence(entry: dict) -> tuple[bool, str, int | None]:
+    """(present, detail, restart_count) for kinds that have presence."""
+    kind = entry.get("kind")
+    if kind == "systemd":
+        argv = ["systemctl"] + (["--user"] if entry.get("user_unit") else [])
+        out = run_quiet(argv + ["show", "-p", "ActiveState", "-p", "NRestarts", entry.get("unit", "")])
+        if out is None:
+            return False, "systemctl show failed", None
+        props = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+        restarts = int(props["NRestarts"]) if props.get("NRestarts", "").isdigit() else None
+        state = props.get("ActiveState", "unknown")
+        return state == "active", f"unit {state}", restarts
+    if kind == "container":
+        out = run_quiet(["docker", "inspect", "-f", "{{.State.Running}} {{.RestartCount}}",
+                         entry.get("container", "")])
+        if out is None:
+            return False, "container not found", None
+        running, _, count = out.strip().partition(" ")
+        restarts = int(count) if count.strip().isdigit() else None
+        return running == "true", "running" if running == "true" else "container stopped", restarts
+    if kind == "daemon":
+        if entry.get("pid_file"):
+            try:
+                pid = int(expand(entry["pid_file"]).read_text().strip())
+            except (OSError, ValueError):
+                return False, "pid file unreadable", None
+            return pid_alive(pid), f"pid {pid}" if pid_alive(pid) else f"pid {pid} gone", None
+        if entry.get("pattern"):
+            me = os.getpid()
+            hit = any(re.search(entry["pattern"], args) for pid, _, args in process_table() if pid != me)
+            return hit, "pattern matched" if hit else "no process matches pattern", None
+        return False, "daemon has neither pid_file nor pattern", None
+    if kind == "tmux-pane":
+        out = run_quiet(["tmux", "display-message", "-p", "-t", entry.get("target", ""), "#{pane_pid}"])
+        if out is None or not out.strip().isdigit():
+            return False, "tmux pane not found", None
+        pane = int(out.strip())
+        hit = any(re.search(entry.get("pattern", "(?!)"), args)
+                  for _, _, args in descendants(pane, process_table()))
+        return hit, "program running in pane" if hit else "no matching program in pane", None
+    return True, "", None
+
+
+# ── procrun check ────────────────────────────────────────────────────────────
+
+def run_signals(entry: dict, records: list[dict], first_seen: float, now: float) -> dict[str, str]:
+    """orphaned / failed / missed / blocked findings from procrun records."""
+    found: dict[str, str] = {}
+    ended = {r.get("run_id") for r in records if r.get("event") == "end"}
+    last_end_ts = max((parse_ts(r.get("ts")) or 0 for r in records if r.get("event") == "end"), default=0)
+    current_boot = boot_id()
+    for r in records:
+        if r.get("event") != "start" or r.get("run_id") in ended:
+            continue
+        if (parse_ts(r.get("ts")) or 0) < last_end_ts:
+            continue  # a later completed run supersedes an older dangling start
+        if not procrun_alive(r, current_boot):
+            found["orphaned"] = f"run {r.get('run_id', '?')[:8]} has no end and procrun is gone"
+    ends = [r for r in records if r.get("event") == "end"]
+    if ends:
+        last = ends[-1]
+        if last.get("reason") == "timeout":
+            found["failed"] = "failed (timeout)"
+        elif last.get("reason") == "signal":
+            found["failed"] = f"failed (signal {last.get('signal')})"
+        elif last.get("exit") not in (0, None):
+            found["failed"] = f"failed (exit {last.get('exit')})"
+    if entry.get("schedule"):
+        try:
+            grace = parse_duration(entry.get("max_silence", 0))
+        except ValueError:
+            grace = 0
+        tz_now = dt.datetime.fromtimestamp(now - grace).astimezone()
+        due = croniter(entry["schedule"], tz_now).get_prev(float)
+        if due >= first_seen:
+            attempted = any((parse_ts(r.get("ts")) or 0) >= due
+                            for r in records if r.get("event") in ("start", "skipped"))
+            if not attempted:
+                stamp = dt.datetime.fromtimestamp(due).astimezone().isoformat(timespec="minutes")
+                found["missed"] = f"no start since {stamp}"
+    attempts = [r for r in records if r.get("event") in ("start", "skipped")]
+    if len(attempts) >= 3 and all(r["event"] == "skipped" for r in attempts[-3:]):
+        found["blocked"] = "three consecutive overlap skips"
+    return found
+
+
+def procrun_alive(start: dict, current_boot: str | None) -> bool:
+    if start.get("boot_id") and current_boot and start["boot_id"] != current_boot:
+        return False  # rebooted since the start
+    pid = start.get("pid")
+    if not isinstance(pid, int) or not pid_alive(pid):
+        return False
+    if start.get("pid_start"):
+        return pid_start(pid) == start["pid_start"]  # a reused pid has another start time
+    return True
+
+
+def progress_signal(entry: dict, now: float) -> str | None:
+    if not entry.get("progress") or not entry.get("max_silence"):
+        return None
+    limit = parse_duration(entry["max_silence"])
+    try:
+        age = now - expand(entry["progress"]).stat().st_mtime
+    except FileNotFoundError:
+        return f"progress file missing: {entry['progress']}"
+    if age > limit:
+        return f"no progress for {int(age // 60)} min (max_silence {entry['max_silence']})"
+    return None
+
+
+def evaluate(entry: dict, pstate: dict, now: float) -> tuple[str, str]:
+    """(status, detail) for one entry. Updates pstate's restart baseline."""
+    found: dict[str, str] = {}
+    kind = entry.get("kind")
+    if kind in ("daemon", "tmux-pane", "container", "systemd"):
+        present, detail, restarts = probe_presence(entry)
+        if not present:
+            found["down"] = detail
+        if restarts is not None:
+            base = pstate.get("restart_baseline")
+            if base is not None and restarts > base:
+                found.setdefault("down", f"restarted ({base} -> {restarts})")
+            pstate["restart_baseline"] = restarts  # one alert per restart, then it moves
+    if kind == "cron" and entry.get("migration", "done") != "pending":
+        found.update(run_signals(entry, read_records(entry["name"]), pstate["first_seen"], now))
+    stalled = progress_signal(entry, now)
+    if stalled:
+        found["stalled"] = stalled
+    for status in STATUSES:
+        if status in found:
+            return status, found[status]
+    return "ok", ""
+
+
+def rotate(path: Path) -> None:
+    """Rename a record file over the threshold to .1, holding its flock."""
+    try:
+        if path.stat().st_size <= ROTATE_BYTES:
+            return
+    except FileNotFoundError:
+        return
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        if os.fstat(fd).st_ino == path.stat().st_ino and path.stat().st_size > ROTATE_BYTES:
+            os.replace(path, f"{path}.1")
+    finally:
+        os.close(fd)
+
+
+def load_json(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    except ValueError:
+        print(f"procrun: {path} is not valid JSON; starting a new baseline", file=sys.stderr)
+        return None
+
+
+def write_json_atomic(path: Path, data: dict) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, path)
+
+
+def send_mail(reg: dict, subject: str, body: str) -> bool:
+    """Run `[machine] mailer` as `<mailer> <subject>` with the body on stdin."""
+    mailer = reg.get("machine", {}).get("mailer")
+    if not mailer:
+        print(f"procrun: no [machine] mailer; not sent: {subject}", file=sys.stderr)
+        return False
+    argv = [str(expand(a)) for a in shlex.split(mailer)] + [subject]
+    try:
+        r = subprocess.run(argv, input=body, text=True, timeout=120,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"procrun: mailer failed: {e}", file=sys.stderr)
+        return False
+    if r.returncode != 0:
+        print(f"procrun: mailer exited {r.returncode}: {r.stderr.strip()}", file=sys.stderr)
+        return False
+    return True
+
+
+def cmd_check() -> int:
+    sd = state_dir()
+    sd.mkdir(parents=True, exist_ok=True)
+    lock_fd = os.open(sd / "check.lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("procrun: another check is running", file=sys.stderr)
+        return 0
+    reg = load_registry()
+    now = time.time()
+    state_path = sd / "check-state.json"
+    prev = load_json(state_path)
+    baseline = prev is None
+    state = prev or {"v": V, "processes": {}}
+    host = host_name(reg)
+
+    # Validation first when the registry changed; it reports, it never blocks.
+    try:
+        mtime = registry_path().stat().st_mtime
+        if state.get("registry_mtime") != mtime:
+            fails, _ = validate(reg, state)
+            if fails and not baseline:
+                send_mail(reg, f"procrun {host}: registry validation failed ({len(fails)})",
+                          "\n".join(f"FAIL: {f}" for f in fails) + "\n")
+            state["registry_mtime"] = mtime
+    except Exception as e:  # noqa: BLE001 - validation must never stop a check
+        print(f"procrun: validate failed: {e}", file=sys.stderr)
+
+    for path in sorted(sd.glob("*.jsonl")):
+        rotate(path)
+
+    pstates = state.setdefault("processes", {})
+    status_fd = open_append(sd / "status.jsonl")
+    alerts: list[str] = []
+    for entry in reg["process"]:
+        name = entry.get("name")
+        if not name:
+            continue
+        ps = pstates.setdefault(name, {"first_seen": now})
+        ps.setdefault("first_seen", now)
+        try:
+            status, detail = evaluate(entry, ps, now)
+        except Exception as e:  # noqa: BLE001 - one bad entry must not hide the rest
+            status, detail = "failed", f"check error: {e}"
+        old = ps.get("status")
+        if status != old:
+            append_line(status_fd, {"v": V, "ts": now_iso(), "host": host, "proc": name,
+                                    "from": old, "to": status, "detail": detail})
+            ps["since"] = now
+            ps.pop("last_mail", None)
+        ps["status"], ps["detail"] = status, detail
+        if status == "ok":
+            continue
+        if baseline:
+            ps["last_mail"] = now  # silent baseline: known, so only reminders follow
+            continue
+        crit = entry.get("criticality", "medium")
+        last = ps.get("last_mail")
+        if last is None or now - last >= REMIND.get(crit, REMIND["medium"]):
+            alerts.append(f"{name}: {status}{' (reminder)' if last else ''} - {detail} [{crit}]")
+            ps["pending_mail"] = True
+    os.close(status_fd)
+
+    if alerts:
+        subject = f"procrun {host}: {len(alerts)} not ok"
+        if send_mail(reg, subject, "\n".join(alerts) + "\n"):
+            for ps in pstates.values():
+                if ps.pop("pending_mail", None):
+                    ps["last_mail"] = now
+    for ps in pstates.values():
+        ps.pop("pending_mail", None)
+    known = {e.get("name") for e in reg["process"]}
+    for gone in [n for n in pstates if n not in known]:
+        del pstates[gone]
+    state["last_run"] = now
+    state["v"] = V
+    write_json_atomic(state_path, state)  # touched every run: watch-check reads its mtime
+    os.close(lock_fd)
+    return 0
+
+
+def cmd_watch_check(args: list[str]) -> int:
+    max_age = parse_duration(args[args.index("--max-age") + 1]) if "--max-age" in args else 15 * 60
+    sd = state_dir()
+    path = sd / "check-state.json"
+    now = time.time()
+    try:
+        age = now - path.stat().st_mtime
+    except FileNotFoundError:
+        age = None
+    if age is not None and age <= max_age:
+        return 0
+    what = "has never run" if age is None else f"last ran {int(age // 60)} min ago"
+    print(f"procrun: check {what}", file=sys.stderr)
+    marker = sd / "watch-check.mailed"
+    try:
+        if now - marker.stat().st_mtime < REMIND["high"]:
+            return 1  # mailed within the hour
+    except FileNotFoundError:
+        pass
+    reg = load_registry()
+    host = host_name(reg)
+    if send_mail(reg, f"procrun {host}: checker down",
+                 f"procrun check {what} ({path}).\n"):
+        sd.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    return 1
+
+
+# ── procrun validate ─────────────────────────────────────────────────────────
+
+ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
+SPECIAL = re.compile(r"^(@\w+)\s+(.*)$")
+
+
+def read_crontab() -> list[dict] | None:
+    """Job lines as {schedule, command, line}, with crontab variables expanded."""
+    out = run_quiet(["crontab", "-l"])
+    if out is None:
+        return None
+    env: dict[str, str] = {}
+    jobs = []
+    for raw in out.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = ASSIGN.match(line)
+        if m:
+            env[m.group(1)] = m.group(2).strip().strip("'\"")
+            continue
+        m = SPECIAL.match(line)
+        if m:
+            schedule, command = m.group(1), m.group(2)
+        else:
+            parts = line.split(None, 5)
+            if len(parts) < 6:
+                continue
+            schedule, command = " ".join(parts[:5]), parts[5]
+        for k, v in env.items():
+            command = command.replace("${" + k + "}", v).replace("$" + k, v)
+        jobs.append({"schedule": schedule, "command": command, "line": raw})
+    return jobs
+
+
+def procrun_name(command: str) -> str | None:
+    """The process name of a wrapped line, or None (also for subcommands)."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        words = command.split()
+    for i, w in enumerate(words[:-1]):
+        if os.path.basename(w) == "procrun":
+            nxt = words[i + 1]
+            return None if nxt in SUBCOMMANDS or nxt.startswith("-") else nxt
+    return None
+
+
+def is_procrun_line(command: str) -> bool:
+    return bool(re.search(r"(^|[\s/])procrun(\s|$)", command))
+
+
+def norm_schedule(s: str) -> str:
+    return " ".join(str(s).split())
+
+
+def schema_errors(reg: dict) -> list[str]:
+    errs = []
+    seen = set()
+    for i, e in enumerate(reg["process"]):
+        name = e.get("name")
+        where = f"process {name!r}" if name else f"process #{i + 1}"
+        if not name:
+            errs.append(f"{where}: missing name")
+        elif name in seen:
+            errs.append(f"{where}: duplicate name")
+        elif name in SUBCOMMANDS:
+            errs.append(f"{where}: name collides with a procrun subcommand")
+        seen.add(name)
+        kind = e.get("kind")
+        if kind not in KINDS:
+            errs.append(f"{where}: kind {kind!r} is not one of {', '.join(KINDS)}")
+        for key in ("timeout", "max_silence", "retain"):
+            if key in e:
+                try:
+                    parse_duration(e[key])
+                except ValueError as err:
+                    errs.append(f"{where}: {key}: {err}")
+        if e.get("overlap", "allow") not in ("allow", "skip"):
+            errs.append(f"{where}: overlap must be allow or skip")
+        if e.get("overlap") == "skip" and not e.get("lock"):
+            errs.append(f"{where}: overlap = \"skip\" needs a lock path")
+        if e.get("criticality", "medium") not in REMIND:
+            errs.append(f"{where}: criticality must be low, medium or high")
+        if "migration" in e and kind != "cron":
+            errs.append(f"{where}: migration applies to cron entries only")
+        if e.get("migration", "done") not in ("pending", "done"):
+            errs.append(f"{where}: migration must be pending or done")
+        if kind == "cron":
+            if not e.get("schedule"):
+                errs.append(f"{where}: cron entry needs a schedule")
+            elif not croniter.is_valid(e["schedule"]):
+                errs.append(f"{where}: schedule {e['schedule']!r} is not a valid cron expression")
+        if e.get("pattern"):
+            try:
+                re.compile(e["pattern"])
+            except re.error as err:
+                errs.append(f"{where}: pattern: {err}")
+        need = {"daemon": None, "tmux-pane": "target", "container": "container", "systemd": "unit"}
+        if kind in need and need[kind] and not e.get(need[kind]):
+            errs.append(f"{where}: {kind} entry needs {need[kind]}")
+        if kind == "daemon" and not (e.get("pid_file") or e.get("pattern")):
+            errs.append(f"{where}: daemon entry needs pid_file or pattern")
+        if kind == "tmux-pane" and not e.get("pattern"):
+            errs.append(f"{where}: tmux-pane entry needs the pattern of its program")
+    return errs
+
+
+def identity_errors(e: dict, jobs: list[dict] | None) -> list[str]:
+    name, kind = e.get("name"), e.get("kind")
+    where = f"process {name!r}"
+    if kind == "cron":
+        if jobs is None:
+            return [f"{where}: crontab unreadable"]
+        if e.get("migration", "done") == "pending":
+            if not e.get("match"):
+                return [f"{where}: pending cron entry needs match (a substring of its crontab line)"]
+            lines = [j for j in jobs if e["match"] in j["command"]]
+        else:
+            lines = [j for j in jobs if procrun_name(j["command"]) == name]
+        if not lines:
+            return [f"{where}: no crontab line found"]
+        bad = [j for j in lines if norm_schedule(j["schedule"]) != norm_schedule(e.get("schedule", ""))]
+        return [f"{where}: schedule {e.get('schedule')!r} differs from crontab {j['schedule']!r}"
+                for j in bad]
+    if kind == "daemon" and e.get("pid_file") and not expand(e["pid_file"]).exists():
+        return [f"{where}: pid_file {e['pid_file']} not found"]
+    if kind == "tmux-pane" and e.get("target") and run_quiet(
+            ["tmux", "display-message", "-p", "-t", e["target"], "x"]) is None:
+        return [f"{where}: tmux pane {e['target']} not found"]
+    if kind == "container" and e.get("container") and run_quiet(
+            ["docker", "inspect", "-f", "{{.Id}}", e["container"]]) is None:
+        return [f"{where}: container {e['container']} not found"]
+    if kind == "systemd" and e.get("unit"):
+        argv = ["systemctl"] + (["--user"] if e.get("user_unit") else [])
+        out = run_quiet(argv + ["show", "-p", "LoadState", "--value", e["unit"]])
+        if out is None or out.strip() in ("", "not-found"):
+            return [f"{where}: unit {e['unit']} not found"]
+    return []
+
+
+def sentinel_errors(e: dict, reg: dict) -> list[str]:
+    where = f"process {e.get('name')!r}"
+    proj, _, sid = str(e.get("sentinel", "")).partition(":")
+    if not proj or not sid:
+        return [f"{where}: sentinel must be <project>:<id>"]
+    if proj not in reg["projects"]:
+        return [f"{where}: project {proj!r} not in [projects]"]
+    errs = []
+    root = expand(reg["projects"][proj]).resolve()
+    prog = expand(e.get("progress", "")).resolve() if e.get("progress") else None
+    if prog is None or prog.name != f"checks-{sid}.jsonl" or not prog.is_relative_to(root):
+        errs.append(f"{where}: progress must be checks-{sid}.jsonl inside project {proj!r} ({root})")
+    if e.get("model"):
+        sb = e.get("sandbox") or {}
+        if sb.get("bwrap") is not True or sb.get("read_only") is not True or not sb.get("tools"):
+            errs.append(f"{where}: model sentinel sandbox needs bwrap = true, read_only = true and tools")
+    return errs
+
+
+CHECKLOG = re.compile(r"dice-health-alert\.sh\s+checklog\s+(\S+)\s+(\S+)")
+
+
+def checklog_errors(reg: dict, jobs: list[dict]) -> list[str]:
+    """A checklog alert must read the doc a sentinel of that project writes."""
+    errs = []
+    for j in jobs:
+        m = CHECKLOG.search(j["command"])
+        if not m:
+            continue
+        target = m.group(2)
+        projects = [k for k, d in reg["projects"].items()
+                    if str(expand(d)).rstrip("/") in j["command"] or d in j["command"]]
+        docs = set()
+        for e in reg["process"]:
+            if e.get("kind") != "sentinel" or not e.get("doc"):
+                continue
+            proj = str(e.get("sentinel", "")).partition(":")[0]
+            if projects and proj not in projects:
+                continue
+            doc = str(e["doc"])
+            docs.add(doc)
+            docs.add(os.path.basename(doc))
+            if proj in reg["projects"]:
+                docs.add(str(expand(reg["projects"][proj]) / doc))
+        if target not in docs and str(expand(target)) not in docs:
+            errs.append(f"checklog {m.group(1)} reads {target}, which is not the doc of any sentinel"
+                        f"{' in ' + '/'.join(projects) if projects else ''} (crontab: {j['line'].strip()})")
+    return errs
+
+
+def validate(reg: dict, state: dict | None) -> tuple[list[str], list[str]]:
+    fails = schema_errors(reg)
+    warns: list[str] = []
+    jobs = read_crontab()
+    names = {e.get("name") for e in reg["process"]}
+    if jobs is not None:
+        for j in jobs:
+            n = procrun_name(j["command"])
+            if n is not None and n not in names:
+                fails.append(f"crontab runs procrun {n!r}, which has no registry entry ({j['line'].strip()})")
+        fails += checklog_errors(reg, jobs)
+        pending = [e["match"] for e in reg["process"]
+                   if e.get("kind") == "cron" and e.get("migration") == "pending" and e.get("match")]
+        for j in jobs:
+            if not is_procrun_line(j["command"]) and not any(p in j["command"] for p in pending):
+                warns.append(f"crontab line neither wrapped nor pending: {j['line'].strip()}")
+    for e in reg["process"]:
+        if e.get("kind") in KINDS and e.get("name"):
+            fails += identity_errors(e, jobs)
+        if e.get("kind") == "sentinel":
+            fails += sentinel_errors(e, reg)
+        if e.get("kind") == "cron" and e.get("migration") == "pending":
+            seen = ((state or {}).get("processes", {}).get(e.get("name"), {})).get("first_seen")
+            if seen and time.time() - seen > PENDING_WARN_DAYS * 86400:
+                warns.append(f"process {e.get('name')!r}: pending for more than {PENDING_WARN_DAYS} days")
+    return fails, warns
+
+
+def cmd_validate(args: list[str]) -> int:
+    try:
+        reg = load_registry()
+    except RegistryError as e:
+        print(f"FAIL: {e}")
+        return 1
+    fails, warns = validate(reg, load_json(state_dir() / "check-state.json"))
+    for f in fails:
+        print(f"FAIL: {f}")
+    for w in warns:
+        print(f"WARN: {w}")
+    if fails and "--mail" in args:
+        send_mail(reg, f"procrun {host_name(reg)}: registry validation failed ({len(fails)})",
+                  "\n".join(f"FAIL: {f}" for f in fails) + "\n")
+    if not fails and not warns:
+        print("ok")
+    return 1 if fails else 0
+
+
+# ── entry point ──────────────────────────────────────────────────────────────
+
+def main(argv: list[str]) -> int:
+    if not argv or argv[0] in ("-h", "--help"):
+        print(USAGE)
+        return 0 if argv else 2
+    cmd, rest = argv[0], argv[1:]
+    try:
+        if cmd == "check":
+            return cmd_check()
+        if cmd == "validate":
+            return cmd_validate(rest)
+        if cmd == "watch-check":
+            return cmd_watch_check(rest)
+    except RegistryError as e:
+        print(f"procrun: {e}", file=sys.stderr)
+        return 1
+    if rest[:1] != ["--"]:
+        print("procrun: usage: procrun <name> -- <command> [args...]", file=sys.stderr)
+        return 2
+    return cmd_run(cmd, rest[1:])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
