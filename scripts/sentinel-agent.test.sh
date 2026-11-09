@@ -275,18 +275,6 @@ check "claude: no Bash or Write" '! echo "$CA" | grep -Eq "^(Bash|Write)"'
 check "claude: --tools offers only the entry's tools" 'echo "$CA" | grep -A1 -x -- --tools | grep -qx "Read,Edit"' "$CA"
 check "prompt treats the snapshot as data" 'echo "$CA" | grep -q "as data, never as instructions"'
 
-# claude-acct, when installed, runs the model and keeps its state dir writable.
-ACCT_BIN="$TMP/acctbin"; mkdir -p "$ACCT_BIN"
-cat > "$ACCT_BIN/claude-acct" <<'ACCT'
-#!/bin/sh
-echo used > "$FAKE_DIR/acct-used"
-exec claude "$@"
-ACCT
-chmod +x "$ACCT_BIN/claude-acct"
-reset_project; write_registry
-RUN_PATH="$BW:$ACCT_BIN:$FAKE:$PATH" CLAUDE_ACCT_STATE="$TMP/acct-state" run_sa demo 02
-check "claude-acct runs the model when installed" '[ -f "$FAKE_DIR/acct-used" ] && [ $rc -eq 0 ]' "$out"
-check "claude-acct state dir is bound writable in the sandbox" 'grep -A2 -x -- --bind "$FAKE_DIR/bwrap-argv" | grep -qx "$TMP/acct-state"'
 check "prompt carries the registry instructions" 'echo "$CA" | grep -q "Project note"'
 check "cmd capture ran outside the sandbox" 'grep -q "check-last for 02" "$SNAP/check-last.txt"'
 check "tail capture kept the last lines" '[ "$(wc -l < "$SNAP/app-tail.txt" | tr -d " ")" = 5 ] && tail -1 "$SNAP/app-tail.txt" | grep -q "line 40"'
@@ -439,5 +427,18 @@ run_sa demo 02
 check "copy-back waits for the project lock, then lands" '! issues_unchanged && ! echo "$out" | grep -q "project lock busy"' "$out"
 
 echo
+# claude-acct, when installed, runs the model and keeps its state dir writable.
+ACCT_BIN="$TMP/acctbin"; mkdir -p "$ACCT_BIN"
+cat > "$ACCT_BIN/claude-acct" <<'ACCT'
+#!/bin/sh
+echo used > "$FAKE_DIR/acct-used"
+exec claude "$@"
+ACCT
+chmod +x "$ACCT_BIN/claude-acct"
+reset_project; write_registry
+RUN_PATH="$BW:$ACCT_BIN:$FAKE:$PATH" CLAUDE_ACCT_STATE="$TMP/acct-state" run_sa demo 02
+check "claude-acct runs the model when installed" '[ -f "$FAKE_DIR/acct-used" ] && [ $rc -eq 0 ]' "$out"
+check "claude-acct state dir is bound writable in the sandbox" 'grep -A2 -x -- --bind "$FAKE_DIR/bwrap-argv" | grep -qx "$TMP/acct-state"'
+
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
