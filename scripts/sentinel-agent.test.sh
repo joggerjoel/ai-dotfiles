@@ -49,6 +49,8 @@ export FAKE_DIR="$TMP/fake"
 mkdir -p "$FAKE_DIR"
 export PROCRUN_REGISTRY="$TMP/processes.toml"
 export SENTINEL_AGENT_LOCK_WAIT=1
+# A real claude-acct on PATH must not read this host's accounts or write its state.
+export CLAUDE_ACCT_STATE="$TMP/acct-state" CLAUDE_ACCT_ENV=/dev/null CLAUDE_FLEET_ENV=/dev/null
 BASE_PATH="$FAKE:$PATH"
 SB_PATH="$BW:$FAKE:$PATH"
 PROJ="$TMP/proj"
@@ -436,7 +438,7 @@ exec claude "$@"
 ACCT
 chmod +x "$ACCT_BIN/claude-acct"
 reset_project; write_registry
-RUN_PATH="$BW:$ACCT_BIN:$FAKE:$PATH" CLAUDE_ACCT_STATE="$TMP/acct-state" run_sa demo 02
+RUN_PATH="$BW:$ACCT_BIN:$FAKE:$PATH" run_sa demo 02
 check "claude-acct runs the model when installed" '[ -f "$FAKE_DIR/acct-used" ] && [ $rc -eq 0 ]' "$out"
 check "claude-acct state dir is bound writable in the sandbox" 'grep -A2 -x -- --bind "$FAKE_DIR/bwrap-argv" | grep -qx "$TMP/acct-state"'
 
