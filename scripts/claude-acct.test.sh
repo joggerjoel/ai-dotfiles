@@ -29,11 +29,12 @@ TOK_B='sk-ant-oat01-FAKE-bravo-rTrT-0002'
 # "<exit code>|<stdout>|<stderr>". No file means "answer ok".
 cat > "$FAKE/claude" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "$CLAUDE_CODE_OAUTH_TOKEN" >> "$FAKE_BEH/calls"
+KEY=${CLAUDE_CODE_OAUTH_TOKEN:-login:${CLAUDE_CONFIG_DIR:-default}}
+printf '%s\n' "$KEY" >> "$FAKE_BEH/calls"
 printf '%s\n' "$*" >> "$FAKE_BEH/argv"
-cat > "$FAKE_BEH/stdin.$CLAUDE_CODE_OAUTH_TOKEN"
+cat > "$FAKE_BEH/stdin.${KEY//\//_}"
 env | grep -c '^CLAUDE_CODE_OAUTH_TOKEN_' > "$FAKE_BEH/other-tokens"
-f="$FAKE_BEH/$CLAUDE_CODE_OAUTH_TOKEN"
+f="$FAKE_BEH/${KEY//\//_}"
 if [ -f "$f" ]; then
   IFS='|' read -r rc out err < "$f"
   printf '%s\n' "$out"
@@ -76,6 +77,45 @@ check "success passes stdout through" 'grep -qx "ok from claude" "$OUT"'
 check "arguments reach claude unchanged" 'grep -qx -- "-p hello" "$BEH/argv"'
 check "success exits 0" '[ $RC -eq 0 ]'
 check "only the chosen account token is in the child environment" '[ "$(cat "$BEH/other-tokens")" = 0 ]'
+
+# --- a login account (no token, a config dir) ---------------------------------
+login_run() { # <dir for bravo> args...
+  local dir=$1; shift
+  OUT="$TMP/out" ERR="$TMP/err"
+  env -i HOME="$TMP/home" PATH="$FAKE:/usr/bin:/bin" TMPDIR="$TMP" \
+    FAKE_BEH="$BEH" CLAUDE_ACCT_STATE="$STATE" CLAUDE_ACCT_NOW="$NOW" \
+    CLAUDE_FLEET_ENV="$TMP/no-such-env" CLAUDE_ACCOUNTS="alpha bravo" \
+    CLAUDE_CODE_OAUTH_TOKEN_ALPHA="$TOK_A" CLAUDE_CONFIG_DIR_BRAVO="$dir" \
+    bash "$CA" "$@" > "$OUT" 2> "$ERR" < /dev/null
+  # shellcheck disable=SC2034
+  RC=$?
+}
+reset_world
+printf '1|%s|\n' "$LIMIT" > "$BEH/$TOK_A"
+login_run "$TMP/home/.claude" -p hello
+check "a limited token account fails over to a login account" '[ "$(calls)" = "$TOK_A login:default " ] && [ $RC -eq 0 ]'
+check "the default login dir is left implicit" 'grep -qx "login:default" "$BEH/calls"'
+reset_world
+printf '1|%s|\n' "$LIMIT" > "$BEH/$TOK_A"
+login_run "$TMP/accts/bravo/" -p hello
+check "a non-default login dir is passed as CLAUDE_CONFIG_DIR" 'grep -qx "login:$TMP/accts/bravo" "$BEH/calls"'
+reset_world
+printf '1||%s\n' "$LIMIT" > "$BEH/login:default"
+printf '%s limit\n' $((NOW + 600)) > "$STATE/alpha"
+login_run "$TMP/home/.claude" -p hello
+check "a limited login account is marked exhausted" '[ -f "$STATE/bravo" ]'
+
+# --- host-local env adds a login account and sets the order -------------------
+reset_world
+mkdir -p "$TMP/home/.config/claude-acct"
+printf 'CLAUDE_ACCOUNTS="bravo alpha"\nCLAUDE_CONFIG_DIR_BRAVO="$HOME/.claude"\n' > "$TMP/home/.config/claude-acct/env"
+OUT="$TMP/out" ERR="$TMP/err"
+env -i HOME="$TMP/home" PATH="$FAKE:/usr/bin:/bin" TMPDIR="$TMP" \
+  FAKE_BEH="$BEH" CLAUDE_ACCT_STATE="$STATE" CLAUDE_ACCT_NOW="$NOW" \
+  CLAUDE_FLEET_ENV="$TMP/no-such-env" CLAUDE_CODE_OAUTH_TOKEN_ALPHA="$TOK_A" \
+  bash "$CA" -p hello > "$OUT" 2> "$ERR" < /dev/null
+check "the host env's order and login account are used" '[ "$(calls)" = "login:default " ]'
+rm -rf "$TMP/home/.config/claude-acct"
 
 # --- skip an exhausted account ------------------------------------------------
 reset_world

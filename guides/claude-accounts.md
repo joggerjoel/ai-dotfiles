@@ -85,3 +85,23 @@ Replace `claude` with `claude-acct` and keep every argument:
 
 Tests: `just claude-acct-test`, `just claude-token-test`, also run by
 `just test-all`.
+
+## A host's own login as an account
+
+An account can be an interactive `claude auth login` instead of a token. Set
+`CLAUDE_CONFIG_DIR_<NAME>` to the config directory that holds the login and
+leave its token unset. Ansible owns `~/.config/claude-fleet/env`, so put
+per-host settings in `~/.config/claude-acct/env`, which `claude-acct` reads
+after the fleet file:
+
+```sh
+# ~/.config/claude-acct/env on aorus8: the fleet token first, this host's own
+# login (joel.labelle) when that account is limited.
+CLAUDE_ACCOUNTS="hyunseokkim986 joel_labelle"
+CLAUDE_CODE_OAUTH_TOKEN_HYUNSEOKKIM986="$CLAUDE_CODE_OAUTH_TOKEN"
+CLAUDE_CONFIG_DIR_JOEL_LABELLE="$HOME/.claude"
+```
+
+The default `~/.claude` stays implicit when the account runs, because on macOS
+an explicit `CLAUDE_CONFIG_DIR` names a different keychain entry.
+`claude-usage --config-dir <dir>` reads the same login's limits.

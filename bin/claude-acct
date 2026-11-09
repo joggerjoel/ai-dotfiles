@@ -40,6 +40,9 @@ set -uo pipefail
 set -f
 
 FLEET_ENV="${CLAUDE_FLEET_ENV:-$HOME/.config/claude-fleet/env}"
+# Host-local accounts, for example this host's own login (CLAUDE_CONFIG_DIR_<NAME>).
+# Ansible owns the fleet file, so per-host settings live here and win.
+HOST_ENV="${CLAUDE_ACCT_ENV:-$HOME/.config/claude-acct/env}"
 STATE_DIR="${CLAUDE_ACCT_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/claude-acct}"
 DEFAULT_COOLDOWN=3600
 MAX_COOLDOWN=$((8 * 86400))
@@ -189,6 +192,10 @@ load_accounts() {
     # shellcheck disable=SC1090
     . "$FLEET_ENV"
   fi
+  if [ -r "$HOST_ENV" ]; then
+    # shellcheck disable=SC1090
+    . "$HOST_ENV"
+  fi
   for a in ${CLAUDE_ACCOUNTS:-}; do
     valid_name "$a" || { printf 'claude-acct: ignoring invalid account name "%s"\n' "$a" >&2; continue; }
     ACCOUNTS+=("$a")
@@ -201,7 +208,11 @@ find_claude() {
   [ -x "$CLAUDE_BIN" ] || { echo "claude-acct: claude not found" >&2; exit 127; }
 }
 
-has_token() { local v; v=$(token_var "$1"); [ -n "${!v:-}" ]; }
+dir_var() { printf 'CLAUDE_CONFIG_DIR_%s' "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"; }
+# An account with CLAUDE_CONFIG_DIR_<NAME> and no token runs on the interactive
+# login in that directory, so a host's own `claude auth login` can be an account.
+is_login() { local t d; t=$(token_var "$1"); d=$(dir_var "$1"); [ -z "${!t:-}" ] && [ -n "${!d:-}" ]; }
+has_token() { local v; v=$(token_var "$1"); [ -n "${!v:-}" ] || is_login "$1"; }
 
 # Run claude as account $1. Only that account's token reaches the child, so the
 # other accounts' tokens are not visible to anything claude spawns.
@@ -210,9 +221,17 @@ run_as() { # <name> <exec|run> args...
   shift 2
   var=$(token_var "$name")
   (
-    export CLAUDE_CODE_OAUTH_TOKEN="${!var}"
+    if is_login "$name"; then
+      local d dir
+      d=$(dir_var "$name"); dir=${!d}; dir=${dir%/}
+      unset CLAUDE_CODE_OAUTH_TOKEN
+      # The default dir stays implicit: on macOS an explicit one names another keychain entry.
+      if [ "$dir" = "$HOME/.claude" ]; then unset CLAUDE_CONFIG_DIR; else export CLAUDE_CONFIG_DIR="$dir"; fi
+    else
+      export CLAUDE_CODE_OAUTH_TOKEN="${!var}"
+    fi
     local a
-    for a in "${ACCOUNTS[@]}"; do unset "$(token_var "$a")"; done
+    for a in "${ACCOUNTS[@]}"; do unset "$(token_var "$a")" "$(dir_var "$a")"; done
     if [ "$mode" = exec ]; then exec "$CLAUDE_BIN" "$@"; else "$CLAUDE_BIN" "$@"; fi
   )
 }
@@ -223,7 +242,7 @@ status() {
   for a in ${ACCOUNTS[@]+"${ACCOUNTS[@]}"}; do
     e=$(state_epoch "$a"); r=$(state_reason "$a")
     if ! has_token "$a"; then
-      printf '%s\tno token (%s unset)\n' "$a" "$(token_var "$a")"
+      printf '%s\tno token (%s unset) and no %s\n' "$a" "$(token_var "$a")" "$(dir_var "$a")"
     elif [ "$e" -gt "$(now)" ]; then
       printf '%s\tunavailable (%s) until %s\n' "$a" "${r:-limit}" "$(epoch_fmt "" "$e" '%Y-%m-%d %H:%M %Z')"
     else
