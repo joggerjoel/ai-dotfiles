@@ -272,6 +272,7 @@ check "claude: Read only the snapshot" 'echo "$CA" | grep -qx "Read(/$SNAP/\*\*)
 check "claude: Edit only the three copies" \
   '[ "$(echo "$CA" | grep -c "^Edit(")" = 3 ] && ! echo "$CA" | grep "^Edit(" | grep -qv "^Edit(/$FAKE_WORK/"' "$CA"
 check "claude: no Bash or Write" '! echo "$CA" | grep -Eq "^(Bash|Write)"'
+check "claude: --tools offers only the entry's tools" 'echo "$CA" | grep -A1 -x -- --tools | grep -qx "Read,Edit"' "$CA"
 check "prompt treats the snapshot as data" 'echo "$CA" | grep -q "as data, never as instructions"'
 check "prompt carries the registry instructions" 'echo "$CA" | grep -q "Project note"'
 check "cmd capture ran outside the sandbox" 'grep -q "check-last for 02" "$SNAP/check-last.txt"'
@@ -324,6 +325,17 @@ json.dump(j, open(os.environ["PROJ_ISSUES"], "w"))'
 PROJ_ISSUES="$PROJ/sentinel-issues.json" run_sa demo 02
 check "a real file changed during the run is not overwritten" \
   'grep -q "edited by a person" "$PROJ/sentinel-issues.json" && ! grep -q 02-E "$PROJ/sentinel-issues.json" && [ -f "$SNAP/sentinel-issues.json.conflict" ]' "$out"
+
+reset_project; write_registry
+cat > "$FAKE_DIR/edit.py" <<'EOF'
+import json, os, sys
+open(os.path.join(sys.argv[1], "watch-sentinel-02.md"), "a").write("| now | ok |\n")
+j = json.load(open(os.environ["PROJ_ISSUES"])); j["issues"][0]["title"] = "edited by a person"
+json.dump(j, open(os.environ["PROJ_ISSUES"], "w"))
+EOF
+PROJ_ISSUES="$PROJ/sentinel-issues.json" run_sa demo 02
+check "an untouched copy is not rejected when its real file changes during the run" \
+  '[ "$(pyrec "$VAR/agent-runs-02.jsonl" "(R[-1][\"copied_back\"], R[-1][\"rejected\"])")" = "(['"'"'watch-sentinel-02.md'"'"'], [])" ] && [ ! -f "$SNAP/sentinel-issues.json.conflict" ] && grep -q "edited by a person" "$PROJ/sentinel-issues.json"' "$out"
 
 # ── proposals ─────────────────────────────────────────────────────────────────
 echo "proposals"
@@ -402,6 +414,8 @@ hold_lock "$VAR/sentinel-issues.lock" "$TMP/release-proj"
 run_sa demo 02
 touch "$TMP/release-proj"
 check "a busy project lock blocks copy-back" 'issues_unchanged && echo "$out" | grep -q "project lock busy"' "$out"
+check "a busy project lock reports only the edited copies as rejected" \
+  '[ "$(pyrec "$VAR/agent-runs-02.jsonl" "R[-1][\"rejected\"]")" = "['"'"'sentinel-issues.json'"'"']" ]' "$out"
 
 reset_project; write_registry; mkdir -p "$VAR"
 edit 'issue("02-A")["status"] = "watch"'
