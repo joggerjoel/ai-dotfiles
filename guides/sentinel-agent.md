@@ -100,7 +100,7 @@ skipped`.
 4. Copies the sentinel's doc and `sentinel-issues.json` into `work/` and
    creates an empty `work/proposals.json`.
 5. Runs `claude -p --output-format json --model <model> --setting-sources ""
---permission-mode dontAsk --allowedTools ...` inside `bwrap` with `/`
+--permission-mode dontAsk --tools <sandbox tools> --allowedTools ...` inside `bwrap` with `/`
    read-only, `/dev`, `/proc`, a private `/tmp`, its own pid namespace,
    `--die-with-parent`, `~/.claude` and `~/.claude.json` writable for the
    CLI's own state, `~/.claude/.env` masked with `/dev/null`, and only
@@ -109,7 +109,8 @@ skipped`.
 6. Under the project lock (`var/sentinel/sentinel-issues.lock`, shared by
    every sentinel of the project), copies back each edited copy whose real
    file did not change during the run and that passes validation. A changed
-   original keeps the edit in `<file>.conflict` in the snapshot.
+   original keeps the edit in `<file>.conflict` in the snapshot. A copy the
+   model did not edit is skipped, so it is never reported as rejected.
 7. Appends each valid proposal to `var/sentinel/proposals-<id>.jsonl`.
 8. Appends the run's record to `var/sentinel/agent-runs-<id>.jsonl`.
 
@@ -185,7 +186,11 @@ Every run, including a skipped one, appends:
 }
 ```
 
-`input_tokens` counts uncached, cache-creation and cache-read input tokens.
+`rejected` lists only copies the model edited that did not land: a conflict,
+a guard rejection, invalid JSON or a busy project lock.
+
+`input_tokens` counts uncached, cache-creation and cache-read input tokens,
+summed over every turn, so it grows with the number of turns.
 `cost_usd` is `total_cost_usd` from the CLI's JSON output, or `null` when the
 run produced none (a crash or a timeout); such a run cannot count toward the
 budget. A skipped run has `rc: null`, `skipped: "budget"` or
