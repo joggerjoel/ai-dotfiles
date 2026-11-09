@@ -57,15 +57,17 @@
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
 
-- [ ] **2.1 Write the v1 contract as a short guide with one example per language, and ship single-file helpers for Node, Python and Bash from `ai-dotfiles` with a version line.**
+- [x] **2.1 Write the v1 contract as a short guide with one example per language, and ship single-file helpers for Node, Python and Bash from `ai-dotfiles` with a version line.**
     depends-on: []
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: PR #19: guides/log-contract-v1.md with Node, Python and Bash examples; single-file helpers lib/log-contract/logv1.{js,py,sh} sharing version line 'log-contract-v1 helper 1.0.0', run_id/proc from PROCRUN_RUN_ID/PROCRUN_PROC.
 
-- [ ] **2.2 Tests: dated styles parse to the same instant; a bare time takes the nearest dated line's date; an undated source keeps order; a record split across two checks counts once; a trailing record older than 60 s is counted in the same check.**
+- [x] **2.2 Tests: dated styles parse to the same instant; a bare time takes the nearest dated line's date; an undated source keeps order; a record split across two checks counts once; a trailing record older than 60 s is counted in the same check.**
     depends-on: ["2.1"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: PR #19: lib/log-contract/log-profile.js parser with tests (dated styles same instant, bare time takes nearest dated date, undated keeps order, split record counts once, trailing record >60 s counted); just test-all 724 passed, 0 failed.
 
 - [ ] **3.1 Write `procrun export`: stdin request of `{stream, key, offset, inode}` with process names or `project:id` keys; unknown keys rejected; paths resolved from the registry only; `check-state.json` last-run time; rotated generation read before the current file; 1 MB cap; sentinel issue statuses; `df`; last 50 log lines for non-`ok` processes; one redaction filter on all text; writes nothing.**
     depends-on: ["1.1", "1.2", "1.3", "1.6", "1.7", "1.9", "2.1", "2.2"]
