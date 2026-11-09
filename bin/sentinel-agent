@@ -293,7 +293,7 @@ def allowed_tools(tools: list[str], snap: Path, work: Path, doc: str) -> list[st
     return rules
 
 
-def sandbox_argv(bwrap: str, work: Path) -> list[str]:
+def sandbox_argv(bwrap: str, work: Path, writable: tuple[Path, ...] = ()) -> list[str]:
     home = Path.home()
     argv = [bwrap, "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
             "--die-with-parent", "--unshare-pid", "--tmpfs", "/tmp"]
@@ -303,6 +303,8 @@ def sandbox_argv(bwrap: str, work: Path) -> list[str]:
             argv += ["--ro-bind", "/dev/null", str(home / ".claude" / ".env")]
     if (home / ".claude.json").exists():
         argv += ["--bind", str(home / ".claude.json"), str(home / ".claude.json")]
+    for path in writable:
+        argv += ["--bind", str(path), str(path)]
     return argv + ["--bind", str(work), str(work), "--"]
 
 
@@ -549,7 +551,16 @@ def run(project: str, sid: str) -> int:
         log("bwrap not found: refusing to run the model unsandboxed")
         finish(None, skipped="no-sandbox", input_tokens=0, output_tokens=0, cost_usd=0)
         return 1
-    claude = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
+    # claude-acct moves the run to another subscription account when one is limited; it
+    # records which account is limited in its state dir, so that dir stays writable.
+    acct = shutil.which("claude-acct")
+    claude = acct or shutil.which("claude") or str(Path.home() / ".local/bin/claude")
+    writable = ()
+    if acct:
+        state = Path(os.environ.get("CLAUDE_ACCT_STATE")
+                     or Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "claude-acct")
+        state.mkdir(parents=True, exist_ok=True)
+        writable = (state,)
 
     cap = float(entry["max_usd_per_day"])
     spent = spent_today(runs_path)
@@ -575,7 +586,7 @@ def run(project: str, sid: str) -> int:
     (work / PROPOSALS).write_text("[]\n")
 
     prompt = build_prompt(project, sid, doc, snap, work, files, tools, str(entry.get("instructions", "")), note)
-    argv = sandbox_argv(bwrap, work) + [
+    argv = sandbox_argv(bwrap, work, writable) + [
         claude, "-p", prompt, "--output-format", "json", "--model", model,
         "--setting-sources", "", "--permission-mode", "dontAsk", "--tools", ",".join(tools),
         "--allowedTools", *allowed_tools(tools, snap, work, doc)]
