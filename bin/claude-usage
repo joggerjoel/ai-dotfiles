@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+"""claude-usage: is this Claude subscription login usage-limited, and until when?
+
+    claude-usage [--config-dir DIR] [--keychain-service NAME] [--json]
+
+Reads the interactive login of one Claude Code config dir and asks
+GET /api/oauth/usage. That endpoint needs the `user:profile` scope, which a
+`claude setup-token` token (CLAUDE_CODE_OAUTH_TOKEN) does not have, so that
+variable is ignored on purpose. No model call is ever made.
+
+Exit codes:
+  0  usable
+  2  limited (a limit is at 100% or critical); resets_at says until when
+  3  cannot tell: no login, missing scope, HTTP or network error, bad reply
+  4  cannot tell because the access token is expired or was rejected (401);
+     running any `claude` command with that login refreshes it
+
+Guide: guides/claude-usage.md in ai-dotfiles. Tokens are never printed.
+"""
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import unicodedata
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+
+USAGE_URL = os.environ.get("CLAUDE_USAGE_URL", "https://api.anthropic.com/api/oauth/usage")
+BETA_HEADER = "oauth-2025-04-20"
+NEED_SCOPE = "user:profile"
+SERVICE = "Claude Code-credentials"
+TIMEOUT = 20
+
+OK, LIMITED, UNKNOWN, STALE = 0, 2, 3, 4
+
+# The unscoped windows, used only when the reply has no `limits` array.
+LEGACY_WINDOWS = (
+    ("five_hour", "session"),
+    ("seven_day", "weekly_all"),
+    ("seven_day_opus", "weekly_scoped"),
+    ("seven_day_sonnet", "weekly_scoped"),
+)
+
+
+class Cannot(Exception):
+    def __init__(self, code, message, exit_code=UNKNOWN):
+        super().__init__(message)
+        self.code = code
+        self.exit_code = exit_code
+
+
+def config_dir(arg):
+    """(path, explicit). Claude Code derives the keychain name from the
+    CLAUDE_CONFIG_DIR value only when that variable is set."""
+    raw = arg or os.environ.get("CLAUDE_CONFIG_DIR")
+    if raw:
+        return unicodedata.normalize("NFC", os.path.abspath(os.path.expanduser(raw))), True
+    return os.path.expanduser("~/.claude"), False
+
+
+def keychain_services(directory, explicit):
+    if not explicit:
+        return [SERVICE]
+    names = []
+    for path in (directory, os.path.realpath(directory)):
+        name = "%s-%s" % (SERVICE, hashlib.sha256(path.encode()).hexdigest()[:8])
+        if name not in names:
+            names.append(name)
+    if directory == os.path.expanduser("~/.claude"):
+        names.append(SERVICE)
+    return names
+
+
+def read_keychain(service):
+    try:
+        run = subprocess.run(["security", "find-generic-password", "-s", service, "-w"],
+                             capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return run.stdout if run.returncode == 0 and run.stdout.strip() else None
+
+
+def read_login(directory, explicit, service):
+    """The claudeAiOauth object for this config dir, from the keychain on
+    macOS (file as fallback) and from .credentials.json elsewhere."""
+    raws = []
+    if service:
+        raws.append(read_keychain(service))
+    elif sys.platform == "darwin":
+        raws.extend(read_keychain(name) for name in keychain_services(directory, explicit))
+    path = os.path.join(directory, ".credentials.json")
+    if not service:
+        try:
+            with open(path) as handle:
+                raws.append(handle.read())
+        except OSError:
+            pass
+    for raw in raws:
+        if not raw:
+            continue
+        try:
+            login = json.loads(raw).get("claudeAiOauth")
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(login, dict):
+            return login
+    where = "keychain service %r" % service if service else "%s (and the macOS keychain)" % path
+    raise Cannot("no_login", "no Claude login found in %s; run: CLAUDE_CONFIG_DIR=%s claude auth login"
+                 % (where, directory))
+
+
+def account_info(directory, explicit):
+    """Email and plan from `claude auth status --json`, best effort."""
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_OAUTH_TOKEN"}
+    if explicit:
+        env["CLAUDE_CONFIG_DIR"] = directory
+    try:
+        run = subprocess.run(["claude", "auth", "status", "--json"], capture_output=True,
+                             text=True, timeout=30, env=env)
+        info = json.loads(run.stdout)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None, None
+    if not isinstance(info, dict):
+        return None, None
+    return info.get("email"), info.get("subscriptionType")
+
+
+def check_login(login):
+    scopes = login.get("scopes")
+    if isinstance(scopes, list) and NEED_SCOPE not in scopes:
+        raise Cannot("missing_scope", "login lacks the %s scope (a setup-token login does); "
+                     "run: claude auth login" % NEED_SCOPE)
+    if not isinstance(login.get("accessToken"), str) or not login["accessToken"]:
+        raise Cannot("stale_token", "the login holds no access token; run any claude command with "
+                     "this login to refresh it", STALE)
+    expires = login.get("expiresAt")
+    if isinstance(expires, (int, float)) and expires <= datetime.now(timezone.utc).timestamp() * 1000:
+        when = datetime.fromtimestamp(expires / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        raise Cannot("stale_token", "access token expired at %s; run any claude command with this "
+                     "login to refresh it" % when, STALE)
+
+
+def fetch_usage(token):
+    request = urllib.request.Request(USAGE_URL, headers={
+        "Authorization": "Bearer " + token, "anthropic-beta": BETA_HEADER, "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as reply:
+            return json.loads(reply.read().decode())
+    except urllib.error.HTTPError as err:
+        detail = ""
+        try:
+            error = json.loads(err.read().decode()).get("error")
+            detail = (error.get("type") or error.get("message") or "") if isinstance(error, dict) else str(error or "")
+        except (ValueError, AttributeError, OSError):
+            pass
+        detail = detail[:80]
+        if err.code == 401:
+            raise Cannot("unauthorized", "usage endpoint rejected the access token (HTTP 401); "
+                         "run any claude command with this login to refresh it", STALE)
+        if err.code == 403 and "scope" in detail:
+            raise Cannot("missing_scope", "usage endpoint refused: %s (the login lacks %s)" % (detail, NEED_SCOPE))
+        raise Cannot("http_error", "usage endpoint returned HTTP %d %s" % (err.code, detail))
+    except (urllib.error.URLError, OSError, TimeoutError) as err:
+        raise Cannot("network_error", "usage endpoint unreachable: %s" % getattr(err, "reason", err))
+    except ValueError:
+        raise Cannot("bad_response", "usage endpoint returned something that is not JSON")
+
+
+def utc_iso(value):
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        # Fractions go first: before Python 3.11 fromisoformat takes only 3 or 6 digits.
+        moment = datetime.fromisoformat(re.sub(r"\.\d+", "", value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def scope_name(scope):
+    if not isinstance(scope, dict):
+        return None
+    model = scope.get("model")
+    name = model.get("display_name") if isinstance(model, dict) else None
+    return name if isinstance(name, str) else None
+
+
+def number(value):
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def normalise_limits(usage):
+    """One shape out of the `limits` array, or of the legacy windows when the
+    array is absent. Unknown keys and malformed entries are skipped."""
+    raw = usage.get("limits")
+    entries = []
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                entries.append((item.get("kind"), item.get("group"), item.get("percent"), item.get("severity"),
+                                item.get("resets_at"), scope_name(item.get("scope")), item.get("is_active")))
+    else:
+        for key, kind in LEGACY_WINDOWS:
+            window = usage.get(key)
+            if isinstance(window, dict):
+                scoped = key.rsplit("_", 1)[-1] if kind == "weekly_scoped" else None
+                entries.append((kind, "weekly" if key != "five_hour" else "session", window.get("utilization"),
+                                None, window.get("resets_at"), scoped, True))
+    limits = []
+    for kind, group, percent, severity, resets, scope, active in entries:
+        percent = number(percent)
+        if percent is None:
+            continue
+        limits.append({
+            "kind": kind if isinstance(kind, str) else "unknown",
+            "group": group if isinstance(group, str) else None,
+            "scope": scope,
+            "percent": percent,
+            "severity": severity if isinstance(severity, str) else "normal",
+            "resets_at": utc_iso(resets),
+            "active": bool(active),
+        })
+    return limits
+
+
+def blocking(limit):
+    return limit["percent"] >= 100 or limit["severity"] == "critical"
+
+
+def summarise(usage, email, subscription):
+    limits = normalise_limits(usage)
+    blocked = [item for item in limits if blocking(item)]
+    resets = [item["resets_at"] for item in blocked if item["resets_at"]]
+    return {
+        "account": email,
+        "subscription": subscription,
+        "limited": bool(blocked),
+        "resets_at": max(resets) if resets else None,
+        "limits": limits,
+    }
+
+
+def local_time(iso):
+    moment = datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone()
+    return moment.strftime("%a %b %d %H:%M %Z")
+
+
+def render(summary):
+    lines = ["%s (%s): %s" % (summary["account"] or "unknown account", summary["subscription"] or "unknown plan",
+                              "LIMITED until " + local_time(summary["resets_at"]) if summary["limited"] and summary["resets_at"]
+                              else "LIMITED" if summary["limited"] else "usable")]
+    for item in summary["limits"]:
+        if not (item["active"] or blocking(item) or item["percent"] >= 50):
+            continue
+        name = item["kind"] + (" " + item["scope"] if item["scope"] else "")
+        reset = "resets " + local_time(item["resets_at"]) if item["resets_at"] else "no reset time"
+        lines.append("  %-24s %5.0f%%  %-9s %s" % (name, item["percent"], item["severity"], reset))
+    return "\n".join(lines)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="claude-usage", description="Is this Claude login usage-limited?",
+                                     epilog="Exit: 0 usable, 2 limited, 3 cannot tell, 4 stale token.")
+    parser.add_argument("--config-dir", help="Claude config dir (default: $CLAUDE_CONFIG_DIR, then ~/.claude)")
+    parser.add_argument("--keychain-service", help="read the login from this macOS keychain service instead of deriving it")
+    parser.add_argument("--json", action="store_true", help="print a machine-readable summary")
+    args = parser.parse_args(argv)
+
+    directory, explicit = config_dir(args.config_dir)
+    email = subscription = None
+    try:
+        # An overridden keychain service is not tied to a config dir, so auth status would name
+        # some other login's account.
+        if args.keychain_service is None:
+            email, subscription = account_info(directory, explicit)
+        login = read_login(directory, explicit, args.keychain_service)
+        subscription = login.get("subscriptionType") if isinstance(login.get("subscriptionType"), str) else subscription
+        check_login(login)
+        usage = fetch_usage(login["accessToken"])
+        if not isinstance(usage, dict):
+            raise Cannot("bad_response", "usage endpoint returned JSON that is not an object")
+    except Cannot as failure:
+        print("claude-usage: %s: %s" % (failure.code, failure), file=sys.stderr)
+        if args.json:
+            print(json.dumps({"account": email, "subscription": subscription, "limited": None,
+                              "resets_at": None, "limits": [], "error": failure.code}))
+        return failure.exit_code
+
+    summary = summarise(usage, email, subscription)
+    print(json.dumps(summary) if args.json else render(summary))
+    return LIMITED if summary["limited"] else OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())
