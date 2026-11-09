@@ -190,6 +190,33 @@ byte-identical copy of `toodoo_herdr/redaction-rules.json` in toodoo-herdr
 the file again; the test suite compares the two when toodoo-herdr is checked
 out beside ai-dotfiles (or at `$TOODOO_HERDR_DIR`). Without the rules file
 `procrun export` exports nothing.
+||||||| parent of 2bfccc9 (feat: add procrun-retain to enforce retain on rotated and dated logs)
+
+## Retention
+
+`procrun-retain` enforces each entry's `retain` (a duration such as `30d`)
+and replaces per-project prune scripts. It is linked to
+`~/.local/bin/procrun-retain` like `procrun`. Run it daily:
+
+```
+23 4 * * * /home/<user>/.local/bin/procrun-retain
+```
+
+`procrun-retain --dry-run` prints what it would delete. For every entry with
+`retain` it deletes, by modification time:
+
+- **rotated generations** of the entry's `log` (else its `progress`):
+  `<log>.1`, `<log>.2.gz`, `<log>-20261101`, `<log>.2026-11-01`;
+- **dated logs** matched by the entry's `log_glob`, such as
+  `"~/Documents/Projects/clubs/dice/logs/dice-link-tag-sync-2*.log"`, when
+  both the date in the file name and the modification time are older than
+  `retain`. The newest match is never deleted, since it may be the live file.
+
+It never deletes, truncates or moves the `log` itself. A `log` with no
+rotated generations is a single continuously appended legacy log: `procrun`
+and `sentinel-check.js` depend on its fixed path and byte offsets, so it is
+reported with its size and left alone. A `log_glob` match with no date in its
+name is reported too. Converting a legacy log is a per-project change.
 
 ## Platforms
 
@@ -198,4 +225,6 @@ Linux reads pid start times from `/proc/<pid>/stat` and the boot ID from
 seconds) and `sysctl kern.bootsessionuuid`. Elsewhere both are omitted and
 an orphan is detected by pid alone.
 
-Tests: `bash scripts/procrun.test.sh`, also run by `just test-all`.
+Tests: `bash scripts/procrun.test.sh` and `bash scripts/procrun-retain.test.sh`,
+also run by `just test-all`. The model sentinel runner is in
+[sentinel-agent.md](sentinel-agent.md).
