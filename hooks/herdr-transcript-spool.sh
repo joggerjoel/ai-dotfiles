@@ -81,7 +81,24 @@ LINE=$(printf '%s' "$INPUT" | jq -c --arg now "$RECORDED_AT" '
 
 SPOOL_DIR="${HERDR_MASTER_ROOT:-$HOME/.herdr-master}"
 mkdir -p "$SPOOL_DIR" 2>/dev/null || exit 0
-printf '%s\n' "$LINE" >> "$SPOOL_DIR/transcript-spool.jsonl" 2>/dev/null || exit 0
+# Append under the same flock Herdr's writers take. Herdr compacts the spool by replacing
+# the file while holding that lock, so after locking, recheck that the path still names the
+# file we opened and reopen if not; a bare >> could land in the replaced file and be lost.
+command -v python3 > /dev/null 2>&1 || exit 0
+printf '%s\n' "$LINE" | python3 -I -c '
+import fcntl, os, sys
+path, data = sys.argv[1], sys.stdin.buffer.read()
+while True:
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        if os.stat(path).st_ino == os.fstat(fd).st_ino:
+            break
+    except FileNotFoundError:
+        pass
+    os.close(fd)
+os.write(fd, data)
+' "$SPOOL_DIR/transcript-spool.jsonl" 2>/dev/null || exit 0
 
 # ── Kitchen role binding (SessionStart only) ────────────────────────────────
 sha256_hex() {
