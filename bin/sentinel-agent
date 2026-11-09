@@ -553,7 +553,9 @@ def run(project: str, sid: str) -> int:
         return 1
     # claude-acct moves the run to another subscription account when one is limited; it
     # records which account is limited in its state dir, so that dir stays writable.
-    acct = shutil.which("claude-acct")
+    # Cron's PATH is /usr/bin:/bin, so look where the claude fallback below looks too.
+    local_acct = Path.home() / ".local/bin/claude-acct"
+    acct = shutil.which("claude-acct") or (str(local_acct) if os.access(local_acct, os.X_OK) else None)
     claude = acct or shutil.which("claude") or str(Path.home() / ".local/bin/claude")
     writable = ()
     if acct:
