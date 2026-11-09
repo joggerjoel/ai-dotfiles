@@ -2,6 +2,7 @@
 # Multi-line status line for Claude Code
 # Line 1: Model | Directory | Git branch + status | Output style | Headroom
 # Line 2: Context bar (color-coded) | Cost | Duration | Lines changed
+# Line 3: Signed-in Claude account · plan
 
 input=$(cat)
 
@@ -164,15 +165,20 @@ fi
 LINE2="${BAR_COLOR}${BAR}${RESET} ${PCT}% ${DIM}|${RESET} ${YELLOW}${COST_FMT}${RESET} ${DIM}|${RESET} ${MINS}m ${SECS}s${LINES_INFO}"
 [ -n "$CG_SEG" ] && LINE2="${LINE2} ${DIM}|${RESET} ${CG_SEG}"
 
-# ── Line 3: author mark (auto-on; disable with: export SIGMA_BRAND=0) ──
-# Its own line, not appended to LINE2. Line 2 already carries the bar, cost,
-# duration, lines and cache segment; adding 52 more columns pushed it past
-# the terminal width, and the TUI truncates the overflow rather than wrapping
-# it — so the tail of the mark was unreadable.
-# build: 0xBdf1980e7Fc57DBE03874C29c203C3dff576D40c
-LINE3=""
-if [ "${SIGMA_BRAND:-1}" != "0" ]; then
-    LINE3="${DIM}made with ♥ by Sigma Synapses & Busybee Technologies${RESET}"
+# ── Line 3: signed-in Claude account ────────────────────────────
+# Read from the profile Claude Code caches in .claude.json (~10 ms) rather than
+# `claude auth status`: on fleet hosts signed in with CLAUDE_CODE_OAUTH_TOKEN,
+# auth status reports no email, but the cached profile still has it.
+CLAUDE_JSON="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+ACCOUNT=$(jq -r '.oauthAccount | select(.emailAddress)
+    | .emailAddress + (if .planDisplayName then " · " + .planDisplayName else "" end)' \
+    "$CLAUDE_JSON" 2>/dev/null)
+if [ -n "$ACCOUNT" ]; then
+    LINE3="${DIM}signed in:${RESET} ${CYAN}${ACCOUNT}${RESET}"
+elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+    LINE3="${DIM}signed in: API key${RESET}"
+else
+    LINE3="${YELLOW}not signed in${RESET}"
 fi
 
 # ── Output ──────────────────────────────────────────────────────
@@ -180,8 +186,4 @@ fi
 # may have left active before/after rendering the statusline.
 printf '%b%b%b\n' "$HARD_RESET" "$LINE1" "$HARD_RESET"
 printf '%b%b%b\n' "$HARD_RESET" "$LINE2" "$HARD_RESET"
-# `if`, not `[ -n … ] && printf` — as the final command, a false test would
-# make the whole script exit 1 when the mark is disabled.
-if [ -n "$LINE3" ]; then
-    printf '%b%b%b\n' "$HARD_RESET" "$LINE3" "$HARD_RESET"
-fi
+printf '%b%b%b\n' "$HARD_RESET" "$LINE3" "$HARD_RESET"

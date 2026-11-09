@@ -35,6 +35,9 @@ __pycache__/
 
 # git worktrees created by EnterWorktree (scratch, never committed)
 .claude/worktrees/
+.worktrees/
+# surface-claim coordination state (scripts/surface-claim-guard.mjs)
+.claude/claims.json
 
 # subagent-driven-development scratch ledger
 .superpowers/
