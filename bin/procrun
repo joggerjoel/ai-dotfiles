@@ -808,6 +808,10 @@ def identity_errors(e: dict, jobs: list[dict] | None) -> list[str]:
     return []
 
 
+# Model names that float to a newer model; a sentinel must pin an exact id (as sentinel-agent requires).
+MODEL_ALIASES = {"sonnet", "opus", "haiku", "default", "opusplan", "best"}
+
+
 def sentinel_errors(e: dict, reg: dict) -> list[str]:
     where = f"process {e.get('name')!r}"
     proj, _, sid = str(e.get("sentinel", "")).partition(":")
@@ -820,7 +824,20 @@ def sentinel_errors(e: dict, reg: dict) -> list[str]:
     prog = expand(e.get("progress", "")).resolve() if e.get("progress") else None
     if prog is None or prog.name != f"checks-{sid}.jsonl" or not prog.is_relative_to(root):
         errs.append(f"{where}: progress must be checks-{sid}.jsonl inside project {proj!r} ({root})")
-    if e.get("model"):
+    # A model sentinel is any sentinel entry carrying one of sentinel-agent's settings; it
+    # must carry all of them, with no defaults (plan decision 4: the operator pins them).
+    if any(k in e for k in ("model", "max_usd_per_day", "max_input_kb", "sandbox")):
+        model = e.get("model")
+        if not isinstance(model, str) or not model.strip():
+            errs.append(f"{where}: model sentinel needs model (a pinned model id; no default)")
+        elif model.strip().lower() in MODEL_ALIASES or any(c.isspace() for c in model):
+            errs.append(f"{where}: model {model!r} is not a pinned model id")
+        cap = e.get("max_usd_per_day")
+        if isinstance(cap, bool) or not isinstance(cap, (int, float)) or cap <= 0:
+            errs.append(f"{where}: model sentinel needs max_usd_per_day (a positive number; no default)")
+        kb = e.get("max_input_kb")
+        if isinstance(kb, bool) or not isinstance(kb, int) or kb <= 0:
+            errs.append(f"{where}: model sentinel needs max_input_kb (a positive integer)")
         sb = e.get("sandbox")
         sb = sb if isinstance(sb, dict) else {}
         tools = sb.get("tools")

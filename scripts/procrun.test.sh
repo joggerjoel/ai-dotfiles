@@ -644,6 +644,8 @@ kind = "sentinel"
 sentinel = "dice:02"
 progress = "$TMP/dice/var/sentinel/checks-02.jsonl"
 model = "pinned-model"
+max_usd_per_day = 2.5
+max_input_kb = 64
 SANDBOX
 EOF
 model_validate() {  # model_validate SANDBOX-LINE: prints validate's output
@@ -662,6 +664,15 @@ check "validate fails a model sentinel whose sandbox is not read_only" \
 out=$(model_validate 'sandbox = { bwrap = true, read_only = true }')
 check "validate fails a model sentinel whose sandbox has no tools list" \
   'printf "%s" "$out" | grep -q "FAIL: .*sandbox lacks a tools list$"' "$out"
+out=$(sed -e '/^max_usd_per_day/d' -e 's#^SANDBOX$#sandbox = { bwrap = true, read_only = true, tools = ["Read"] }#' "$TMP/r-model.toml" > "$TMP/r-model-2.toml"; PROCRUN_REGISTRY="$TMP/r-model-2.toml" "$PR" validate 2>&1)
+check "validate fails a model sentinel without max_usd_per_day" \
+  'printf "%s" "$out" | grep -q "FAIL: .*needs max_usd_per_day"' "$out"
+out=$(sed -e 's/^model = .*/model = "sonnet"/' -e 's#^SANDBOX$#sandbox = { bwrap = true, read_only = true, tools = ["Read"] }#' "$TMP/r-model.toml" > "$TMP/r-model-3.toml"; PROCRUN_REGISTRY="$TMP/r-model-3.toml" "$PR" validate 2>&1)
+check "validate fails a model sentinel whose model is an alias" \
+  'printf "%s" "$out" | grep -q "is not a pinned model id"' "$out"
+out=$(sed -e '/^model = /d' -e 's#^SANDBOX$#sandbox = { bwrap = true, read_only = true, tools = ["Read"] }#' "$TMP/r-model.toml" > "$TMP/r-model-4.toml"; PROCRUN_REGISTRY="$TMP/r-model-4.toml" "$PR" validate 2>&1)
+check "validate fails a model sentinel with settings but no model" \
+  'printf "%s" "$out" | grep -q "needs model"' "$out"
 out=$(model_validate 'sandbox = { bwrap = true, read_only = true, tools = "Read" }')
 check "validate fails a model sentinel whose tools is not a list" \
   'printf "%s" "$out" | grep -q "FAIL: .*sandbox lacks a tools list$"' "$out"
