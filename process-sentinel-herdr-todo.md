@@ -75,15 +75,17 @@
     EXPECT tests: [0-9]+ passed, 0 failed
     Evidence: PR #19: lib/log-contract/log-profile.js parser with tests (dated styles same instant, bare time takes nearest dated date, undated keeps order, split record counts once, trailing record >60 s counted); just test-all 724 passed, 0 failed.
 
-- [ ] **3.1 Write `procrun export`: stdin request of `{stream, key, offset, inode}` with process names or `project:id` keys; unknown keys rejected; paths resolved from the registry only; `check-state.json` last-run time; rotated generation read before the current file; 1 MB cap; sentinel issue statuses; `df`; last 50 log lines for non-`ok` processes; one redaction filter on all text; writes nothing.**
+- [x] **3.1 Write `procrun export`: stdin request of `{stream, key, offset, inode}` with process names or `project:id` keys; unknown keys rejected; paths resolved from the registry only; `check-state.json` last-run time; rotated generation read before the current file; 1 MB cap; sentinel issue statuses; `df`; last 50 log lines for non-`ok` processes; one redaction filter on all text; writes nothing.**
     depends-on: ["1.1", "1.2", "1.3", "1.6", "1.7", "1.9", "2.1", "2.2"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: PR #21: procrun export answers {stream, key, offset, inode} requests with check state, statuses with 50-line excerpts when not ok, sentinel issues, mount space and record lines across rotation (prev position), capped at 1 MB, redacted with toodoo-herdr's rules (byte-identical copy), writes nothing; authorized_keys restrict,from=,command= line documented.
 
-- [ ] **3.2 Tests: a request naming a path or an unknown key is rejected; rotation between polls loses no line; redaction removes token, key, password, `Authorization` and email patterns.**
+- [x] **3.2 Tests: a request naming a path or an unknown key is rejected; rotation between polls loses no line; redaction removes token, key, password, `Authorization` and email patterns.**
     depends-on: ["3.1"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: PR #21: tests reject path and unknown keys, lose no line across a rotation, report two rotations as gap, page past the 1 MB cap exactly once, redact secrets, write nothing; just test-all 845 passed, 0 failed.
 
 - [ ] **3.3 Live proof: Create a dedicated collector key pair and install it on aorus8 with `restrict,from="<herdr host>",command=".../procrun export"`. Test that it cannot open a shell, forward a port or run another command.**
     depends-on: ["3.2"]
@@ -130,10 +132,11 @@
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
 
-- [ ] **4.7 `procrun validate` fails a model `sentinel` entry whose `sandbox` lacks `bwrap`, `read_only` or a tool list.**
+- [x] **4.7 `procrun validate` fails a model `sentinel` entry whose `sandbox` lacks `bwrap`, `read_only` or a tool list.**
     depends-on: ["4.6"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: PR #21: procrun validate fails a model sentinel whose sandbox lacks bwrap = true, read_only = true or a non-empty tools list; tests in 'validate: model sentinel sandbox'.
 
 - [ ] **4.8 Enforce `retain` for rotated and dated logs; report single legacy logs without pruning or moving them.**
     depends-on: ["4.7"]
