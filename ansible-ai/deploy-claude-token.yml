@@ -60,13 +60,58 @@
     - ansible.builtin.import_tasks: tasks/end-unreachable-hosts.yml
       vars: { unreachable_note: "no token written" }
 
+    # The account list is not a secret. Same precedence as the secrets: an
+    # exported CLAUDE_ACCOUNTS wins over the control node's ~/.claude/.env.
+    # Empty means the single un-named token below, exactly as before accounts
+    # existed.
+    - name: Resolve the Claude account list
+      ansible.builtin.set_fact:
+        claude_accounts: >-
+          {{ (lookup('env', 'CLAUDE_ACCOUNTS') | default('', true) | trim
+              if (lookup('env', 'CLAUDE_ACCOUNTS') | default('', true) | trim | length > 0)
+              else ((lookup('file', lookup('env', 'HOME') ~ '/.claude/.env', errors='ignore') | default('', true))
+                    | regex_findall('(?m)^[ \t]*(?:export[ \t]+)?CLAUDE_ACCOUNTS[ \t]*=[ \t]*["\x27]?([^"\x27\r\n]+)')
+                    | first | default('', true) | trim))
+             | regex_findall('[a-z0-9_]+') }}
+
+    # CLAUDE_CODE_OAUTH_TOKEN is always exported, so a plain `claude` works with
+    # no wrapper. With accounts, its value is the FIRST account's token.
     - ansible.builtin.include_tasks: tasks/fleet-env-secret.yml
       vars:
         secret_var: CLAUDE_CODE_OAUTH_TOKEN
+        secret_from: "{{ ('CLAUDE_CODE_OAUTH_TOKEN_' ~ (claude_accounts[0] | upper)) if claude_accounts | length > 0 else '' }}"
         secret_probe: "claude -p 'reply with just ok'"
         secret_hint: >-
           Mint one with `claude setup-token` on the control node and append it
-          to ~/.claude/.env as CLAUDE_CODE_OAUTH_TOKEN=<token>. See the header
-          of this playbook.
+          to ~/.claude/.env as CLAUDE_CODE_OAUTH_TOKEN=<token>. With accounts
+          configured, the first account's token is used instead; to name an
+          existing token run `just claude-token --account NAME --from-primary`.
+          See the header of this playbook.
         secret_done_hint: >-
           Confirm with `just auth-status`: hosts on the fleet token report `token`.
+
+    # One export per account, then the ordered list bin/claude-acct reads.
+    - ansible.builtin.include_tasks: tasks/fleet-env-secret.yml
+      loop: "{{ claude_accounts }}"
+      vars:
+        secret_var: "CLAUDE_CODE_OAUTH_TOKEN_{{ item | upper }}"
+        # The candidate arrives under its account name; claude only reads the
+        # plain one, so move it there or the probe would test the control
+        # node's own login instead of this token. `export` keeps it out of argv.
+        secret_probe: >-
+          export CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN_{{ item | upper }}";
+          claude -p 'reply with just ok'
+        secret_hint: >-
+          Run `just claude-token --account {{ item }}` to mint and store it.
+        secret_done_hint: >-
+          Account {{ item }} is available to bin/claude-acct on every host.
+
+    - ansible.builtin.include_tasks: tasks/fleet-env-secret.yml
+      when: claude_accounts | length > 0
+      vars:
+        secret_var: CLAUDE_ACCOUNTS
+        secret_probe: "true"
+        secret_hint: Set by `just claude-token --account NAME`.
+        secret_done_hint: >-
+          Cron jobs switch accounts with `claude-acct -p ...`; see
+          guides/claude-accounts.md.

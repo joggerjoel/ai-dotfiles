@@ -74,6 +74,64 @@ got=$(HERDR_CLAUDE_ENV="$TMP/does-not-exist" bash "$S" _token_from_env_file)
 [ "$got" = "" ] && ok "a missing .env yields nothing, not a failure" \
                 || ko "a missing .env yields nothing, not a failure" "got '$got'"
 
+# --- named accounts -----------------------------------------------------------
+#
+# CLAUDE_CODE_OAUTH_TOKEN_<NAME> must not be mistaken for the un-named token,
+# nor the reverse: a prefix match would hand one account's token to the other.
+ALPHA='sk-ant-oat01-FAKE-alpha-rTrT-0001'
+BRAVO='sk-ant-oat01-FAKE-bravo-rTrT-0002'
+printf 'CLAUDE_CODE_OAUTH_TOKEN_JOEL_LABELLE=%s\nCLAUDE_CODE_OAUTH_TOKEN=%s\n' "$BRAVO" "$ALPHA" > "$TMP/env"
+got=$(HERDR_CLAUDE_ENV="$TMP/env" bash "$S" _token_from_env_file)
+[ "$got" = "$ALPHA" ] && ok "the un-named lookup ignores named tokens" \
+                      || ko "the un-named lookup ignores named tokens" "got '$got'"
+got=$(HERDR_CLAUDE_ENV="$TMP/env" bash "$S" _token_from_env_file CLAUDE_CODE_OAUTH_TOKEN_JOEL_LABELLE)
+[ "$got" = "$BRAVO" ] && ok "a named lookup finds its own token" \
+                      || ko "a named lookup finds its own token" "got '$got'"
+
+got=$(bash "$S" _token_var_for joel_labelle)
+[ "$got" = CLAUDE_CODE_OAUTH_TOKEN_JOEL_LABELLE ] && ok "an account name is upper-cased into its variable" \
+                                                  || ko "an account name is upper-cased into its variable" "got '$got'"
+got=$(bash "$S" _token_var_for)
+[ "$got" = CLAUDE_CODE_OAUTH_TOKEN ] && ok "no account name means the un-named variable" \
+                                     || ko "no account name means the un-named variable" "got '$got'"
+
+printf 'OTHER=1\n' > "$TMP/env"
+got=$(HERDR_CLAUDE_ENV="$TMP/env" bash "$S" _register_account hyunseokkim986)
+[ "$got" = hyunseokkim986 ] && ok "the first account starts the list" \
+                            || ko "the first account starts the list" "got '$got'"
+got=$(HERDR_CLAUDE_ENV="$TMP/env" bash "$S" _register_account joel_labelle)
+[ "$got" = "hyunseokkim986 joel_labelle" ] && ok "a later account is appended, keeping preference order" \
+                                           || ko "a later account is appended, keeping preference order" "got '$got'"
+got=$(HERDR_CLAUDE_ENV="$TMP/env" bash "$S" _register_account hyunseokkim986)
+[ "$got" = "hyunseokkim986 joel_labelle" ] && ok "registering twice changes nothing" \
+                                           || ko "registering twice changes nothing" "got '$got'"
+[ "$(grep -c '^CLAUDE_ACCOUNTS=' "$TMP/env")" = 1 ] && grep -qx 'OTHER=1' "$TMP/env" \
+  && ok "the list is one line and other keys survive" \
+  || ko "the list is one line and other keys survive" "$(cat "$TMP/env")"
+mode=$(stat -c %a "$TMP/env" 2>/dev/null || stat -f %Lp "$TMP/env")
+[ "$mode" = 600 ] && ok "the env file stays 0600 after a rewrite" \
+                  || ko "the env file stays 0600 after a rewrite" "mode $mode"
+
+out=$(bash "$S" --account 'Bad Name' 2>&1) && rc=0 || rc=$?
+[ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'bad account name' \
+  && ok "an invalid account name is refused" || ko "an invalid account name is refused" "rc=$rc"
+out=$(bash "$S" --from-primary 2>&1) && rc=0 || rc=$?
+[ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'needs --account' \
+  && ok "--from-primary without --account is refused" || ko "--from-primary without --account is refused" "rc=$rc"
+
+# Naming a new account first would demote an existing un-named primary.
+if command -v ansible-playbook >/dev/null 2>&1; then
+  printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$ALPHA" > "$TMP/env"
+  out=$(HERDR_CLAUDE_ENV="$TMP/env" bash "$S" --account joel_labelle 2>&1) && rc=0 || rc=$?
+  [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'Name that one first' \
+    && ok "naming a new account before the existing primary is refused" \
+    || ko "naming a new account before the existing primary is refused" "rc=$rc"
+  grep -q 'CLAUDE_ACCOUNTS' "$TMP/env" \
+    && ko "a refused run writes nothing" "env file changed" || ok "a refused run writes nothing"
+else
+  printf '  SKIP  primary-demotion guard (ansible-playbook not installed)\n'
+fi
+
 # --- dry-run flag -------------------------------------------------------------
 #
 # The bug that made `just claude-token` incapable of deploying anything. The

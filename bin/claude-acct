@@ -1,0 +1,308 @@
+#!/usr/bin/env bash
+# claude-acct — run `claude` on whichever subscription account still has quota.
+#
+#   claude-acct -p "summarise this"          # a drop-in for `claude -p ...`
+#   claude-acct --acct-status                # accounts and when each frees up
+#
+# The accounts come from CLAUDE_ACCOUNTS ("hyunseokkim986 joel_labelle", in
+# preference order), each with its own CLAUDE_CODE_OAUTH_TOKEN_<NAME> (NAME
+# upper-cased). `just claude-token --account NAME` writes both to the fleet env
+# file, ~/.config/claude-fleet/env, which this sources itself when the variables
+# are not already set. Cron does not run a login shell, so it would otherwise
+# see none of them.
+#
+# One run: pick the first account not marked exhausted, run claude with that
+# account's token, and look at the result. When claude exited non-zero and said
+# its usage limit is hit, mark the account exhausted until the reset time it
+# printed (1h when that cannot be parsed) and retry with the next account. When
+# every account fails, the first failure is reported as if claude-acct were not
+# there. A revoked token is skipped the same way and reported on stderr.
+#
+# Output and exit status pass through unchanged. stdout and stderr are held
+# until the run is classified, so a discarded attempt never reaches the caller,
+# which also means they arrive together at the end rather than streaming.
+# Interactive use (stdout is a terminal) skips all of that: it picks the account
+# and execs claude directly.
+#
+# With no CLAUDE_ACCOUNTS this is plain `claude "$@"` on CLAUDE_CODE_OAUTH_TOKEN.
+#
+# Exhaustion text, as `claude -p` prints it with exit status 1:
+#   You've hit your limit · resets 1am (Europe/Oslo)
+# and the older wordings "5-hour limit reached ∙ resets 3pm",
+# "Weekly limit reached ∙ resets Nov 14, 10am", "Claude AI usage limit
+# reached|<epoch>". Matched only on a non-zero exit, so a model quoting the
+# phrase in a successful answer never trips it.
+#
+# The token is only ever in the child's environment. It is never an argument
+# and never printed.
+
+set -uo pipefail
+set -f
+
+FLEET_ENV="${CLAUDE_FLEET_ENV:-$HOME/.config/claude-fleet/env}"
+STATE_DIR="${CLAUDE_ACCT_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/claude-acct}"
+DEFAULT_COOLDOWN=3600
+MAX_COOLDOWN=$((8 * 86400))
+
+now() { printf '%s' "${CLAUDE_ACCT_NOW:-$(date +%s)}"; }
+
+valid_name() {
+  case "$1" in ''|*[!a-z0-9_]*) return 1 ;; esac
+}
+
+token_var() { printf 'CLAUDE_CODE_OAUTH_TOKEN_%s' "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"; }
+
+# ── state: <STATE_DIR>/<name> holds "<reset epoch> <reason>" ─────────────────
+
+state_epoch() { # <name> -> reset epoch, or 0
+  local f="$STATE_DIR/$1" e=0
+  [ -r "$f" ] && read -r e _ < "$f"
+  case "$e" in ''|*[!0-9]*) e=0 ;; esac
+  printf '%s' "$e"
+}
+
+state_reason() { # <name>
+  local f="$STATE_DIR/$1" r=""
+  [ -r "$f" ] && read -r _ r < "$f"
+  printf '%s' "$r"
+}
+
+is_exhausted() { [ "$(state_epoch "$1")" -gt "$(now)" ]; }
+
+# Atomic: write beside the target and rename over it, so a concurrent cron job
+# reads either the old marker or the new one and never half of one. The later
+# reset time wins when two jobs mark the same account.
+mark_exhausted() { # <name> <epoch> <reason>
+  local tmp
+  mkdir -p "$STATE_DIR" || return 0
+  [ "$(state_epoch "$1")" -gt "$2" ] && return 0
+  tmp=$(mktemp "$STATE_DIR/.$1.XXXXXX") || return 0
+  printf '%s %s\n' "$2" "$3" > "$tmp" && mv -f "$tmp" "$STATE_DIR/$1" || rm -f "$tmp"
+}
+
+clear_exhausted() { rm -f "$STATE_DIR/$1"; }
+
+# ── reset time ───────────────────────────────────────────────────────────────
+
+# Epoch of a "YYYY-MM-DD HH:MM" wall-clock time in zone $1 (empty = local).
+# GNU date first, BSD date second.
+wall_to_epoch() {
+  ( [ -n "$1" ] && export TZ="$1"
+    date -d "$2:00" +%s 2>/dev/null || date -j -f '%Y-%m-%d %H:%M:%S' "$2:00" +%s 2>/dev/null )
+}
+
+# strftime format $3 of epoch $2 in zone $1.
+epoch_fmt() {
+  ( [ -n "$1" ] && export TZ="$1"
+    date -d "@$2" "+$3" 2>/dev/null || date -r "$2" "+$3" 2>/dev/null )
+}
+
+month_number() {
+  case "$1" in
+    jan) echo 1 ;; feb) echo 2 ;; mar) echo 3 ;; apr) echo 4 ;; may) echo 5 ;; jun) echo 6 ;;
+    jul) echo 7 ;; aug) echo 8 ;; sep) echo 9 ;; oct) echo 10 ;; nov) echo 11 ;; dec) echo 12 ;;
+    *) return 1 ;;
+  esac
+}
+
+zone_exists() { [ -e "/usr/share/zoneinfo/$1" ] || [ -e "/var/db/timezone/zoneinfo/$1" ]; }
+
+RESET_RE='resets?([[:space:]]at)?[[:space:]]+(([a-z]{3})[a-z]*[[:space:]]+([0-9]{1,2}),?[[:space:]]+)?([0-9]{1,2})(:([0-9]{2}))?[[:space:]]*([ap])m'
+ZONE_RE='[Rr]esets?[^(]*\(([A-Za-z0-9_/+-]+)\)'
+
+# Reset epoch from claude's message on stdin, or nothing when it cannot be read.
+# The caller falls back to the default cooldown, so every doubt returns nothing.
+parse_reset() {
+  local raw lower n e hr min ap tz="" mon day year hh stamp today
+  raw=$(head -c 65536)
+  lower=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
+  n=$(now)
+
+  if [[ $lower =~ limit[[:space:]]reached\|([0-9]{9,11}) ]]; then
+    e=${BASH_REMATCH[1]}
+  elif [[ $lower =~ $RESET_RE ]]; then
+    mon=${BASH_REMATCH[3]} day=${BASH_REMATCH[4]} hr=${BASH_REMATCH[5]}
+    min=${BASH_REMATCH[7]:-00} ap=${BASH_REMATCH[8]}
+    # Zone names are case-sensitive on disk, so read it from the original text.
+    # One that does not exist would be taken as UTC and be wrong by hours.
+    if [[ $raw =~ $ZONE_RE ]]; then
+      tz=${BASH_REMATCH[1]}
+      zone_exists "$tz" || return 0
+    fi
+    hr=$((10#$hr))
+    [ "$hr" -ge 1 ] && [ "$hr" -le 12 ] || return 0
+    if [ "$ap" = a ]; then
+      [ "$hr" -eq 12 ] && hr=0
+    else
+      [ "$hr" -lt 12 ] && hr=$((hr + 12))
+    fi
+    printf -v hh '%02d' "$hr"
+
+    if [ -n "$mon" ]; then
+      mon=$(month_number "$mon") || return 0
+      year=$(epoch_fmt "$tz" "$n" %Y)
+      printf -v stamp '%s-%02d-%02d %s:%s' "$year" "$mon" "$((10#$day))" "$hh" "$min"
+      e=$(wall_to_epoch "$tz" "$stamp")
+      if [ -n "$e" ] && [ "$e" -le "$n" ]; then
+        printf -v stamp '%s-%02d-%02d %s:%s' "$((year + 1))" "$mon" "$((10#$day))" "$hh" "$min"
+        e=$(wall_to_epoch "$tz" "$stamp")
+      fi
+    else
+      today=$(epoch_fmt "$tz" "$n" %Y-%m-%d)
+      e=$(wall_to_epoch "$tz" "$today $hh:$min")
+      if [ -n "$e" ] && [ "$e" -le "$n" ]; then
+        e=$(wall_to_epoch "$tz" "$(epoch_fmt "$tz" "$((n + 86400))" %Y-%m-%d) $hh:$min")
+      fi
+    fi
+  else
+    return 0
+  fi
+
+  case "$e" in ''|*[!0-9]*) return 0 ;; esac
+  # A reset in the past or beyond a weekly window is a misparse, not a deadline.
+  [ "$e" -gt "$n" ] && [ "$e" -le $((n + MAX_COOLDOWN)) ] || return 0
+  printf '%s' "$((e + 60))"
+}
+
+# ── classifying a finished run ───────────────────────────────────────────────
+
+LIMIT_RE="you.ve hit your limit|usage limit reached|(session|[0-9]+-hour|daily|weekly|opus weekly|sonnet weekly) limit reached"
+AUTH_RE="oauth (access )?token (is )?(invalid|has expired|expired|revoked)|authentication_error|invalid bearer token|invalid api key|please run /login|api error: 401"
+
+# <rc> <stdout file> <stderr file>: prints limit | auth | ok
+classify() {
+  local rc=$1 out=$2 err=$3 blob
+  [ "$rc" -eq 0 ] && { echo ok; return; }
+  blob=$( { head -c 65536 "$out"; head -c 65536 "$err"; } | tr '[:upper:]' '[:lower:]')
+  if printf '%s' "$blob" | grep -Eq "$LIMIT_RE"; then echo limit
+  elif printf '%s' "$blob" | grep -Eq "$AUTH_RE"; then echo auth
+  else echo ok
+  fi
+}
+
+# ── accounts ─────────────────────────────────────────────────────────────────
+
+ACCOUNTS=()
+load_accounts() {
+  local a
+  if [ -z "${CLAUDE_ACCOUNTS:-}" ] && [ -r "$FLEET_ENV" ]; then
+    # shellcheck disable=SC1090
+    . "$FLEET_ENV"
+  fi
+  for a in ${CLAUDE_ACCOUNTS:-}; do
+    valid_name "$a" || { printf 'claude-acct: ignoring invalid account name "%s"\n' "$a" >&2; continue; }
+    ACCOUNTS+=("$a")
+  done
+}
+
+CLAUDE_BIN=""
+find_claude() {
+  CLAUDE_BIN=$(command -v claude 2>/dev/null) || CLAUDE_BIN="$HOME/.local/bin/claude"
+  [ -x "$CLAUDE_BIN" ] || { echo "claude-acct: claude not found" >&2; exit 127; }
+}
+
+has_token() { local v; v=$(token_var "$1"); [ -n "${!v:-}" ]; }
+
+# Run claude as account $1. Only that account's token reaches the child, so the
+# other accounts' tokens are not visible to anything claude spawns.
+run_as() { # <name> <exec|run> args...
+  local name=$1 mode=$2 var
+  shift 2
+  var=$(token_var "$name")
+  (
+    export CLAUDE_CODE_OAUTH_TOKEN="${!var}"
+    local a
+    for a in "${ACCOUNTS[@]}"; do unset "$(token_var "$a")"; done
+    if [ "$mode" = exec ]; then exec "$CLAUDE_BIN" "$@"; else "$CLAUDE_BIN" "$@"; fi
+  )
+}
+
+status() {
+  local a e r
+  # bash 3.2 (stock macOS) treats an empty array as unset under `set -u`.
+  for a in ${ACCOUNTS[@]+"${ACCOUNTS[@]}"}; do
+    e=$(state_epoch "$a"); r=$(state_reason "$a")
+    if ! has_token "$a"; then
+      printf '%s\tno token (%s unset)\n' "$a" "$(token_var "$a")"
+    elif [ "$e" -gt "$(now)" ]; then
+      printf '%s\tunavailable (%s) until %s\n' "$a" "${r:-limit}" "$(epoch_fmt "" "$e" '%Y-%m-%d %H:%M %Z')"
+    else
+      printf '%s\tavailable\n' "$a"
+    fi
+  done
+}
+
+main() {
+  load_accounts
+  find_claude
+
+  if [ "${1:-}" = --acct-status ]; then status; return 0; fi
+  if [ "${#ACCOUNTS[@]}" -eq 0 ]; then exec "$CLAUDE_BIN" "$@"; fi
+
+  local candidates=() a soonest="" soonest_e=0 e
+  for a in "${ACCOUNTS[@]}"; do
+    if ! has_token "$a"; then
+      printf 'claude-acct: no %s, skipping %s\n' "$(token_var "$a")" "$a" >&2
+      continue
+    fi
+    if is_exhausted "$a"; then
+      [ "$(state_reason "$a")" = auth ] && printf 'claude-acct: %s skipped, its token failed to authenticate\n' "$a" >&2
+      e=$(state_epoch "$a")
+      if [ -z "$soonest" ] || [ "$e" -lt "$soonest_e" ]; then soonest=$a soonest_e=$e; fi
+    else
+      candidates+=("$a")
+    fi
+  done
+
+  # Everyone is marked: try the one that frees up first. The marker may be
+  # stale, and if not, the caller gets claude's own error.
+  if [ "${#candidates[@]}" -eq 0 ] && [ -n "$soonest" ]; then candidates=("$soonest"); fi
+  if [ "${#candidates[@]}" -eq 0 ]; then
+    echo "claude-acct: no account has a token" >&2
+    return 1
+  fi
+
+  if [ -t 1 ]; then run_as "${candidates[0]}" exec "$@"; fi
+
+  local tmp stdin_file="" first=1 first_rc=0 rc cls reset
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/claude-acct.XXXXXX") || return 1
+  trap 'rm -rf "$tmp"' EXIT
+  if [ ! -t 0 ]; then cat > "$tmp/stdin"; stdin_file="$tmp/stdin"; fi
+
+  for a in "${candidates[@]}"; do
+    if [ -n "$stdin_file" ]; then
+      run_as "$a" run "$@" < "$stdin_file" > "$tmp/out" 2> "$tmp/err"; rc=$?
+    else
+      run_as "$a" run "$@" > "$tmp/out" 2> "$tmp/err"; rc=$?
+    fi
+    cls=$(classify "$rc" "$tmp/out" "$tmp/err")
+
+    if [ "$first" -eq 1 ]; then
+      first=0 first_rc=$rc
+      cp "$tmp/out" "$tmp/first.out"; cp "$tmp/err" "$tmp/first.err"
+    fi
+
+    case "$cls" in
+      ok)
+        clear_exhausted "$a"
+        cat "$tmp/out"; cat "$tmp/err" >&2
+        return "$rc" ;;
+      limit)
+        reset=$(cat "$tmp/out" "$tmp/err" | parse_reset)
+        mark_exhausted "$a" "${reset:-$(($(now) + DEFAULT_COOLDOWN))}" limit ;;
+      auth)
+        printf 'claude-acct: %s failed to authenticate (revoked or expired token?)\n' "$a" >&2
+        mark_exhausted "$a" "$(($(now) + DEFAULT_COOLDOWN))" auth ;;
+    esac
+  done
+
+  cat "$tmp/first.out"; cat "$tmp/first.err" >&2
+  return "$first_rc"
+}
+
+# Test hooks: the pure functions, callable without running claude.
+case "${1:-}" in
+  _parse_reset) shift; printf '%s' "$*" | parse_reset ;;
+  _classify) shift; classify "$1" "$2" "$3" ;;
+  *) main "$@" ;;
+esac
