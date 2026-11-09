@@ -2,20 +2,23 @@
 
 [process-sentinel-herdr-plan.md](process-sentinel-herdr-plan.md) is the design authority. Every row starts open. To finish a row, change only its `[ ]` to `[x]` and add one line directly after the row's last indented line: four spaces, then `Evidence: ` (capital E, colon, one space, no date in parentheses), one line under 2000 characters. Edit nothing else in this file.
 
-- [ ] **1.1 Write `procrun` as a `uv` script pinned to Python 3.12 with `croniter`: settings from the registry by name; `PROCRUN_RUN_ID` and `PROCRUN_PROC` in the child's environment; one shared append descriptor for stdout and stderr; start and end records with `log_bytes`, `reason`, pid start time and boot ID; child in its own session, `SIGTERM` then `SIGKILL` to that group on timeout; `flock(2)` overlap skip with `skipped` records; whole-line appends.**
+- [x] **1.1 Write `procrun` as a `uv` script pinned to Python 3.12 with `croniter`: settings from the registry by name; `PROCRUN_RUN_ID` and `PROCRUN_PROC` in the child's environment; one shared append descriptor for stdout and stderr; start and end records with `log_bytes`, `reason`, pid start time and boot ID; child in its own session, `SIGTERM` then `SIGKILL` to that group on timeout; `flock(2)` overlap skip with `skipped` records; whole-line appends.**
     depends-on: []
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: PR #20: bin/procrun, a uv script pinned to Python 3.12 with croniter: registry settings by name, PROCRUN_RUN_ID/PROCRUN_PROC, one shared append fd, start/end records with log_bytes, reason, pid start time and boot ID, own session with SIGTERM then SIGKILL, flock(2) overlap skip with skipped records.
 
-- [ ] **1.2 Tests: the log file content and ordering match `>> file 2>&1`; output continues if `procrun` is killed; timeout kills the child and its grandchildren but not `procrun` or the cron shell; skip is compatible with an unwrapped `flock -n` job; a reused pid does not hide an orphan.**
+- [x] **1.2 Tests: the log file content and ordering match `>> file 2>&1`; output continues if `procrun` is killed; timeout kills the child and its grandchildren but not `procrun` or the cron shell; skip is compatible with an unwrapped `flock -n` job; a reused pid does not hide an orphan.**
     depends-on: ["1.1"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: PR #20: scripts/procrun.test.sh 69 cases pass on macOS and Linux (Debian, real flock and /proc): log order matches >> file 2>&1, output survives a killed procrun, timeout kills child and grandchildren but not the cron shell, skip interoperates with flock -n, reused pid and other-boot starts are orphaned.
 
-- [ ] **1.3 Write `procrun check`: run, progress and presence signals; statuses in precedence `down`, `orphaned`, `failed`, `missed`, `blocked`, `stalled`, `ok`; `croniter` due times; restart baselines that move after one alert; tmux presence by program pattern; `check-state.json` touched every run; `status.jsonl` on transitions only; record-file rotation under `flock`; a silent baseline on the first run, then mail on every non-`ok` transition with reminder intervals by criticality.**
+- [x] **1.3 Write `procrun check`: run, progress and presence signals; statuses in precedence `down`, `orphaned`, `failed`, `missed`, `blocked`, `stalled`, `ok`; `croniter` due times; restart baselines that move after one alert; tmux presence by program pattern; `check-state.json` touched every run; `status.jsonl` on transitions only; record-file rotation under `flock`; a silent baseline on the first run, then mail on every non-`ok` transition with reminder intervals by criticality.**
     depends-on: ["1.2"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: PR #20: procrun check with run, progress and presence signals, status precedence, croniter due times, silent first-run baseline, status.jsonl on transitions, check-state.json every run, criticality reminders, tmux presence, rotation under flock; tests in procrun.test.sh.
 
 - [ ] **1.4 Live proof: Add a `procrun watch-check` cron line that mails if `check-state.json` is older than 15 min.**
     depends-on: ["1.3"]
@@ -27,25 +30,28 @@
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
 
-- [ ] **1.6 Write `procrun validate` with the plan's fail and warn rules, including the `checklog` target rule; run it daily and from `procrun check` when the registry changed; it never blocks checks. Prove it fails on a missing launcher, a schedule mismatch and the old `watch-sentinel.md` target.**
+- [x] **1.6 Write `procrun validate` with the plan's fail and warn rules, including the `checklog` target rule; run it daily and from `procrun check` when the registry changed; it never blocks checks. Prove it fails on a missing launcher, a schedule mismatch and the old `watch-sentinel.md` target.**
     depends-on: ["1.3"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: PR #20: procrun validate fails on a launcher with no entry, a schedule mismatch and the old watch-sentinel.md checklog target; runs daily with --mail and from check when the registry changed without blocking it; template validates cleanly.
 
-- [ ] **1.7 Install `procrun` at `~/.local/bin/procrun` through the installer chosen in decision 1.**
+- [x] **1.7 Install `procrun` at `~/.local/bin/procrun` through the installer chosen in decision 1.**
     depends-on: ["1.6"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: PR #20: link_bin_tools installs ~/.local/bin/procrun -> bin/procrun; tested, including running under cron's minimal PATH.
 
 - [ ] **1.8 Live proof: Wrap aorus8's cron lines in batches, backing up the crontab before each batch; replace each `flock -n` with `overlap = "skip"` and its lock path; mark wrapped entries `migration = "done"`.**
     depends-on: ["1.7"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
 
-- [ ] **1.9 Keep every existing `stale` and `checklog` line until P2 acceptance.**
+- [x] **1.9 Keep every existing `stale` and `checklog` line until P2 acceptance.**
     depends-on: ["1.7"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: Constraint row: PR #20 changes no stale or checklog cron line; guides/procrun.md says to keep them until P2 acceptance.
 
 - [ ] **1.10 Live proof: After two weeks of `procrun` records, set each job's `timeout` from its measured durations (for example three times its longest normal run), reviewed by its owner.**
     depends-on: ["1.9"]
