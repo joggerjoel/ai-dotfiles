@@ -219,6 +219,10 @@ claude-token-check *HOSTS:
 claude-token-test:
     @bash {{dotfiles}}/scripts/claude-token.test.sh
 
+# [local] claude-usage: unit tests (scripts/claude-usage.test.sh)
+claude-usage-test:
+    @bash {{dotfiles}}/scripts/claude-usage.test.sh
+
 # [local] per-session cache/token report via ccusage (on demand — never in the statusline)
 cache-report *ARGS:
     bunx ccusage@latest claude session --breakdown {{ARGS}}
