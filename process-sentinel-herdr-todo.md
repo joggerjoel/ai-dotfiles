@@ -91,21 +91,23 @@
     EXPECT tests: [0-9]+ passed, 0 failed
     Evidence: PR #21: tests reject path and unknown keys, lose no line across a rotation, report two rotations as gap, page past the 1 MB cap exactly once, redact secrets, write nothing; just test-all 845 passed, 0 failed.
 
-- [ ] **3.3 Live proof: Create a dedicated collector key pair and install it on aorus8 with `restrict,from="<herdr host>",command=".../procrun export"`. Test that it cannot open a shell, forward a port or run another command.**
+- [x] **3.3 Live proof: Create a dedicated collector key pair and install it on aorus8 with `restrict,from="<herdr host>",command=".../procrun export"`. Test that it cannot open a shell, forward a port or run another command.**
     depends-on: ["3.2"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: aorus8 2026-11-09 (inventory/process-sentinel-p2.md, #23): dedicated ed25519 key ~/.ssh/herdr-collector installed as restrict,from=100.82.153.82,command=procrun export; answers export, rejects a path key; another command, PTY, -L/-R/-W forwarding, sftp, scp and the LAN source are refused.
 
 - [x] **3.4 Live proof: Acceptance: every P1 case appears on `/fleet`, and in Needs-you for a test process marked `high`; stopping `procrun check` shows `checker down`; machine health appears on Toodoo's Workforce page. Record it in `inventory/process-sentinel-p2.md`.**
     depends-on: ["3.3"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
-    Evidence: Built in Herdr, not ai-dotfiles (converter misrouted this row): herdr-orchestrator #50 viewer /fleet with machine chips incl. checker down, process rows with run lattice and redacted excerpt, sentinel cost per day, escaped; live on 127.0.0.1:18797/fleet after the 2026-11-09 restart.
+    Evidence: aorus8 2026-11-09 (inventory/process-sentinel-p2.md, #23): with Process collector aorus8 in the trusted toodoo-herdr profile and fleet-collect every 300 s, all six P1 cases (failed, orphaned, stalled, missed, blocked, down) showed on Herdr's /fleet (herdr-orchestrator #50) and as Needs-you escalations 34, 35, 37-40 for high pstest entries, then were removed and cleared.
 
-- [ ] **3.5 Live proof: After acceptance, retire the `stale` and `checklog` cron lines the registry now covers, except the `procrun-check` watcher.**
+- [x] **3.5 Live proof: After acceptance, retire the `stale` and `checklog` cron lines the registry now covers, except the `procrun-check` watcher.**
     depends-on: ["3.4"]
     CHECK tests: just test-all
     EXPECT tests: [0-9]+ passed, 0 failed
+    Evidence: aorus8 2026-11-09 (#23): retired stale purchases-refresh, stale breaker-tick, checklog sentinel-02 and stale unbroadcast-cron (commented, crontab backup first) and their pending registry entries; procrun check, watch-check and validate --mail kept; validate exits 0.
 
 - [x] **4.1 Extract `sentinel-agent <project> <id>` from `sentinel-02-agent.sh`, keeping every current safety property.**
     depends-on: ["1.1", "1.2", "1.3", "1.6", "1.7", "1.9", "2.1", "2.2", "3.1", "3.2"]
