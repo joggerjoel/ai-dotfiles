@@ -4,7 +4,7 @@
 registry for three signals: **run** (did it start and end, with what exit),
 **progress** (did its log or output file move within `max_silence`) and
 **presence** (is the long-running thing there). Design authority:
-`process-sentinel-plan.md` in toodoo-herdr, sections 3.2, 3.3 and 3.5.
+`process-sentinel-plan.md` in toodoo-herdr, sections 3.2, 3.3, 3.5 and 3.6.
 
 ## Install
 
@@ -97,13 +97,99 @@ Add these three lines, with the machine's absolute path:
   entry, an identity that is not found, a schedule that differs from the
   crontab line, a sentinel `progress` that is not `checks-<id>.jsonl` in its
   project, a `dice-health-alert.sh checklog` line whose file is not a
-  sentinel's `doc`, and a model sentinel without its sandbox. It warns on a
+  sentinel's `doc`, and a model sentinel (one with `model`) whose `sandbox`
+  lacks `bwrap = true`, `read_only = true` or a non-empty `tools` list. It warns on a
   cron line neither wrapped nor pending and on an entry pending for more than
   30 days.
 
 Keep every existing `stale` and `checklog` alert line until the P2 fleet view
 has proved the same cases. `procrun` adds checks beside them; it does not
 replace them yet.
+
+## Export to a collector
+
+`procrun export` is the only command Herdr's collector can run on a machine.
+It reads a JSON request on stdin, answers one JSON object on stdout, and
+writes nothing: no state directory, no rotation, no record.
+
+### The restricted key
+
+Create a key pair used only by the collector and add its public key to the
+machine's `~/.ssh/authorized_keys` as one line:
+
+```
+restrict,from="<herdr host>",command="/home/<user>/.local/bin/procrun export" ssh-ed25519 AAAA... herdr-collector
+```
+
+`restrict` disables port, agent and X11 forwarding, PTY allocation and
+`~/.ssh/rc`; `from=` limits the key to the Herdr host; `command=` replaces
+whatever command the client asks for (it arrives only as
+`SSH_ORIGINAL_COMMAND`, which `procrun` ignores). The collector calls:
+
+```sh
+ssh -i ~/.ssh/herdr-collector <user>@<machine> < request.json > response.json
+```
+
+Herdr's existing key and its other uses are unchanged. Installing the key and
+proving it cannot open a shell, forward a port or run another command is done
+on the machine itself (row 3.3 of the ledger).
+
+### Request
+
+A JSON list of `{stream, key, offset, inode}`; `[]` returns the summary only.
+
+| `stream`     | `key`                    | File, resolved from the registry                  |
+| ------------ | ------------------------ | ------------------------------------------------- |
+| `runs`       | a process name           | `<state>/<name>.jsonl`                            |
+| `status`     | a process name           | `<state>/status.jsonl`, that process's lines only |
+| `checks`     | `project:id` (`dice:02`) | the sentinel entry's `progress` file              |
+| `proposals`  | `project:id`             | `proposals-<id>.jsonl` beside it                  |
+| `agent_runs` | `project:id`             | `agent-runs-<id>.jsonl` beside it                 |
+
+A key is a registry name, never a path: a key with `/`, `\`, or a leading
+`.` or `~` is rejected, and so is a name that is not in the registry (a
+`project:id` must belong to a `kind = "sentinel"` entry). A rejected item gets
+an `error` and no lines, the rest of the request is still answered, and the
+exit status is 1. A malformed request (not a list, an unknown stream or
+field, a negative offset) gets `{"v": 1, "error": ...}` and exit 2.
+
+Send `offset`, `inode` (and `prev`, when present) back exactly as the last
+response returned them; omit them on the first poll.
+
+### Response
+
+- `check`: `check-state.json`'s `last_run` and its age in seconds; Herdr
+  shows `checker down` when it stops advancing.
+- `processes`: each entry's kind, criticality, status, detail and `since`,
+  and for a process not `ok` the last 50 lines of its `log` as `log_tail`.
+- `sentinels`: `id`, `status` and `title` of each named sentinel's issues,
+  from the project's `sentinel-issues.json`.
+- `disk`: total, used and free bytes for each `[machine] mounts` path.
+- `streams`: per request item, whole lines after the position, the next
+  `inode` and `offset`, `more` when the 1 MB response cap stopped it (poll
+  again), and `gap` when lines may be missing.
+
+Lines come from the rotated generation (`.1`) first, then the current file,
+so a rotation between polls loses no line. A run that was open across the
+rotation writes its `end` line to `.1` after the collector has moved on;
+`prev` remembers where `.1` ended, so that line comes with the next poll.
+Two rotations between polls, or a file replaced in place, set `gap`, and
+reading restarts at the oldest file. A line still being written is held back
+until it ends, and a single line larger than the cap is skipped and counted
+in `oversize_lines`.
+
+### Redaction
+
+All text passes through one filter before it leaves the machine: tokens and
+API keys, private key blocks, passwords and other secret assignments,
+`Authorization` and cookie headers, URL credentials, and email addresses.
+The rules are
+[`lib/procrun/redaction-rules.json`](../lib/procrun/redaction-rules.json), a
+byte-identical copy of `toodoo_herdr/redaction-rules.json` in toodoo-herdr
+(copied at toodoo-herdr commit `a9dff8d`). Change the rules there and copy
+the file again; the test suite compares the two when toodoo-herdr is checked
+out beside ai-dotfiles (or at `$TOODOO_HERDR_DIR`). Without the rules file
+`procrun export` exports nothing.
 
 ## Platforms
 
