@@ -1288,16 +1288,24 @@ get_field() {
 SKILLS_MANIFEST_NAME=".installed-by-setup"
 
 # Pulls third-party skills from upstream (`just vendor-skills`) so update
-# installs current copies, not whatever was last committed. Desktop only: a
-# vps checkout is a deploy mirror that hard-resets to origin, so vendoring
-# there is discarded on the next run — the fleet gets new skills via a commit.
+# installs current copies, not whatever was last committed. Opt-in per machine
+# via .local/.vendor-skills: only the checkout you commit from should vendor.
+# Anywhere else the run rewrites committed .upstream stamps, and the next pull
+# conflicts on them as soon as origin's stamps move (macbookair, 2026-11-09).
+# Fleet hosts get new skills through the commit instead.
 # Skipped under --no-pull, whose contract is "apply the pushed tree as-is".
 # The result is left uncommitted for review. Non-fatal: a network or gh failure
 # must not block the config refresh.
+VENDOR_SKILLS_MARKER=".local/.vendor-skills"
+
 refresh_vendored_skills() {
-  local profile="$1" no_pull="$2"
-  if [ "$profile" != "desktop" ] || [ "$no_pull" = "yes" ]; then
-    skip "Vendored skill refresh skipped (profile=$profile, no-pull=$no_pull)"
+  local no_pull="$1"
+  if [ "$(cat "$DOTFILES_DIR/$VENDOR_SKILLS_MARKER" 2>/dev/null)" != "yes" ]; then
+    skip "Vendored skill refresh skipped (not the vendoring machine; opt in: echo yes > $VENDOR_SKILLS_MARKER)"
+    return 0
+  fi
+  if [ "$no_pull" = "yes" ]; then
+    skip "Vendored skill refresh skipped (--no-pull)"
     return 0
   fi
   if ! command -v just &>/dev/null; then
@@ -2441,7 +2449,7 @@ cmd_update() {
   ok "Reference files updated"
 
   ensure_unlazy_payload
-  refresh_vendored_skills "$profile" "$no_pull"
+  refresh_vendored_skills "$no_pull"
   # Re-install repo-owned skills
   install_skills
 
