@@ -23,7 +23,7 @@ services:
   # Built here, not pulled: upstream's ghcr.io/chopratejas/headroom:latest has
   # sat on 0.27.0 since June with no version tags, while the CLI on the same
   # hosts moved on. The image mirrors upstream's (same entrypoint, port and
-  # health check) at the version pinned in deploy-9router.yml.
+  # health check) at the host's headroom CLI version (deploy-9router.yml).
   headroom:
     image: 9router-headroom:{{ ninerouter_headroom_version }}
     build:
