@@ -712,8 +712,12 @@ if [ -n "$nine_ver_json" ]; then
   fi
 elif curl -m 2 -fsS "http://127.0.0.1:${NINEROUTER_PORT}/api/health" >/dev/null 2>&1; then
   ok "9router: gateway up on :${NINEROUTER_PORT}"
+elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx 9router; then
+  # The container exists here, so silence on its port is a fault, not absence.
+  warn "9router: installed on this host but not answering on :${NINEROUTER_PORT} — check: docker ps -a; docker logs 9router"
 else
-  skip "9router: not reachable on :${NINEROUTER_PORT} — Docker service on the fleet; update via ansible-ai/deploy-9router.yml"
+  # Most hosts: the gateway runs only where deploy-9router.yml put it.
+  skip "9router: not installed on this host (nothing to check)"
 fi
 
 # Pins persist and are easy to forget — months later a deliberately

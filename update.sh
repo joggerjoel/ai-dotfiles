@@ -76,6 +76,8 @@ header() { echo -e "\n${BOLD}$1${RESET} ${DIM}[$(date '+%H:%M:%S')]${RESET}"; }
 DOTFILES_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/links.sh
 source "$DOTFILES_DIR/lib/links.sh"
+# shellcheck source=lib/herdr-renderers.sh
+source "$DOTFILES_DIR/lib/herdr-renderers.sh"
 # Counters are only initialized here, not at source time — a caller that
 # calls link_file directly before relink_all ever runs would otherwise hit
 # an unbound variable under `set -u`.
@@ -318,8 +320,8 @@ fi
 # fleet's Linux boxes can carry them too. INSTALLS what's missing rather than
 # only upgrading, so an existing checkout picks them up without a full
 # setup.sh re-run. Per-OS naming differs — Debian ships bat's binary as
-# `batcat` (bacula-console clash) and has no glow at all; setup.sh owns the
-# Charm-repo + shim work, so here a missing glow on apt is just reported.
+# `batcat` (bacula-console clash) and has no glow at all; setup.sh owns
+# adding Charm's repo, so here glow installs only once that repo is present.
 if [ "$RUN_AGENTS" = "yes" ]; then
   hr_missing=""
   if command -v brew &>/dev/null; then
@@ -338,18 +340,7 @@ if [ "$RUN_AGENTS" = "yes" ]; then
     fi
   elif command -v apt-get &>/dev/null; then
     header "herdr-file-viewer renderers"
-    command -v batcat &>/dev/null || command -v bat &>/dev/null || hr_missing="$hr_missing bat"
-    command -v delta &>/dev/null || hr_missing="$hr_missing git-delta"
-    command -v glow &>/dev/null || warn "glow absent — run setup.sh to add Charm's apt repo"
-    if [ -n "$hr_missing" ]; then
-      $SUDO apt-get update -y >/dev/null 2>&1 || true
-      # shellcheck disable=SC2086
-      $SUDO apt-get install -y $hr_missing >/dev/null 2>&1 \
-        && ok "renderers installed —${hr_missing}" \
-        || warn "renderer install failed — apt-get install${hr_missing} (non-fatal)"
-    else
-      ok "renderers current (bat/batcat, delta)"
-    fi
+    herdr_apt_install_renderers
   fi
 fi
 
