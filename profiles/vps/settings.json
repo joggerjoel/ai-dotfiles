@@ -143,11 +143,6 @@
         ]
       }
     ],
-    "SubagentStop": [
-      {
-        "hooks": []
-      }
-    ],
     "SessionStart": [
       {
         "matcher": "startup",
@@ -181,6 +176,16 @@
           {
             "type": "command",
             "command": "[ -x \"$HOME/.local/bin/global-todo\" ] && \"$HOME/.local/bin/global-todo\" inject || true"
+          }
+        ]
+      },
+      {
+        "matcher": "^(startup|resume|clear|compact|fork)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash '/home/joggerjoel/.claude/hooks/herdr-agent-state.sh' session",
+            "timeout": 10
           }
         ]
       }
