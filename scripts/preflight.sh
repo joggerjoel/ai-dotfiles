@@ -437,7 +437,8 @@ probe_skills() {
       continue
     fi
 
-    declared=$(sed -n '2,/^---/p' "$skill_md" | grep -E '^name:' | head -1 | sed -E 's/^name:[[:space:]]*//')
+    declared=$(sed -n '2,/^---/p' "$skill_md" | grep -E '^name:' | head -1 \
+      | sed -E "s/^name:[[:space:]]*//; s/[[:space:]]+\$//; s/^([\"'])(.*)\1\$/\2/")
     if [ -n "$declared" ] && [ "$declared" != "$name" ]; then
       add_finding skill "$name" fail "frontmatter name '$declared' does not match directory" no
       continue

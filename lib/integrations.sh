@@ -88,8 +88,21 @@ MANDATED_CLIS=(
 # it through npx fails too: npx prepends its own .bin, so doctor finds itself.
 CLAUDE_MEM_CLI_PREFIX="$HOME/.local/share/claude-mem-cli"
 CLAUDE_MEM_CLI="$CLAUDE_MEM_CLI_PREFIX/node_modules/.bin/claude-mem"
+# `claude-mem repair` alone leaves the doctor failing (seen on 15.15.1): its
+# last step repopulates the marketplace root from the npm package, which wipes
+# the plugin/node_modules it installed a step earlier, so the doctor trades
+# "Marketplace runtime" for "Plugin installed — missing ...". The plugin tree
+# is reinstalled afterwards with bun, as upstream's own bun.lock intends.
+# Not npm: one dependency's install script needs a newer glibc than Ubuntu
+# 22.04 ships, and bun does not run dependency install scripts.
+# </dev/null: repair draws an interactive UI and stops on a tty it cannot own
+# when run under timeout (see RUN_TIMEOUT in scripts/agents-update.sh).
+CLAUDE_MEM_PLUGIN_DIR="$HOME/.claude/plugins/marketplaces/thedotmack/plugin"
+CLAUDE_MEM_BUN="$HOME/.bun/bin/bun"
+[ -x "$CLAUDE_MEM_BUN" ] || CLAUDE_MEM_BUN="bun"
+CLAUDE_MEM_REPAIR="$CLAUDE_MEM_CLI repair </dev/null && cd $CLAUDE_MEM_PLUGIN_DIR && $CLAUDE_MEM_BUN install </dev/null"
 PLUGIN_ASSETS=(
-  "claude-mem|$CLAUDE_MEM_CLI|$CLAUDE_MEM_CLI doctor|$HOME/.claude-mem/observer-health.json|21600|$CLAUDE_MEM_CLI repair"
+  "claude-mem|$CLAUDE_MEM_CLI|$CLAUDE_MEM_CLI doctor|$HOME/.claude-mem/observer-health.json|21600|$CLAUDE_MEM_REPAIR"
 )
 
 # Map an integration name to its index in INTEGRATIONS. Prints the index;

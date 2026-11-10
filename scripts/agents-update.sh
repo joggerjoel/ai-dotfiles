@@ -108,14 +108,20 @@ INTERACTIVE="no"
 [ "$FORCE" -eq 0 ] && [ -t 0 ] && [ -e /dev/tty ] && INTERACTIVE="yes"
 
 # A hung vendor updater must not stall the whole fleet play.
+#
+# -k 10: SIGTERM alone is not enough. timeout runs its child in a background
+# process group, so a child that touches the terminal is stopped by the kernel
+# (SIGTTIN/SIGTTOU); if it also traps SIGTERM, its handler touches the terminal
+# again and it re-stops, and the update sat there forever. SIGKILL cannot be
+# trapped and lands on a stopped process.
 RUN_TIMEOUT=""
 DOCTOR_TIMEOUT=""
 if command -v timeout >/dev/null 2>&1; then
-  RUN_TIMEOUT="timeout 120"
-  DOCTOR_TIMEOUT="timeout 30"
+  RUN_TIMEOUT="timeout -k 10 120"
+  DOCTOR_TIMEOUT="timeout -k 10 30"
 elif command -v gtimeout >/dev/null 2>&1; then
-  RUN_TIMEOUT="gtimeout 120"
-  DOCTOR_TIMEOUT="gtimeout 30"
+  RUN_TIMEOUT="gtimeout -k 10 120"
+  DOCTOR_TIMEOUT="gtimeout -k 10 30"
 fi
 
 # offer_install <name> <install command>
@@ -650,7 +656,10 @@ elif { echo "  claude-mem: checking runtime..."; $DOCTOR_TIMEOUT "$CLAUDE_MEM_CL
 else
   CLAUDE_MEM_DIAGNOSIS=$(grep -F '✗' "$LOG" | head -1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
   echo "  claude-mem: repairing runtime (up to 120 seconds)..."
-  if $RUN_TIMEOUT "$CLAUDE_MEM_CLI" repair 2>&1 | tee "$LOG" \
+  # CLAUDE_MEM_REPAIR (lib/integrations.sh) is the one definition of the
+  # repair, shared with preflight: it keeps repair off the terminal and
+  # reinstalls the plugin tree that repair itself wipes.
+  if $RUN_TIMEOUT bash -c "$CLAUDE_MEM_REPAIR" 2>&1 | tee "$LOG" \
       && $DOCTOR_TIMEOUT "$CLAUDE_MEM_CLI" doctor >"$LOG" 2>&1; then
     ok "claude-mem: repaired (doctor now passes)"
   else
@@ -673,8 +682,11 @@ if [ -n "$HEADROOM_BIN" ]; then
     # update does it via deploy-headroom-proxy.yml). No process of ours →
     # it's the Docker container from deploy-9router.yml, and a restart
     # won't help: the upstream image itself still ships the old version.
-    # prox[y] keeps pgrep from matching its own command line.
-    if pgrep -u "$(id -un)" -f 'headroom(\.cli)? prox[y]' >/dev/null 2>&1; then
+    # prox[y] keeps pgrep from matching its own command line. The port is part
+    # of the match: `headroom wrap` starts a proxy of ours on its own port, and
+    # without it that unrelated process made the Docker proxy look restartable
+    # (the hint then named a systemd unit this host never had).
+    if pgrep -u "$(id -un)" -f "headroom(\.cli)? prox[y].*--port ${HEADROOM_PORT}( |\$)" >/dev/null 2>&1; then
       warn "headroom proxy on :${HEADROOM_PORT} still runs ${proxy_ver} — restart to load ${cli_ver}: systemctl --user restart headroom-proxy (or relaunch it)"
     else
       warn "headroom proxy on :${HEADROOM_PORT} runs ${proxy_ver} (Docker-managed, deploy-9router.yml) — upstream image lags the ${cli_ver} CLI; converges when a new image ships"
