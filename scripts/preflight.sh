@@ -437,8 +437,10 @@ probe_skills() {
       continue
     fi
 
+    # One pattern per quote style: BSD sed -E ignores a backreference in the
+    # pattern (\1 matching the opening quote), so `name: "x"` stayed quoted.
     declared=$(sed -n '2,/^---/p' "$skill_md" | grep -E '^name:' | head -1 \
-      | sed -E "s/^name:[[:space:]]*//; s/[[:space:]]+\$//; s/^([\"'])(.*)\1\$/\2/")
+      | sed -E "s/^name:[[:space:]]*//; s/[[:space:]]+\$//; s/^\"(.*)\"\$/\1/; s/^'(.*)'\$/\1/")
     if [ -n "$declared" ] && [ "$declared" != "$name" ]; then
       add_finding skill "$name" fail "frontmatter name '$declared' does not match directory" no
       continue
