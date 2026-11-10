@@ -1990,9 +1990,20 @@ cmd_setup() {
     desc=$(get_field "$entry" 2)
     needs_key=$(get_field "$entry" 3)
 
-    local tag=""
+    # The tag answers "will picking this prompt me?", so it reads ~/.claude/.env
+    # the same way the install loop below does. A fixed "needs API key" told a
+    # user whose keys were all in place that none of them were.
+    local tag="" var missing=""
     if [ "$needs_key" = "yes" ]; then
-      tag="${DIM}[needs API key]${RESET}"
+      for var in "$(get_field "$entry" 4)" "$(get_field "$entry" 6)"; do
+        [ -n "$var" ] || continue
+        [ -n "$(env_file_key "$var")" ] || missing="${missing:+$missing, }$var"
+      done
+    fi
+    if [ -n "$missing" ]; then
+      tag="${DIM}[needs ${missing}]${RESET}"
+    elif [ "$needs_key" = "yes" ]; then
+      tag="${GREEN}[key in ~/.claude/.env]${RESET}"
     else
       tag="${GREEN}[ready]${RESET}"
     fi
