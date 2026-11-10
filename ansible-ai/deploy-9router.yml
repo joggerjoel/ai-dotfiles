@@ -19,11 +19,27 @@
     ninerouter_dir: /opt/9router
     ninerouter_port: 20128
     ninerouter_headroom_port: 8787
-    # The headroom proxy image is built at this version (see the template).
-    # Bump it to match the fleet's headroom CLI; agents-update.sh warns when
-    # the running proxy lags.
+    # The headroom proxy image is built at the version of the headroom CLI
+    # on the same host (see the template), so the proxy follows the CLI that
+    # update.yml upgrades just before importing this play. This value is
+    # only the fallback for a host with no CLI installed.
     ninerouter_headroom_version: "0.44.0"
   tasks:
+    # become: false — the CLI lives in the login user's ~/.local/bin, not
+    # root's. The version is the last line; warnings can precede it.
+    - name: Read the host's headroom CLI version
+      become: false
+      ansible.builtin.shell: '"$HOME/.local/bin/headroom" --version 2>/dev/null | tail -1'
+      register: headroom_cli_version
+      check_mode: false # read-only, and --check needs the real version too
+      changed_when: false
+      failed_when: false
+
+    - name: Build the proxy at the CLI's version
+      ansible.builtin.set_fact:
+        ninerouter_headroom_version: "{{ headroom_cli_version.stdout | regex_search('[0-9]+\\.[0-9]+\\.[0-9]+') }}"
+      when: headroom_cli_version.stdout is regex('[0-9]+\\.[0-9]+\\.[0-9]+')
+
     - name: Ensure deploy dir exists
       ansible.builtin.file:
         path: "{{ ninerouter_dir }}"

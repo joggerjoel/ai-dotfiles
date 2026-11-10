@@ -681,7 +681,7 @@ if [ -n "$HEADROOM_BIN" ]; then
     # Whose proxy is lagging? A process of ours → restartable (the fleet
     # update does it via deploy-headroom-proxy.yml). No process of ours →
     # it's the Docker container from deploy-9router.yml, and a restart
-    # won't help: its image is built at a pinned version.
+    # won't help: its image is rebuilt at the CLI's version on redeploy.
     # prox[y] keeps pgrep from matching its own command line. The port is part
     # of the match: `headroom wrap` starts a proxy of ours on its own port, and
     # without it that unrelated process made the Docker proxy look restartable
@@ -689,7 +689,7 @@ if [ -n "$HEADROOM_BIN" ]; then
     if pgrep -u "$(id -un)" -f "headroom(\.cli)? prox[y].*--port ${HEADROOM_PORT}( |\$)" >/dev/null 2>&1; then
       warn "headroom proxy on :${HEADROOM_PORT} still runs ${proxy_ver} — restart to load ${cli_ver}: systemctl --user restart headroom-proxy (or relaunch it)"
     else
-      warn "headroom proxy on :${HEADROOM_PORT} runs ${proxy_ver} (Docker-managed) — set ninerouter_headroom_version to ${cli_ver} in ansible-ai/deploy-9router.yml and redeploy"
+      warn "headroom proxy on :${HEADROOM_PORT} runs ${proxy_ver} (Docker-managed) — redeploy to rebuild it at ${cli_ver}: cd ansible-ai && ansible-playbook deploy-9router.yml (a fleet update does this)"
     fi
   fi
 fi
