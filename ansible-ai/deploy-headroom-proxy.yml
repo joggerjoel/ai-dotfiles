@@ -58,13 +58,18 @@
 
     # Adopt an ad-hoc proxy: anything on the pattern that isn't the unit's
     # own MainPID gets killed so the unit can bind the port. prox[y] keeps
-    # pgrep from matching this very shell.
+    # pgrep from matching this very shell. A proxy on another port is
+    # left alone: `headroom wrap` runs one of its own, and killing that takes
+    # a live agent session down with it.
     - name: Stop ad-hoc proxy processes (unit takes over the port)
       ansible.builtin.shell: |
         main="$(systemctl --user show -p MainPID --value headroom-proxy 2>/dev/null || echo 0)"
         status=none
         for pid in $(pgrep -u "$(id -un)" -f 'headroom(\.cli)? prox[y]'); do
           [ "$pid" = "$main" ] && continue
+          # No --port flag means the default port, which the unit binds.
+          port="$(ps -o args= -p "$pid" 2>/dev/null | sed -nE 's/.*--port[= ]([0-9]+).*/\1/p')"
+          [ -z "$port" ] || [ "$port" = "{{ headroom_port }}" ] || continue
           kill "$pid" && status=killed
         done
         echo "adhoc=$status"
