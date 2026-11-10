@@ -820,30 +820,38 @@ ensure_playwright_cli() {
 # agent-browser — the browser-automation CLI CLAUDE.md names as required (the
 # Claude Code plugin from bootstrap-plugins.sh ships only the skill, not this
 # binary). Mandated by preflight on every profile except vps, which has no
-# browser, so the same exemption applies here. Two steps, both fail-soft:
-# `bun add -g` for the CLI, then `agent-browser install` to fetch Chrome. On
-# Linux that second step takes --with-deps, which apt-installs system libraries
-# through sudo; with no usable sudo it fails and we print the manual command
-# rather than hang (stdin is /dev/null so a password prompt cannot block setup).
-# The browser step runs only on a fresh CLI install, to keep reruns cheap.
+# browser, so the same exemption applies here. Two independent steps, both
+# fail-soft: `bun add -g` for the CLI, then `agent-browser install` to fetch
+# Chrome into ~/.agent-browser/browsers. The browser is checked on its own, not
+# only after a fresh CLI install, so a host that has the CLI but no Chrome (or
+# whose sudo step failed earlier) is repaired on the next run. On Linux the
+# install takes --with-deps, which apt-installs system libraries through sudo;
+# with no usable sudo it fails and we print the manual command rather than hang
+# (stdin is /dev/null so a password prompt cannot block setup).
 ensure_agent_browser() {
-  local profile="desktop"
+  local profile="desktop" ab="$HOME/.bun/bin/agent-browser"
   [ -f "$DOTFILES_DIR/.local/.profile" ] && profile=$(cat "$DOTFILES_DIR/.local/.profile")
   [ "$profile" = "vps" ] && { skip "agent-browser skipped — vps profile has no browser"; return 0; }
 
-  command -v agent-browser &>/dev/null && { ok "agent-browser present"; return 0; }
-  command -v bun &>/dev/null || { warn "agent-browser skipped — bun unavailable"; return 0; }
+  if command -v agent-browser &>/dev/null; then
+    ab=$(command -v agent-browser)
+    ok "agent-browser present"
+  else
+    command -v bun &>/dev/null || { warn "agent-browser skipped — bun unavailable"; return 0; }
+    warn "agent-browser missing — installing via bun..."
+    bun add -g agent-browser >/dev/null 2>&1
+    [ -x "$ab" ] || { warn "agent-browser install failed — bun add -g agent-browser (non-fatal)"; return 0; }
+    ok "agent-browser installed (open a new shell to pick it up)"
+  fi
 
-  warn "agent-browser missing — installing via bun..."
-  bun add -g agent-browser >/dev/null 2>&1
-  command -v agent-browser &>/dev/null \
-    || [ -x "$HOME/.bun/bin/agent-browser" ] \
-    || { warn "agent-browser install failed — bun add -g agent-browser (non-fatal)"; return 0; }
-  ok "agent-browser installed (open a new shell to pick it up)"
-
+  if compgen -G "$HOME/.agent-browser/browsers/chrome-*/chrome" >/dev/null; then
+    ok "agent-browser: browser present"
+    return 0
+  fi
   local flags=""
   [ "$(uname -s)" = "Linux" ] && flags="--with-deps"
-  "$HOME/.bun/bin/agent-browser" install $flags </dev/null >/dev/null 2>&1 \
+  warn "agent-browser: browser missing — installing..."
+  "$ab" install $flags </dev/null >/dev/null 2>&1 \
     && ok "agent-browser: browser installed" \
     || warn "agent-browser: browser install failed — run: agent-browser install $flags (non-fatal)"
 }

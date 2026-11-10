@@ -1777,6 +1777,28 @@ else
   report fail "ensure_agent_browser installs the CLI, then the browser, on desktop" "$(cat "$AB_ROOT/log-desktop")"
 fi
 
+# A host that already has the CLI is still repaired when Chrome is missing, and
+# left alone when Chrome is there.
+printf '#!/bin/bash\necho "agent-browser $*" >> "$AB_LOG"\n' > "$AB_ROOT/stubs/agent-browser"
+chmod +x "$AB_ROOT/stubs/agent-browser"
+
+run_ensure_agent_browser desktop-have-cli-no-chrome
+if grep -q '^agent-browser install' "$AB_ROOT/log-desktop-have-cli-no-chrome" \
+   && ! grep -q '^bun ' "$AB_ROOT/log-desktop-have-cli-no-chrome"; then
+  report pass "ensure_agent_browser installs only the browser when the CLI is present but Chrome is missing"
+else
+  report fail "ensure_agent_browser installs only the browser when the CLI is present but Chrome is missing" "$(cat "$AB_ROOT/log-desktop-have-cli-no-chrome")"
+fi
+
+mkdir -p "$AB_ROOT/home-desktop-both/.agent-browser/browsers/chrome-1.0"
+: > "$AB_ROOT/home-desktop-both/.agent-browser/browsers/chrome-1.0/chrome"
+run_ensure_agent_browser desktop-both
+if [ ! -s "$AB_ROOT/log-desktop-both" ]; then
+  report pass "ensure_agent_browser does nothing when the CLI and Chrome are both present"
+else
+  report fail "ensure_agent_browser does nothing when the CLI and Chrome are both present" "$(cat "$AB_ROOT/log-desktop-both")"
+fi
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
