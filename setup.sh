@@ -38,6 +38,13 @@ warn() { echo -e "  ${YELLOW}!${RESET} $1"; }
 fail() { echo -e "  ${RED}✗${RESET} $1"; }
 header() { echo -e "\n${BOLD}$1${RESET}"; }
 
+# A git transfer that stalls mid-connection otherwise hangs forever: the
+# unlazy re-vendor sat on one `git clone` until it was killed by hand. git
+# aborts a transfer that stays under 1 KB/s for 30 seconds; every clone, fetch
+# and pull started from here (vendor scripts included) inherits it.
+export GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT:-1000}"
+export GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-30}"
+
 DOTFILES_DIR="$(cd "$(dirname "${AI_DOTFILES_SETUP_SOURCE:-$0}")" && pwd)"
 CLAUDE_DIR="$HOME/.claude"
 CLAUDE_JSON="$HOME/.claude.json"
