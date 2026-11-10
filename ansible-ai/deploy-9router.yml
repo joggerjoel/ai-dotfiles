@@ -19,6 +19,10 @@
     ninerouter_dir: /opt/9router
     ninerouter_port: 20128
     ninerouter_headroom_port: 8787
+    # The headroom proxy image is built at this version (see the template).
+    # Bump it to match the fleet's headroom CLI; agents-update.sh warns when
+    # the running proxy lags.
+    ninerouter_headroom_version: "0.44.0"
   tasks:
     - name: Ensure deploy dir exists
       ansible.builtin.file:
@@ -59,15 +63,16 @@
         path: "{{ ninerouter_dir }}/.env"
         mode: "0600"
 
+    # headroom has no upstream image to pull; --ignore-buildable skips it.
     - name: Pull latest images
       ansible.builtin.command:
-        cmd: docker compose -f {{ ninerouter_dir }}/docker-compose.yml pull
+        cmd: docker compose -f {{ ninerouter_dir }}/docker-compose.yml pull --ignore-buildable
       register: pull
       changed_when: "'Pulled' in pull.stderr or 'Downloaded newer' in pull.stdout"
 
     - name: Start / recreate containers
       ansible.builtin.command:
-        cmd: docker compose -f {{ ninerouter_dir }}/docker-compose.yml up -d
+        cmd: docker compose -f {{ ninerouter_dir }}/docker-compose.yml up -d --build
       register: up
       changed_when: "'Started' in up.stderr or 'Created' in up.stderr or 'Recreated' in up.stderr"
 
