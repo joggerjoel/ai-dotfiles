@@ -20,8 +20,33 @@ services:
     depends_on:
       - headroom
 
+  # Built here, not pulled: upstream's ghcr.io/chopratejas/headroom:latest has
+  # sat on 0.27.0 since June with no version tags, while the CLI on the same
+  # hosts moved on. The image mirrors upstream's (same entrypoint, port and
+  # health check) at the version pinned in deploy-9router.yml.
   headroom:
-    image: ghcr.io/chopratejas/headroom:latest
+    image: 9router-headroom:{{ ninerouter_headroom_version }}
+    build:
+      context: {{ ninerouter_dir }}
+      dockerfile_inline: |
+        FROM python:3.13-slim
+        RUN apt-get update && apt-get install -y --no-install-recommends curl \
+            && rm -rf /var/lib/apt/lists/*
+        RUN pip install --no-cache-dir "headroom-ai[proxy]=={{ ninerouter_headroom_version }}"
+        ENV HEADROOM_HOST=0.0.0.0 PYTHONUNBUFFERED=1
+        ENTRYPOINT ["headroom", "proxy"]
+        CMD ["--host", "0.0.0.0", "--port", "8787"]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8787/readyz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    # Newer headroom refuses to bind 0.0.0.0 without a token. Inside the
+    # container that bind is the only way 9router can reach it, and the port
+    # is published on 127.0.0.1 only, which is the case this flag is for.
+    environment:
+      HEADROOM_ALLOW_UNAUTHENTICATED_BIND: "1"
     container_name: headroom
     restart: always
     ports:
