@@ -55,6 +55,8 @@ fi
 source "$DOTFILES_DIR/lib/integrations.sh"
 # shellcheck source=lib/links.sh
 source "$DOTFILES_DIR/lib/links.sh"
+# shellcheck source=lib/herdr-renderers.sh
+source "$DOTFILES_DIR/lib/herdr-renderers.sh"
 # install_settings calls link_file directly, before relink_all ever runs —
 # every link_file call increments a counter, so it must not be left unbound
 # under `set -u`.
@@ -546,28 +548,12 @@ ensure_herdr_renderers() {
       fi
       ;;
     apt)
-      command -v batcat &>/dev/null || command -v bat &>/dev/null || missing_pkgs="$missing_pkgs bat"
-      command -v delta &>/dev/null || missing_pkgs="$missing_pkgs git-delta"
+      # glow is not in Ubuntu; with Charm's repo added it becomes an ordinary
+      # apt candidate and the shared installer picks it up.
       if ! command -v glow &>/dev/null; then
-        add_charm_apt_repo && missing_pkgs="$missing_pkgs glow" \
-          || warn "glow skipped — Charm apt repo needs root (non-fatal)"
+        add_charm_apt_repo || warn "glow skipped — Charm apt repo needs root (non-fatal)"
       fi
-      if [ -n "$missing_pkgs" ]; then
-        warn "herdr renderers missing —${missing_pkgs} (viewer panes fall back to plain text)"
-        apt_update_once
-        # shellcheck disable=SC2086
-        $SUDO apt-get install -y $missing_pkgs >/dev/null 2>&1 \
-          && ok "herdr renderers installed —${missing_pkgs}" \
-          || warn "renderer install failed — apt-get install${missing_pkgs} (non-fatal)"
-      else
-        ok "herdr renderers present (bat/batcat, delta, glow)"
-      fi
-      # Debian's binary is batcat; the viewer calls `bat`. Shim it, no sudo needed.
-      if command -v batcat &>/dev/null && ! command -v bat &>/dev/null; then
-        mkdir -p "$HOME/.local/bin"
-        ln -sf "$(command -v batcat)" "$HOME/.local/bin/bat" \
-          && ok "linked batcat → ~/.local/bin/bat (viewer invokes it as 'bat')"
-      fi
+      herdr_apt_install_renderers
       ;;
     *)
       skip "herdr renderers skipped (no supported package manager)"
