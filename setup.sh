@@ -817,6 +817,37 @@ ensure_playwright_cli() {
   fi
 }
 
+# agent-browser — the browser-automation CLI CLAUDE.md names as required (the
+# Claude Code plugin from bootstrap-plugins.sh ships only the skill, not this
+# binary). Mandated by preflight on every profile except vps, which has no
+# browser, so the same exemption applies here. Two steps, both fail-soft:
+# `bun add -g` for the CLI, then `agent-browser install` to fetch Chrome. On
+# Linux that second step takes --with-deps, which apt-installs system libraries
+# through sudo; with no usable sudo it fails and we print the manual command
+# rather than hang (stdin is /dev/null so a password prompt cannot block setup).
+# The browser step runs only on a fresh CLI install, to keep reruns cheap.
+ensure_agent_browser() {
+  local profile="desktop"
+  [ -f "$DOTFILES_DIR/.local/.profile" ] && profile=$(cat "$DOTFILES_DIR/.local/.profile")
+  [ "$profile" = "vps" ] && { skip "agent-browser skipped — vps profile has no browser"; return 0; }
+
+  command -v agent-browser &>/dev/null && { ok "agent-browser present"; return 0; }
+  command -v bun &>/dev/null || { warn "agent-browser skipped — bun unavailable"; return 0; }
+
+  warn "agent-browser missing — installing via bun..."
+  bun add -g agent-browser >/dev/null 2>&1
+  command -v agent-browser &>/dev/null \
+    || [ -x "$HOME/.bun/bin/agent-browser" ] \
+    || { warn "agent-browser install failed — bun add -g agent-browser (non-fatal)"; return 0; }
+  ok "agent-browser installed (open a new shell to pick it up)"
+
+  local flags=""
+  [ "$(uname -s)" = "Linux" ] && flags="--with-deps"
+  "$HOME/.bun/bin/agent-browser" install $flags </dev/null >/dev/null 2>&1 \
+    && ok "agent-browser: browser installed" \
+    || warn "agent-browser: browser install failed — run: agent-browser install $flags (non-fatal)"
+}
+
 ensure_just() {
   command -v just &>/dev/null && { ok "just present"; return 0; }
   if [ "$PKG_MANAGER" = "brew" ]; then
@@ -989,6 +1020,7 @@ ensure_dependencies() {
   ensure_grok_bot_cli  # gbot: Cursor's Grok Bot CLI (npm; needs the desktop app signed in, no fleet playbook)
   ensure_pen_dev_cli  # pen/pencil: pen.dev design tool CLI (npm; desktop-only, no fleet playbook)
   ensure_playwright_cli  # browser-automation CLI + skill (npm; no browsers installed)
+  ensure_agent_browser  # agent-browser CLI + Chrome (bun; skipped on vps)
   ensure_herdr   # node session backend (macOS/brew only — no-ops on Linux)
   ensure_orca    # agent-orchestration IDE + CLI (macOS/brew cask only — no-ops on Linux)
   ensure_herdr_renderers  # bat/delta/glow — herdr-file-viewer content panes

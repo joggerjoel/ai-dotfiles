@@ -1730,6 +1730,53 @@ _t_prune_dry_run() {
 }
 links_case prune_dry_run _t_prune_dry_run
 
+# --- setup.sh: ensure_agent_browser installs the CLI + browser, skips on vps --
+# agent-browser is mandated by preflight on every profile but vps. bun and the
+# agent-browser binary are stubs that log their argv, so nothing is downloaded;
+# HOME is a fixture so ~/.bun/bin is the stub's landing place. Same sourcing
+# convention as the link_repo_scripts fixture above.
+AB_ROOT=$(mktemp -d)
+add_cleanup_dir "$AB_ROOT"
+mkdir -p "$AB_ROOT/stubs"
+cat > "$AB_ROOT/stubs/bun" <<'STUB'
+#!/bin/bash
+echo "bun $*" >> "$AB_LOG"
+mkdir -p "$HOME/.bun/bin"
+printf '#!/bin/bash\necho "agent-browser $*" >> "$AB_LOG"\n' > "$HOME/.bun/bin/agent-browser"
+chmod +x "$HOME/.bun/bin/agent-browser"
+STUB
+chmod +x "$AB_ROOT/stubs/bun"
+
+run_ensure_agent_browser() {   # <profile>
+  local profile="$1" home="$AB_ROOT/home-$1"
+  mkdir -p "$home" "$AB_ROOT/repo-$profile/.local"
+  printf '%s' "$profile" > "$AB_ROOT/repo-$profile/.local/.profile"
+  : > "$AB_ROOT/log-$profile"
+  HOME="$home" AB_LOG="$AB_ROOT/log-$profile" PATH="$AB_ROOT/stubs:/usr/bin:/bin" \
+    bash -c '
+      source "$0" help >/dev/null 2>&1
+      DOTFILES_DIR="$1"
+      ensure_agent_browser
+    ' "$REPO_DIR/setup.sh" "$AB_ROOT/repo-$profile" >/dev/null 2>&1
+}
+
+run_ensure_agent_browser vps
+if [ ! -s "$AB_ROOT/log-vps" ]; then
+  report pass "ensure_agent_browser does nothing on the vps profile"
+else
+  report fail "ensure_agent_browser does nothing on the vps profile" "$(cat "$AB_ROOT/log-vps")"
+fi
+
+run_ensure_agent_browser desktop
+want_flags=""
+[ "$(uname -s)" = "Linux" ] && want_flags=" --with-deps"
+if grep -qx "bun add -g agent-browser" "$AB_ROOT/log-desktop" \
+   && grep -qx "agent-browser install$want_flags" "$AB_ROOT/log-desktop"; then
+  report pass "ensure_agent_browser installs the CLI, then the browser, on desktop"
+else
+  report fail "ensure_agent_browser installs the CLI, then the browser, on desktop" "$(cat "$AB_ROOT/log-desktop")"
+fi
+
 echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
