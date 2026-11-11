@@ -1040,8 +1040,35 @@ case "$out" in
        "got: $(printf '%s' "$out" | grep -i stuckplug)" ;;
 esac
 
-# consecutiveFailures resets on any success, so a plugin that briefly recovered
-# must NOT read as healthy just because that counter is back to zero.
+# An idle plugin is not a broken one. claude-mem only writes the ledger when
+# a session on THIS machine produces an observation, so a box nobody has used
+# since yesterday carries an old lastSuccessAt with nothing failed since: the
+# counter is 0 and lastErrorAt predates the success. That must read as
+# working, or every sporadically-used host reports ✘ at every session start
+# (seen 2026-11-02: "not working: last success 122057s ago, 0 consecutive
+# failures" on a VPS idle for 33 h while aorus6, in daily use, passed).
+IDLE_LEDGER="$PLUGDIR/idle.json"
+printf '{"lastSuccessAt": 1000000, "consecutiveFailures": 0, "lastErrorAt": 500000}\n' >"$IDLE_LEDGER"
+out=$(run_plugin_probe "idleplug|goodplug||$IDLE_LEDGER|3600")
+case "$out" in
+  *"✔ idleplug"*) report pass "an idle ledger with no failure since its last success reports working" ;;
+  *) report fail "an idle ledger with no failure since its last success reports working" \
+       "got: $(printf '%s' "$out" | grep -i idleplug)" ;;
+esac
+
+# The converse: an error newer than the last success is a real break, even
+# before the counter has climbed. Stale + failing since = not working.
+BROKEN_LEDGER="$PLUGDIR/broken.json"
+printf '{"lastSuccessAt": 1000000, "consecutiveFailures": 1, "lastErrorAt": 2000000}\n' >"$BROKEN_LEDGER"
+out=$(run_plugin_probe "deadplug|goodplug||$BROKEN_LEDGER|3600")
+case "$out" in
+  *"deadplug"*"not working"*"1 consecutive failures"*)
+    report pass "a stale ledger whose last error postdates its last success is not working" ;;
+  *) report fail "a stale ledger whose last error postdates its last success is not working" \
+       "got: $(printf '%s' "$out" | grep -i deadplug)" ;;
+esac
+
+# A fresh success with the counter back to zero is simply working.
 FRESH_LEDGER="$PLUGDIR/fresh.json"
 printf '{"lastSuccessAt": %s000, "consecutiveFailures": 0}\n' "$(date +%s)" >"$FRESH_LEDGER"
 # Asserted on the ✔ marker, not the detail text: render_class prints details

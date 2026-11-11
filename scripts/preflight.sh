@@ -401,22 +401,32 @@ probe_plugins() {
       continue
     fi
 
-    # Function. `lastSuccessAt` is deliberately what decides, NOT
-    # consecutiveFailures: that counter resets on any single success, so a
-    # plugin that briefly recovered and broke again reports a reassuring 0
-    # while its real work is still being lost. Age since the last success is
-    # the one number a restart cannot launder.
+    # Function. The ledger only moves when the plugin is given work: claude-mem
+    # writes it per observation, and a host nobody has used since yesterday
+    # has an old lastSuccessAt with nothing attempted since. So age alone
+    # cannot say "broken" — it said so for a VPS idle 33 h while the same
+    # plugin passed on a desktop in daily use (2026-11-02). What does say it
+    # is an error newer than the last success: a success resets
+    # consecutiveFailures and stamps lastSuccessAt but never clears
+    # lastErrorAt, so lastErrorAt > lastSuccessAt means work was offered and
+    # lost. Stale + failing-since is not working; stale + nothing-since is
+    # idle, which a restart cannot launder into anything else either.
     last=$(jq -r '.lastSuccessAt // empty' "$ledger" 2>/dev/null)
     fails=$(jq -r '.consecutiveFailures // 0' "$ledger" 2>/dev/null)
+    lasterr=$(jq -r '.lastErrorAt // 0' "$ledger" 2>/dev/null)
     if [ -z "$last" ]; then
       add_finding plugin "$name" unknown "no successful run ever recorded in $ledger" no
       continue
     fi
     age=$(( $(date +%s) - last / 1000 ))
-    if [ "$age" -ge "${stale:-21600}" ]; then
+    failing=no
+    if [ "${fails:-0}" -gt 0 ] || [ "${lasterr:-0}" -gt "$last" ]; then failing=yes; fi
+    if [ "$failing" = yes ] && [ "$age" -ge "${stale:-21600}" ]; then
       add_finding plugin "$name" fail "not working: last success ${age}s ago, ${fails} consecutive failures" no
-    elif [ "${fails:-0}" -gt 0 ]; then
+    elif [ "$failing" = yes ]; then
       add_finding plugin "$name" unknown "failing now: ${fails} consecutive, last success ${age}s ago" no
+    elif [ "$age" -ge "${stale:-21600}" ]; then
+      add_finding plugin "$name" pass "idle; last success ${age}s ago, nothing failed since" no
     else
       add_finding plugin "$name" pass "working; last success ${age}s ago" no
     fi

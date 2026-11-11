@@ -68,12 +68,14 @@ MANDATED_CLIS=(
 # Format: name|cli|health_cmd|ledger|stale_after
 #   cli          binary that must resolve; empty = skip the presence check
 #   health_cmd   exits non-zero when a REQUIRED check fails; empty = skip
-#   ledger       JSON file carrying the function signal. Contract is two keys:
-#                `lastSuccessAt` (epoch ms of the last real success) and
-#                `consecutiveFailures`. Empty = no function signal available.
+#   ledger       JSON file carrying the function signal. Contract is three
+#                keys, epoch ms: `lastSuccessAt` (last real success),
+#                `consecutiveFailures`, and `lastErrorAt` (last failure; a
+#                success does not clear it). Empty = no function signal.
 #   stale_after  seconds since lastSuccessAt before the asset is called stale.
-#                A plugin that has not succeeded in this long is failing
-#                silently even when every other light is green.
+#                Stale is only a verdict when something has failed since that
+#                success; a stale ledger with nothing attempted since is an
+#                idle host, not a silent failure.
 #   repair       run when health_cmd fails, then health_cmd is re-run; empty =
 #                report only. Never npx: npx stops to ask before downloading.
 #                claude-mem's repair reinstalls the marketplace tree's
