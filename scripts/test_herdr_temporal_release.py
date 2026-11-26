@@ -86,27 +86,80 @@ class ReleaseTests(unittest.TestCase):
         (family / "producer_capture.py").write_text("CAPTURE = 1\n")
         for name in ("test_producer_capture.py", "smoke_producer.py", "notes.md"):
             (family / name).write_text("private")
+        (family / "__pycache__").mkdir()
+        (family / "__pycache__/producer_capture.py").write_text("stale")
         cache = self.source / "herdr_master/__pycache__"
         cache.mkdir()
         (cache / "cli.py").write_text("stale")
-        deep = family / "deeper"
-        deep.mkdir()
-        (deep / "producer_deep.py").write_text("private")
         sha = self.build()["sha256"]
         with tarfile.open(self.artifact) as archive:
             names = archive.getnames()
-        self.assertIn("herdr_master/producer/producer_capture.py", names)
         self.assertEqual([name for name in names if name.startswith("herdr_master/producer/")],
                          ["herdr_master/producer/producer_capture.py"])
         self.assertNotIn("herdr_master/__pycache__/cli.py", names)
         release = Path(self.install(sha)["release"])
         self.assertEqual((release / "herdr_master/producer/producer_capture.py").read_text(), "CAPTURE = 1\n")
 
+    def test_nested_release_runs_from_the_wrappers_entry_form(self):
+        # The wrapper runs herdr_master/<entry>.py as a script, so no package __init__ runs first. A
+        # nested release works only if each entry imports a bootstrap that puts the family directory on
+        # the path; this fixture mirrors the one #400 adds, and the release must need nothing else.
+        family = self.source / "herdr_master/producer"
+        family.mkdir()
+        (family / "producer_capture.py").write_text("CAPTURE = 'nested'\n")
+        (self.source / "herdr_master/source_layout.py").write_text(
+            "import pathlib, sys\n"
+            "SOURCE = pathlib.Path(__file__).resolve().parent\n"
+            "for path in (SOURCE.parent, SOURCE, SOURCE / 'producer'):\n"
+            "    if str(path) not in sys.path:\n"
+            "        sys.path.insert(0, str(path))\n")
+        (self.source / "herdr_master/__init__.py").write_text(
+            "import pathlib\n__path__.append(str(pathlib.Path(__file__).resolve().parent / 'producer'))\n")
+        for module, said in (("cli.py", "master"), ("temporal_cli.py", "worker")):
+            (self.source / "herdr_master" / module).write_text(
+                "import source_layout\n"
+                "import producer_capture\n"
+                "from herdr_master import producer_capture as dotted\n"
+                f"print({said!r}, producer_capture.CAPTURE, dotted.CAPTURE)\n")
+        result = self.install(self.build()["sha256"])
+        for command, said in (("herdr-master", "master"), ("herdr-temporal", "worker")):
+            with self.subTest(command=command):
+                run = subprocess.run([str(self.prefix / "bin" / command), "--help"], text=True,
+                                     capture_output=True, env=dict(os.environ, PYTHONPATH=""), cwd=self.root)
+                self.assertEqual(run.returncode, 0, run.stderr)
+                self.assertEqual(run.stdout, f"{said} nested nested\n")
+        self.assertTrue((Path(result["release"]) / "herdr_master/source_layout.py").is_file())
+
+    def test_private_family_directories_are_not_bundled_or_installed(self):
+        for family, module in (("tests", "helpers.py"), ("testing", "fakes.py"), ("smoke", "runner.py"),
+                               ("fixtures", "conftest.py"), ("fixtures", "data.py")):
+            directory = self.source / "herdr_master" / family
+            directory.mkdir(exist_ok=True)
+            (directory / module).write_text("private")
+        (self.source / "herdr_master/producer").mkdir()
+        (self.source / "herdr_master/producer/conftest.py").write_text("private")
+        sha = self.build()["sha256"]
+        with tarfile.open(self.artifact) as archive:
+            self.assertEqual([name for name in archive.getnames() if name.count("/") > 1
+                              and not name.startswith(("herdr_master/prompts/", "skills/"))], [])
+        self.assertTrue(self.install(sha)["changed"])
+
+    def test_a_directory_below_a_family_directory_is_refused(self):
+        deeper = self.source / "herdr_master/producer/deeper"
+        deeper.mkdir(parents=True)
+        (deeper / "producer_deep.py").write_text("x = 1\n")
+        result = self.cli("bundle", "--source", self.source, "--output", self.artifact, success=False)
+        self.assertIn("one level deep", result.stderr)
+        self.assertFalse(self.artifact.exists())
+
     def test_flat_and_nested_members_pass_install_validation_and_others_do_not(self):
         sha = self.build()["sha256"]
         self.assertTrue(self.install(sha)["changed"])
         for name in ("herdr_master/producer/test_producer_x.py", "herdr_master/a/b/producer_x.py",
-                     "herdr_master/__pycache__/x.py", "herdr_master/producer/x.pyc", "herdr_master/pro-ducer/x.py"):
+                     "herdr_master/__pycache__/x.py", "herdr_master/producer/x.pyc", "herdr_master/pro-ducer/x.py",
+                     "herdr_master/tests/helpers.py", "herdr_master/testing/fakes.py",
+                     "herdr_master/smoke/runner.py", "herdr_master/fixtures/conftest.py",
+                     "herdr_master/producer/conftest.py"):
             with self.subTest(name=name):
                 with tarfile.open(self.artifact, "w:gz") as archive:
                     member = tarfile.TarInfo(name)
@@ -115,6 +168,14 @@ class ReleaseTests(unittest.TestCase):
                                   hashlib.sha256(self.artifact.read_bytes()).hexdigest(), "--prefix",
                                   self.root / "other", "--dotfiles", self.source, success=False)
                 self.assertIn("unexpected archive member", result.stderr)
+
+    def test_a_noncanonical_spelling_of_an_allowed_member_is_refused(self):
+        with tarfile.open(self.artifact, "w:gz") as archive:
+            for name in ("herdr_master/cli.py", "./herdr_master/temporal_cli.py"):
+                archive.addfile(tarfile.TarInfo(name), io.BytesIO(b""))
+        result = self.install(hashlib.sha256(self.artifact.read_bytes()).hexdigest(), success=False)
+        self.assertIn("noncanonical archive member", result.stderr)
+        self.assertFalse(self.prefix.exists())
 
     def test_symlinked_family_directory_rejected(self):
         elsewhere = self.root / "elsewhere"

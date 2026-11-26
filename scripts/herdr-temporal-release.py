@@ -27,6 +27,13 @@ ROOT_FILES = {"herdr-temporal", "herdr_unblocker.py", "requirements-temporal.txt
 REQUIRED_FILES = ROOT_FILES | {"herdr_master/temporal_cli.py", "herdr_master/cli.py"}
 MAX_BYTES = 32 * 1024 * 1024
 IDENTIFIER = r"[A-Za-z_][A-Za-z_0-9]*"
+# Names that never ship, whether they name a module or a family directory.
+PRIVATE_STEMS = frozenset({"fixtures", "conftest"})
+
+
+def private(part):
+    stem = part.removesuffix(".py")
+    return stem.startswith("test") or "smoke" in stem or stem in PRIVATE_STEMS
 
 
 def allowed(name):
@@ -37,12 +44,15 @@ def allowed(name):
         len(parts) in (2, 3) and parts[0] == "herdr_master"
         and all(re.fullmatch(IDENTIFIER, part) and not part.startswith("__") for part in parts[1:-1])
         and re.fullmatch(IDENTIFIER + r"\.py", parts[-1])
-        and not parts[-1].startswith("test") and "smoke" not in parts[-1]
+        and not any(private(part) for part in parts[1:])
     )
 
 
 def module_names(module_dir):
-    """Every bundled module under herdr_master/: its own files and those of each family directory."""
+    """Every bundled module under herdr_master/: its own files and those of each family directory.
+
+    A family directory is one level deep. A directory inside one is refused rather than dropped, so a
+    deeper layout cannot ship short."""
     names = set()
     for entry in module_dir.iterdir():
         name = "herdr_master/" + entry.name
@@ -51,7 +61,12 @@ def module_names(module_dir):
         elif entry.is_dir() and allowed(name + "/module.py"):
             if entry.is_symlink():
                 raise ValueError("herdr_master family directories must be real directories: " + entry.name)
-            names.update(name + "/" + child.name for child in entry.iterdir() if allowed(name + "/" + child.name))
+            for child in entry.iterdir():
+                if child.is_dir() and child.name != "__pycache__":
+                    raise ValueError("herdr_master family directories are one level deep: "
+                                     + entry.name + "/" + child.name)
+                if allowed(name + "/" + child.name):
+                    names.add(name + "/" + child.name)
     return names
 
 
