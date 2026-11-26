@@ -79,6 +79,51 @@ class ReleaseTests(unittest.TestCase):
                              "herdr_master/temporal_cli.py", "herdr_unblocker.py", "requirements-temporal.txt",
                              "skills/amnesiac-workers/references/task-packet.md"])
 
+    def test_bundle_carries_a_nested_family_directory_and_installs_it(self):
+        # herdr-orchestrator#400 moves module families into herdr_master/<family>/ directories.
+        family = self.source / "herdr_master/producer"
+        family.mkdir()
+        (family / "producer_capture.py").write_text("CAPTURE = 1\n")
+        for name in ("test_producer_capture.py", "smoke_producer.py", "notes.md"):
+            (family / name).write_text("private")
+        cache = self.source / "herdr_master/__pycache__"
+        cache.mkdir()
+        (cache / "cli.py").write_text("stale")
+        deep = family / "deeper"
+        deep.mkdir()
+        (deep / "producer_deep.py").write_text("private")
+        sha = self.build()["sha256"]
+        with tarfile.open(self.artifact) as archive:
+            names = archive.getnames()
+        self.assertIn("herdr_master/producer/producer_capture.py", names)
+        self.assertEqual([name for name in names if name.startswith("herdr_master/producer/")],
+                         ["herdr_master/producer/producer_capture.py"])
+        self.assertNotIn("herdr_master/__pycache__/cli.py", names)
+        release = Path(self.install(sha)["release"])
+        self.assertEqual((release / "herdr_master/producer/producer_capture.py").read_text(), "CAPTURE = 1\n")
+
+    def test_flat_and_nested_members_pass_install_validation_and_others_do_not(self):
+        sha = self.build()["sha256"]
+        self.assertTrue(self.install(sha)["changed"])
+        for name in ("herdr_master/producer/test_producer_x.py", "herdr_master/a/b/producer_x.py",
+                     "herdr_master/__pycache__/x.py", "herdr_master/producer/x.pyc", "herdr_master/pro-ducer/x.py"):
+            with self.subTest(name=name):
+                with tarfile.open(self.artifact, "w:gz") as archive:
+                    member = tarfile.TarInfo(name)
+                    archive.addfile(member, io.BytesIO(b""))
+                result = self.cli("install", "--artifact", self.artifact, "--sha256",
+                                  hashlib.sha256(self.artifact.read_bytes()).hexdigest(), "--prefix",
+                                  self.root / "other", "--dotfiles", self.source, success=False)
+                self.assertIn("unexpected archive member", result.stderr)
+
+    def test_symlinked_family_directory_rejected(self):
+        elsewhere = self.root / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "producer_x.py").write_text("x = 1\n")
+        (self.source / "herdr_master/producer").symlink_to(elsewhere, target_is_directory=True)
+        self.cli("bundle", "--source", self.source, "--output", self.artifact, success=False)
+        self.assertFalse(self.artifact.exists())
+
     def test_source_symlink_rejected(self):
         (self.source / "herdr_master/helper.py").symlink_to(self.source / "MACHINE.template.md")
         self.cli("bundle", "--source", self.source, "--output", self.artifact, success=False)
