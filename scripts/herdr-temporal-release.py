@@ -26,15 +26,48 @@ ROOT_FILES = {"herdr-temporal", "herdr_unblocker.py", "requirements-temporal.txt
               PACKET_TEMPLATE, "herdr_master/prompts/interpretation.md"}
 REQUIRED_FILES = ROOT_FILES | {"herdr_master/temporal_cli.py", "herdr_master/cli.py"}
 MAX_BYTES = 32 * 1024 * 1024
+IDENTIFIER = r"[A-Za-z_][A-Za-z_0-9]*"
+# Names that never ship, whether they name a module or a family directory.
+PRIVATE_STEMS = frozenset({"fixtures", "conftest"})
+
+
+def private(part):
+    stem = part.removesuffix(".py")
+    return stem.startswith("test") or "smoke" in stem or stem in PRIVATE_STEMS
 
 
 def allowed(name):
+    """A root file, or a runtime module directly under herdr_master/ or one family directory below it
+    (herdr_master/producer/producer_x.py), so a flat and a nested Herdr checkout both bundle."""
     parts = PurePosixPath(name).parts
     return name in ROOT_FILES or (
-        len(parts) == 2 and parts[0] == "herdr_master"
-        and re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*\.py", parts[1])
-        and not parts[1].startswith("test") and "smoke" not in parts[1]
+        len(parts) in (2, 3) and parts[0] == "herdr_master"
+        and all(re.fullmatch(IDENTIFIER, part) and not part.startswith("__") for part in parts[1:-1])
+        and re.fullmatch(IDENTIFIER + r"\.py", parts[-1])
+        and not any(private(part) for part in parts[1:])
     )
+
+
+def module_names(module_dir):
+    """Every bundled module under herdr_master/: its own files and those of each family directory.
+
+    A family directory is one level deep. A directory inside one is refused rather than dropped, so a
+    deeper layout cannot ship short."""
+    names = set()
+    for entry in module_dir.iterdir():
+        name = "herdr_master/" + entry.name
+        if allowed(name):
+            names.add(name)
+        elif entry.is_dir() and allowed(name + "/module.py"):
+            if entry.is_symlink():
+                raise ValueError("herdr_master family directories must be real directories: " + entry.name)
+            for child in entry.iterdir():
+                if child.is_dir() and child.name != "__pycache__":
+                    raise ValueError("herdr_master family directories are one level deep: "
+                                     + entry.name + "/" + child.name)
+                if allowed(name + "/" + child.name):
+                    names.add(name + "/" + child.name)
+    return names
 
 
 def digest(data):
@@ -56,10 +89,7 @@ def bundle(source, output):
     module_dir = source / "herdr_master"
     if module_dir.is_symlink() or not module_dir.is_dir():
         raise ValueError("herdr_master must be a real directory")
-    names = sorted(ROOT_FILES | {
-        "herdr_master/" + entry.name for entry in module_dir.iterdir()
-        if allowed("herdr_master/" + entry.name)
-    })
+    names = sorted(ROOT_FILES | module_names(module_dir))
     if not REQUIRED_FILES <= set(names):
         raise ValueError("source lacks required CLI modules")
     buffer = io.BytesIO()
